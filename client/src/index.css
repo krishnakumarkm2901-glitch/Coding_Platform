@@ -1,0 +1,146 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+:root {
+  --background: #F5F7FA;
+  --surface: #FFFFFF;
+  --surface-secondary: #F8FAFC;
+
+  --text-primary: #172033;
+  --text-secondary: #667085;
+  --text-muted: #8491A5;
+
+  --border: #D9E0E8;
+
+  --primary: #0757B8;
+  --primary-hover: #064A9E;
+  --primary-light: #DDF2FF;
+
+  --success: #22B573;
+  --warning: #F2B705;
+  --danger: #EF4444;
+
+  --input-background: #FFFFFF;
+  --input-text: #172033;
+
+  --table-header: #303442;
+  --table-header-text: #FFFFFF;
+
+  --dark-panel: #303442;
+  --dark-panel-text: #FFFFFF;
+}
+
+html.dark, .dark {
+  --background: #0B0F14;
+  --surface: #151A21;
+  --surface-secondary: #20252C;
+
+  --text-primary: #F8FAFC;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+
+  --border: #30363D;
+
+  --primary: #0066CC;
+  --primary-hover: #1976D2;
+  --primary-light: #142A43;
+
+  --success: #22B573;
+  --warning: #F2B705;
+  --danger: #EF4444;
+
+  --input-background: #20252C;
+  --input-text: #F8FAFC;
+
+  --table-header: #303442;
+  --table-header-text: #FFFFFF;
+
+  --dark-panel: #20252C;
+  --dark-panel-text: #FFFFFF;
+}
+
+@layer base {
+  body {
+    background-color: var(--background);
+    color: var(--text-primary);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--text-primary);
+  }
+
+  p {
+    color: var(--text-secondary);
+  }
+
+  code, pre, .font-mono {
+    font-family: 'Fira Code', monospace;
+  }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+html.dark ::-webkit-scrollbar-thumb, .dark ::-webkit-scrollbar-thumb {
+  background: #30363D;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* Platform Card Utilities */
+.platform-card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 1rem;
+}
+
+.platform-card-secondary {
+  background-color: var(--surface-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 1rem;
+}
+
+.platform-dark-panel {
+  background-color: var(--dark-panel);
+  color: var(--dark-panel-text);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Table styling */
+.platform-table-header {
+  background-color: var(--table-header) !important;
+  color: var(--table-header-text) !important;
+}
+
+/* Monaco Editor Container Theme Support */
+html.dark .monaco-editor, 
+html.dark .monaco-editor .margin, 
+html.dark .monaco-editor-background {
+  background-color: #151A21 !important;
+}
+
+html.light .monaco-editor,
+html.light .monaco-editor .margin,
+html.light .monaco-editor-background {
+  background-color: #FFFFFF !important;
+}

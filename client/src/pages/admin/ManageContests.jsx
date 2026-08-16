@@ -1,0 +1,1241 @@
+import React, { useState, useEffect } from 'react';
+import api from '../../services/api';
+import { 
+  Trophy, 
+  Plus, 
+  Edit, 
+  Trash2, 
+  Eye, 
+  Clock, 
+  Users, 
+  AlertCircle, 
+  CheckCircle2, 
+  ShieldAlert,
+  Code2,
+  HelpCircle,
+  Sparkles,
+  Search,
+  Check,
+  X,
+  PlusCircle
+} from 'lucide-react';
+import { Modal } from '../../components/common/Modal';
+import { PageLoader } from '../../components/common/Loader';
+
+const formatDateTime = (dateStr) => {
+  if (!dateStr) return 'N/A';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+};
+
+export const ManageContests = () => {
+  const [contests, setContests] = useState([]);
+  const [allProblems, setAllProblems] = useState([]);
+  const [allMCQs, setAllMCQs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Modal states
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  // Search inside problem/MCQ selectors
+  const [problemSearch, setProblemSearch] = useState('');
+  const [mcqSearch, setMcqSearch] = useState('');
+
+  // Participants & Anti-cheat audit modal
+  const [isParticipantsModalOpen, setIsParticipantsModalOpen] = useState(false);
+  const [selectedContestParticipants, setSelectedContestParticipants] = useState([]);
+  const [selectedContestTitle, setSelectedContestTitle] = useState('');
+  const [participantsLoading, setParticipantsLoading] = useState(false);
+
+  const [successMsg, setSuccessMsg] = useState('');
+
+  // Create Coding Problem inside contest states
+  const [isCreateProblemModalOpen, setIsCreateProblemModalOpen] = useState(false);
+  const [problemActionLoading, setProblemActionLoading] = useState(false);
+  const [problemErrorMsg, setProblemErrorMsg] = useState('');
+  const [problemFormData, setProblemFormData] = useState({
+    title: '',
+    difficulty: 'Easy',
+    topic: 'Arrays',
+    description: '',
+    input_format: '',
+    output_format: '',
+    constraints: '',
+    sample_input: '',
+    sample_output: '',
+    time_limit: 2.0,
+    memory_limit: 256,
+    test_cases: [
+      { input: '', expected_output: '', is_sample: true, explanation: '' }
+    ],
+    starter_code: {
+      python: 'def solve():\n    # Write your solution here\n    pass\n',
+      cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}\n',
+      c: '#include <stdio.h>\n\nint main() {\n    return 0;\n}\n',
+      java: 'import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n    }\n}\n',
+      javascript: 'function solve() {\n    // Solution\n}\n',
+    }
+  });
+
+  // Create MCQ inside contest states
+  const [isCreateMCQModalOpen, setIsCreateMCQModalOpen] = useState(false);
+  const [mcqActionLoading, setMcqActionLoading] = useState(false);
+  const [mcqErrorMsg, setMcqErrorMsg] = useState('');
+  const [mcqFormData, setMcqFormData] = useState({
+    question: '',
+    topic: 'C Programming',
+    difficulty: 'Easy',
+    options: ['', '', '', ''],
+    correct_answer: '',
+    explanation: '',
+  });
+
+  const availableTopics = [
+    'Arrays', 'Strings', 'Linked Lists', 'Trees', 'Graphs',
+    'Dynamic Programming', 'Recursion', 'Searching & Sorting', 'Math', 'Stack & Queue'
+  ];
+
+  const mcqTopics = [
+    'C Programming', 'C++ & OOP', 'Java', 'Python', 'Data Structures',
+    'Database Management Systems', 'Operating Systems', 'Computer Networks',
+    'Software Engineering', 'Aptitude & Logical Reasoning'
+  ];
+
+  const handleOpenCreateProblemModal = () => {
+    setProblemFormData({
+      title: '',
+      difficulty: 'Easy',
+      topic: 'Arrays',
+      description: '',
+      input_format: '',
+      output_format: '',
+      constraints: '',
+      sample_input: '',
+      sample_output: '',
+      time_limit: 2.0,
+      memory_limit: 256,
+      test_cases: [
+        { input: '', expected_output: '', is_sample: true, explanation: '' }
+      ],
+      starter_code: {
+        python: 'def solve():\n    # Write your solution here\n    pass\n',
+        cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}\n',
+        c: '#include <stdio.h>\n\nint main() {\n    return 0;\n}\n',
+        java: 'import java.util.*;\n\npublic class Solution {\n    public static void main(String[] args) {\n    }\n}\n',
+        javascript: 'function solve() {\n    // Solution\n}\n',
+      }
+    });
+    setProblemErrorMsg('');
+    setIsCreateProblemModalOpen(true);
+  };
+
+  const handleOpenCreateMCQModal = () => {
+    setMcqFormData({
+      question: '',
+      topic: 'C Programming',
+      difficulty: 'Easy',
+      options: ['', '', '', ''],
+      correct_answer: '',
+      explanation: '',
+    });
+    setMcqErrorMsg('');
+    setIsCreateMCQModalOpen(true);
+  };
+
+  const handleProblemAddTestCase = () => {
+    setProblemFormData((prev) => ({
+      ...prev,
+      test_cases: [...prev.test_cases, { input: '', expected_output: '', is_sample: false, explanation: '' }]
+    }));
+  };
+
+  const handleProblemRemoveTestCase = (index) => {
+    setProblemFormData((prev) => ({
+      ...prev,
+      test_cases: prev.test_cases.filter((_, idx) => idx !== index)
+    }));
+  };
+
+  const handleProblemTestCaseChange = (index, field, value) => {
+    setProblemFormData((prev) => {
+      const updated = [...prev.test_cases];
+      updated[index][field] = value;
+      return { ...prev, test_cases: updated };
+    });
+  };
+
+  const handleMCQOptionChange = (index, value) => {
+    setMcqFormData((prev) => {
+      const updated = [...prev.options];
+      updated[index] = value;
+      return { ...prev, options: updated };
+    });
+  };
+
+  const handleCreateProblemSubmit = async (e) => {
+    e.preventDefault();
+    if (!problemFormData.title.trim()) {
+      setProblemErrorMsg('Problem title is required.');
+      return;
+    }
+    if (!problemFormData.description.trim()) {
+      setProblemErrorMsg('Problem description is required.');
+      return;
+    }
+
+    try {
+      setProblemActionLoading(true);
+      setProblemErrorMsg('');
+
+      const res = await api.post('/admin/problems', problemFormData);
+      if (res.data.success) {
+        const newProblemId = String(res.data.id);
+        
+        // Refresh local problems list
+        const pRes = await api.get('/admin/problems', { params: { limit: 100 } });
+        if (pRes.data.success) {
+          setAllProblems(pRes.data.problems || []);
+        }
+
+        // Automatically select the newly created problem
+        setFormData((prev) => ({
+          ...prev,
+          problem_ids: [...prev.problem_ids, newProblemId]
+        }));
+
+        setSuccessMsg('Coding problem created and assigned successfully!');
+        setIsCreateProblemModalOpen(false);
+        setTimeout(() => setSuccessMsg(''), 5000);
+      }
+    } catch (err) {
+      setProblemErrorMsg(err.response?.data?.error || 'Failed to create coding problem.');
+    } finally {
+      setProblemActionLoading(false);
+    }
+  };
+
+  const handleCreateMCQSubmit = async (e) => {
+    e.preventDefault();
+    if (!mcqFormData.question.trim()) {
+      setMcqErrorMsg('Question text is required.');
+      return;
+    }
+    if (mcqFormData.options.some(opt => !opt.trim())) {
+      setMcqErrorMsg('All 4 options are required.');
+      return;
+    }
+    if (!mcqFormData.correct_answer) {
+      setMcqErrorMsg('Please select the correct answer.');
+      return;
+    }
+
+    try {
+      setMcqActionLoading(true);
+      setMcqErrorMsg('');
+
+      const res = await api.post('/admin/mcqs', mcqFormData);
+      if (res.data.success) {
+        const newMCQId = String(res.data.id);
+
+        // Refresh local MCQs list
+        const mRes = await api.get('/admin/mcqs', { params: { limit: 100 } });
+        if (mRes.data.success) {
+          setAllMCQs(mRes.data.mcqs || []);
+        }
+
+        // Automatically select the newly created MCQ
+        setFormData((prev) => ({
+          ...prev,
+          mcq_ids: [...prev.mcq_ids, newMCQId]
+        }));
+
+        setSuccessMsg('MCQ created and assigned successfully!');
+        setIsCreateMCQModalOpen(false);
+        setTimeout(() => setSuccessMsg(''), 5000);
+      }
+    } catch (err) {
+      setMcqErrorMsg(err.response?.data?.error || 'Failed to create MCQ.');
+    } finally {
+      setMcqActionLoading(false);
+    }
+  };
+
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    duration_minutes: 60,
+    start_time: '',
+    end_time: '',
+    is_published: true,
+    problem_ids: [],
+    mcq_ids: [],
+  });
+
+  useEffect(() => {
+    fetchInitialData();
+  }, []);
+
+  const fetchInitialData = async () => {
+    try {
+      setLoading(true);
+      const [cRes, pRes, mRes] = await Promise.all([
+        api.get('/admin/contests'),
+        api.get('/admin/problems', { params: { limit: 100 } }),
+        api.get('/admin/mcqs', { params: { limit: 100 } }),
+      ]);
+
+      if (cRes.data.success) setContests(cRes.data.contests || []);
+      if (pRes.data.success) setAllProblems(pRes.data.problems || []);
+      if (mRes.data.success) setAllMCQs(mRes.data.mcqs || []);
+    } catch (err) {
+      console.error('Failed to load admin contest initial data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenAdd = () => {
+    setEditingId(null);
+    setProblemSearch('');
+    setMcqSearch('');
+    const now = new Date();
+    const future = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    setFormData({
+      title: '',
+      description: '',
+      duration_minutes: 60,
+      start_time: now.toISOString().slice(0, 16),
+      end_time: future.toISOString().slice(0, 16),
+      is_published: true,
+      problem_ids: [],
+      mcq_ids: [],
+    });
+    setErrorMsg('');
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (contest) => {
+    setEditingId(contest.id);
+    setProblemSearch('');
+    setMcqSearch('');
+    const probIds = (contest.problem_ids || []).map(id => String(id));
+    const mcqIds = (contest.mcq_ids || []).map(id => String(id));
+
+    setFormData({
+      title: contest.title || '',
+      description: contest.description || '',
+      duration_minutes: contest.duration_minutes || 60,
+      start_time: contest.start_time ? new Date(contest.start_time).toISOString().slice(0, 16) : '',
+      end_time: contest.end_time ? new Date(contest.end_time).toISOString().slice(0, 16) : '',
+      is_published: Boolean(contest.is_published),
+      problem_ids: probIds,
+      mcq_ids: mcqIds,
+    });
+    setErrorMsg('');
+    setIsModalOpen(true);
+  };
+
+  const handleToggleProblemSelect = (pId) => {
+    const idStr = String(pId);
+    setFormData((prev) => {
+      const exists = prev.problem_ids.includes(idStr);
+      return {
+        ...prev,
+        problem_ids: exists
+          ? prev.problem_ids.filter((id) => id !== idStr)
+          : [...prev.problem_ids, idStr],
+      };
+    });
+  };
+
+  const handleToggleMCQSelect = (mId) => {
+    const idStr = String(mId);
+    setFormData((prev) => {
+      const exists = prev.mcq_ids.includes(idStr);
+      return {
+        ...prev,
+        mcq_ids: exists
+          ? prev.mcq_ids.filter((id) => id !== idStr)
+          : [...prev.mcq_ids, idStr],
+      };
+    });
+  };
+
+  const handleTogglePublish = async (contest) => {
+    try {
+      const res = await api.put(`/admin/contests/${contest.id}`, {
+        is_published: !contest.is_published,
+      });
+      if (res.data.success) {
+        fetchInitialData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this contest? All candidate submissions and logs will be removed.')) {
+      return;
+    }
+    try {
+      const res = await api.delete(`/admin/contests/${id}`);
+      if (res.data.success) {
+        fetchInitialData();
+      }
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to delete contest.');
+    }
+  };
+
+  const handleViewParticipants = async (contest) => {
+    setSelectedContestTitle(contest.title);
+    setIsParticipantsModalOpen(true);
+    try {
+      setParticipantsLoading(true);
+      const res = await api.get(`/admin/contests/${contest.id}/participants`);
+      if (res.data.success) {
+        setSelectedContestParticipants(res.data.participants || []);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setParticipantsLoading(false);
+    }
+  };
+
+  const handleSaveContest = async (e) => {
+    e.preventDefault();
+    if (!formData.title.trim()) {
+      setErrorMsg('Contest title is required.');
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      setErrorMsg('');
+
+      if (editingId) {
+        const res = await api.put(`/admin/contests/${editingId}`, formData);
+        if (res.data.success) {
+          setIsModalOpen(false);
+          fetchInitialData();
+        }
+      } else {
+        const res = await api.post('/admin/contests', formData);
+        if (res.data.success) {
+          setIsModalOpen(false);
+          fetchInitialData();
+        }
+      }
+    } catch (err) {
+      setErrorMsg(err.response?.data?.error || 'Failed to save contest.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Filtered problems & MCQs for modal selection
+  const filteredProblems = allProblems.filter(p => 
+    !problemSearch || 
+    p.title?.toLowerCase().includes(problemSearch.toLowerCase()) ||
+    p.topic?.toLowerCase().includes(problemSearch.toLowerCase())
+  );
+
+  const filteredMCQs = allMCQs.filter(m => 
+    !mcqSearch || 
+    m.question?.toLowerCase().includes(mcqSearch.toLowerCase()) ||
+    m.topic?.toLowerCase().includes(mcqSearch.toLowerCase())
+  );
+
+  return (
+    <div className="space-y-6 animate-fadeIn">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-extrabold text-[#172033] dark:text-[#F8FAFC] tracking-tight flex items-center gap-2.5">
+            <Trophy className="w-6 h-6 text-[#F2B705]" />
+            Manage Contests & Hackathons
+          </h1>
+          <p className="text-sm text-[#667085] dark:text-[#94A3B8] mt-1">
+            Create competitions, assign problems/MCQs, schedule timers, and review integrity logs
+          </p>
+        </div>
+
+        <button
+          onClick={handleOpenAdd}
+          className="px-4 py-2.5 rounded-2xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-blue-500/20 flex items-center gap-2 transition"
+        >
+          <Plus className="w-4 h-4" />
+          <span>Create Contest</span>
+        </button>
+      </div>
+
+      {/* Contests Grid */}
+      {loading ? (
+        <PageLoader text="Loading contests management panel..." />
+      ) : contests.length === 0 ? (
+        <div className="p-16 text-center text-[#667085] dark:text-[#94A3B8] rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C]">
+          No contests created yet.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {contests.map((c) => {
+            const probCount = c.problem_ids?.length ?? c.problems_count ?? 0;
+            const mcqCount = c.mcq_ids?.length ?? c.mcqs_count ?? 0;
+
+            return (
+              <div
+                key={c.id}
+                className="p-6 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] hover:border-[#0757B8]/40 transition flex flex-col justify-between space-y-4 shadow-sm"
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <button
+                      onClick={() => handleTogglePublish(c)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase transition ${
+                        c.is_published
+                          ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
+                          : 'bg-slate-200 dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8]'
+                      }`}
+                    >
+                      {c.is_published ? 'Published' : 'Draft / Unpublished'}
+                    </button>
+
+                    <div className="flex items-center gap-2 text-xs font-mono text-[#667085] dark:text-[#94A3B8]">
+                      <Users className="w-3.5 h-3.5" />
+                      <span>{c.participants_count || 0} Candidates</span>
+                    </div>
+                  </div>
+
+                  <h3 className="text-lg font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">{c.title}</h3>
+                  <p className="text-xs text-[#667085] dark:text-[#94A3B8] line-clamp-2 mb-3 font-sans">{c.description}</p>
+
+                  <div className="grid grid-cols-3 gap-2 p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs">
+                    <div>
+                      <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Coding</div>
+                      <div className="font-bold text-[#0757B8] dark:text-[#60A5FA] font-mono mt-0.5">{probCount} Problems</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">MCQs</div>
+                      <div className="font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">{mcqCount} MCQs</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Duration</div>
+                      <div className="font-bold text-[#172033] dark:text-[#F8FAFC] font-mono mt-0.5">{c.duration_minutes} Mins</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 text-[11px] text-[#667085] dark:text-[#94A3B8] space-y-1 font-mono">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold text-slate-500">Start:</span>
+                      <strong className="text-[#172033] dark:text-[#F8FAFC]">{formatDateTime(c.start_time)}</strong>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold text-slate-500">End:</span>
+                      <strong className="text-[#172033] dark:text-[#F8FAFC]">{formatDateTime(c.end_time)}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action Bar */}
+                <div className="flex items-center justify-between pt-4 border-t border-[#D9E0E8] dark:border-[#30363D]">
+                  <button
+                    onClick={() => handleViewParticipants(c)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#DDF2FF] dark:bg-[#142A43] hover:bg-[#0757B8] dark:hover:bg-[#0066CC] text-[#0757B8] dark:text-[#60A5FA] hover:text-white border border-[#0757B8]/20 dark:border-[#0066CC]/40 text-xs font-bold transition"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>Audit & Anti-Cheat</span>
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleOpenEdit(c)}
+                      className="p-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(c.id)}
+                      className="p-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#EF4444]/20 text-[#EF4444] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* CREATE / EDIT CONTEST MODAL */}
+      <Modal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title={editingId ? 'Edit Contest Details' : 'Create New Contest'}
+        maxWidth="max-w-2xl"
+      >
+        {errorMsg && (
+          <div className="mb-4 p-3 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs flex items-center gap-2 font-bold">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {successMsg && (
+          <div className="mb-4 p-3 rounded-xl bg-[#22B573]/15 border border-[#22B573]/30 text-[#22B573] text-xs flex items-center gap-2 font-bold animate-fadeIn">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSaveContest} className="space-y-4 text-xs">
+          <div>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Contest Title *</label>
+            <input
+              type="text"
+              required
+              value={formData.title}
+              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+              placeholder="e.g. Annual Algorithmic Grand Prix 2026"
+              className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Description</label>
+            <textarea
+              rows="2"
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              placeholder="Brief contest overview, topics covered, and eligibility..."
+              className="w-full px-3.5 py-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC]"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Duration (Minutes)</label>
+              <input
+                type="number"
+                min="10"
+                max="600"
+                value={formData.duration_minutes}
+                onChange={(e) => setFormData({ ...formData, duration_minutes: Number(e.target.value) })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              />
+            </div>
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Start Date & Time</label>
+              <input
+                type="datetime-local"
+                value={formData.start_time}
+                onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              />
+            </div>
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">End Date & Time</label>
+              <input
+                type="datetime-local"
+                value={formData.end_time}
+                onChange={(e) => setFormData({ ...formData, end_time: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              />
+            </div>
+          </div>
+
+          {/* Coding Problem Selector */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
+                Assign Coding Problems ({formData.problem_ids.length} Selected)
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenCreateProblemModal}
+                  className="px-2 py-1 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold text-[10px] flex items-center gap-1 border border-[#22B573]/20 shadow-sm transition"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>Create Coding Problem</span>
+                </button>
+                <span className="text-[#0757B8] dark:text-[#60A5FA] font-bold">Total: {allProblems.length} available</span>
+              </div>
+            </div>
+
+            <div className="relative mb-2">
+              <input
+                type="text"
+                value={problemSearch}
+                onChange={(e) => setProblemSearch(e.target.value)}
+                placeholder="Filter problems by title or topic..."
+                className="w-full pl-8 pr-3 py-1.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs"
+              />
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl">
+              {filteredProblems.map((p) => {
+                const pIdStr = String(p.id || p._id);
+                const isSelected = formData.problem_ids.includes(pIdStr);
+
+                return (
+                  <button
+                    key={pIdStr}
+                    type="button"
+                    onClick={() => handleToggleProblemSelect(pIdStr)}
+                    className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
+                      isSelected
+                        ? 'bg-[#DDF2FF] dark:bg-[#142A43] border-[#0757B8] text-[#0757B8] dark:text-[#60A5FA] font-bold shadow-sm'
+                        : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
+                    }`}
+                  >
+                    <div className="truncate pr-2">
+                      <div className="truncate font-semibold">{p.title}</div>
+                      <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                        p.difficulty === 'Easy' ? 'bg-[#22B573]/15 text-[#22B573]' : p.difficulty === 'Medium' ? 'bg-[#F2B705]/15 text-[#F2B705]' : 'bg-[#EF4444]/15 text-[#EF4444]'
+                      }`}>
+                        {p.difficulty}
+                      </span>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Technical MCQ Selector */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
+                Assign Technical MCQs ({formData.mcq_ids.length} Selected)
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenCreateMCQModal}
+                  className="px-2 py-1 rounded-xl bg-purple-600 hover:opacity-95 text-white font-bold text-[10px] flex items-center gap-1 border border-purple-600/20 shadow-sm transition"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>Create MCQ</span>
+                </button>
+                <span className="text-purple-600 dark:text-purple-400 font-bold">Total: {allMCQs.length} available</span>
+              </div>
+            </div>
+
+            <div className="relative mb-2">
+              <input
+                type="text"
+                value={mcqSearch}
+                onChange={(e) => setMcqSearch(e.target.value)}
+                placeholder="Filter MCQs by question or topic..."
+                className="w-full pl-8 pr-3 py-1.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs"
+              />
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl">
+              {filteredMCQs.map((m) => {
+                const mIdStr = String(m.id || m._id);
+                const isSelected = formData.mcq_ids.includes(mIdStr);
+
+                return (
+                  <button
+                    key={mIdStr}
+                    type="button"
+                    onClick={() => handleToggleMCQSelect(mIdStr)}
+                    className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
+                      isSelected
+                        ? 'bg-purple-500/15 border-purple-500 text-purple-600 dark:text-purple-400 font-bold shadow-sm'
+                        : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
+                    }`}
+                  >
+                    <div className="truncate pr-2">
+                      <div className="truncate font-semibold">{m.question}</div>
+                      <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
+                    </div>
+                    {isSelected && <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Published Checkbox */}
+          <div className="pt-2">
+            <label className="flex items-center gap-2 cursor-pointer text-[#172033] dark:text-[#F8FAFC]">
+              <input
+                type="checkbox"
+                checked={formData.is_published}
+                onChange={(e) => setFormData({ ...formData, is_published: e.target.checked })}
+                className="rounded"
+              />
+              <span className="font-bold">Publish contest to students immediately</span>
+            </label>
+          </div>
+
+          <div className="pt-4 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] font-semibold"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={actionLoading}
+              className="px-5 py-2.5 rounded-xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold shadow-md shadow-blue-500/20"
+            >
+              {actionLoading ? 'Saving...' : editingId ? 'Save Contest' : 'Create Contest'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* PARTICIPANTS & ANTI-CHEAT LOGS MODAL */}
+      <Modal
+        isOpen={isParticipantsModalOpen}
+        onClose={() => setIsParticipantsModalOpen(false)}
+        title={`Contest Audit & Anti-Cheat: ${selectedContestTitle}`}
+        maxWidth="max-w-4xl"
+      >
+        {participantsLoading ? (
+          <PageLoader text="Loading contestant logs and security records..." />
+        ) : selectedContestParticipants.length === 0 ? (
+          <div className="py-12 text-center text-[#667085] dark:text-[#94A3B8] text-xs">
+            No students have joined this contest yet.
+          </div>
+        ) : (
+          <div className="overflow-x-auto text-xs">
+            <table className="w-full text-left font-sans">
+              <thead className="bg-[#303442] text-white font-bold uppercase">
+                <tr>
+                  <th className="py-3.5 px-3">Student</th>
+                  <th className="py-3.5 px-3">Department</th>
+                  <th className="py-3.5 px-3 text-center">Score</th>
+                  <th className="py-3.5 px-3 text-center">Status</th>
+                  <th className="py-3.5 px-3 text-right">Anti-Cheat Flags</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#D9E0E8] dark:divide-[#30363D]/60 font-sans">
+                {selectedContestParticipants.map((p) => {
+                  const logs = p.anti_cheat_logs || [];
+                  return (
+                    <tr key={p.id} className="hover:bg-[#F5F7FA] dark:hover:bg-[#151A21]/50">
+                      <td className="py-3.5 px-3 font-bold text-[#172033] dark:text-[#F8FAFC]">
+                        {p.student_name} <span className="text-[#0757B8] dark:text-[#60A5FA] font-mono text-[11px]">({p.student_id})</span>
+                      </td>
+                      <td className="py-3.5 px-3 text-[#667085] dark:text-[#94A3B8]">{p.department}</td>
+                      <td className="py-3.5 px-3 text-center font-mono font-extrabold text-[#0757B8] dark:text-[#60A5FA] text-sm">
+                        {p.score}
+                      </td>
+                      <td className="py-3.5 px-3 text-center">
+                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                          p.auto_terminated || p.status === 'AUTO_TERMINATED'
+                            ? 'bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30'
+                            : p.submitted 
+                              ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30' 
+                              : 'bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20'
+                        }`}>
+                          {p.auto_terminated || p.status === 'AUTO_TERMINATED' ? 'Auto-Terminated' : p.submitted ? 'Submitted' : 'In-Progress'}
+                        </span>
+                        {p.termination_reason && (
+                          <div className="text-[10px] text-[#EF4444] font-semibold mt-1">
+                            {p.termination_reason}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-3 text-right">
+                        {p.auto_terminated || logs.length > 0 ? (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] font-bold">
+                            <ShieldAlert className="w-3.5 h-3.5 text-[#EF4444]" />
+                            <span>{logs.length || 1} Violation Flags</span>
+                          </div>
+                        ) : (
+                          <span className="text-[#22B573] text-[11px] font-bold">Clean (0 Flags)</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal>
+
+      {/* MANUAL CREATE CODING PROBLEM MODAL */}
+      <Modal
+        isOpen={isCreateProblemModalOpen}
+        onClose={() => setIsCreateProblemModalOpen(false)}
+        title="Create Coding Problem"
+        maxWidth="max-w-4xl"
+      >
+        {problemErrorMsg && (
+          <div className="mb-4 p-3 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs flex items-center gap-2 font-bold">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{problemErrorMsg}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleCreateProblemSubmit} className="space-y-4 text-xs">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="md:col-span-2">
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Problem Title *</label>
+              <input
+                type="text"
+                required
+                value={problemFormData.title}
+                onChange={(e) => setProblemFormData({ ...problemFormData, title: e.target.value })}
+                placeholder="e.g. Reverse Linked List"
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Difficulty</label>
+              <select
+                value={problemFormData.difficulty}
+                onChange={(e) => setProblemFormData({ ...problemFormData, difficulty: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              >
+                <option value="Easy">Easy</option>
+                <option value="Medium">Medium</option>
+                <option value="Hard">Hard</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Topic</label>
+              <select
+                value={problemFormData.topic}
+                onChange={(e) => setProblemFormData({ ...problemFormData, topic: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              >
+                {availableTopics.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Time Limit (seconds)</label>
+              <input
+                type="number"
+                step="0.5"
+                value={problemFormData.time_limit}
+                onChange={(e) => setProblemFormData({ ...problemFormData, time_limit: parseFloat(e.target.value) })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Memory Limit (MB)</label>
+              <input
+                type="number"
+                value={problemFormData.memory_limit}
+                onChange={(e) => setProblemFormData({ ...problemFormData, memory_limit: parseInt(e.target.value) })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Problem Description *</label>
+            <textarea
+              required
+              rows={4}
+              value={problemFormData.description}
+              onChange={(e) => setProblemFormData({ ...problemFormData, description: e.target.value })}
+              placeholder="Describe problem scenario, requirements..."
+              className="w-full p-3.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-sans"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Input Format</label>
+              <textarea
+                rows={2}
+                value={problemFormData.input_format}
+                onChange={(e) => setProblemFormData({ ...problemFormData, input_format: e.target.value })}
+                placeholder="e.g. First line contains integer N..."
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Output Format</label>
+              <textarea
+                rows={2}
+                value={problemFormData.output_format}
+                onChange={(e) => setProblemFormData({ ...problemFormData, output_format: e.target.value })}
+                placeholder="e.g. Print space-separated integers..."
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Constraints</label>
+            <textarea
+              rows={2}
+              value={problemFormData.constraints}
+              onChange={(e) => setProblemFormData({ ...problemFormData, constraints: e.target.value })}
+              placeholder="1 <= N <= 10^5&#10;-10^9 <= nums[i] <= 10^9"
+              className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Sample Input</label>
+              <textarea
+                rows={2}
+                value={problemFormData.sample_input}
+                onChange={(e) => setProblemFormData({ ...problemFormData, sample_input: e.target.value })}
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Sample Output</label>
+              <textarea
+                rows={2}
+                value={problemFormData.sample_output}
+                onChange={(e) => setProblemFormData({ ...problemFormData, sample_output: e.target.value })}
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+              />
+            </div>
+          </div>
+
+          {/* Test Cases Builder */}
+          <div className="pt-4 border-t border-[#D9E0E8] dark:border-[#30363D] space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-[#172033] dark:text-[#F8FAFC]">Evaluation Test Cases ({problemFormData.test_cases.length})</h4>
+              <button
+                type="button"
+                onClick={handleProblemAddTestCase}
+                className="px-2.5 py-1 rounded-lg bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] font-bold text-[11px] flex items-center gap-1 border border-[#0757B8]/20 dark:border-[#0066CC]/40"
+              >
+                <PlusCircle className="w-3.5 h-3.5" />
+                Add Test Case
+              </button>
+            </div>
+
+            {problemFormData.test_cases.map((tc, idx) => (
+              <div key={idx} className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-2 relative">
+                <div className="flex items-center justify-between text-[11px] font-bold text-[#667085] dark:text-[#94A3B8]">
+                  <span>Test Case #{idx + 1}</span>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-[#172033] dark:text-[#F8FAFC]">
+                      <input
+                        type="checkbox"
+                        checked={tc.is_sample || false}
+                        onChange={(e) => handleProblemTestCaseChange(idx, 'is_sample', e.target.checked)}
+                        className="rounded"
+                      />
+                      <span>Sample Case</span>
+                    </label>
+                    {problemFormData.test_cases.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleProblemRemoveTestCase(idx)}
+                        className="text-[#EF4444] hover:opacity-80"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 font-mono">
+                  <div>
+                    <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-sans font-semibold">Input:</span>
+                    <textarea
+                      rows={2}
+                      value={tc.input}
+                      onChange={(e) => handleProblemTestCaseChange(idx, 'input', e.target.value)}
+                      placeholder="stdin"
+                      className="w-full p-2 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-lg text-[#172033] dark:text-[#F8FAFC] text-xs font-semibold"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-sans font-semibold">Expected Output:</span>
+                    <textarea
+                      rows={2}
+                      value={tc.expected_output}
+                      onChange={(e) => handleProblemTestCaseChange(idx, 'expected_output', e.target.value)}
+                      placeholder="expected stdout"
+                      className="w-full p-2 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-lg text-[#22B573] text-xs font-bold"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="pt-4 flex items-center justify-end gap-2 border-t border-[#D9E0E8] dark:border-[#30363D]">
+            <button
+              type="button"
+              onClick={() => setIsCreateProblemModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] font-semibold"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={problemActionLoading}
+              className="px-5 py-2.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold shadow-md shadow-emerald-500/20"
+            >
+              {problemActionLoading ? 'Creating...' : 'Create Problem'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* MANUAL CREATE MCQ MODAL */}
+      <Modal
+        isOpen={isCreateMCQModalOpen}
+        onClose={() => setIsCreateMCQModalOpen(false)}
+        title="Create Technical MCQ"
+        maxWidth="max-w-2xl"
+      >
+        {mcqErrorMsg && (
+          <div className="mb-4 p-3 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs flex items-center gap-2 font-bold">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{mcqErrorMsg}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleCreateMCQSubmit} className="space-y-4 text-xs">
+          <div>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Question Text *</label>
+            <textarea
+              required
+              rows={3}
+              value={mcqFormData.question}
+              onChange={(e) => setMcqFormData({ ...mcqFormData, question: e.target.value })}
+              placeholder="e.g. Which normal form eliminates transitive functional dependencies?"
+              className="w-full p-3.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Topic</label>
+              <select
+                value={mcqFormData.topic}
+                onChange={(e) => setMcqFormData({ ...mcqFormData, topic: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              >
+                {mcqTopics.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Difficulty</label>
+              <select
+                value={mcqFormData.difficulty}
+                onChange={(e) => setMcqFormData({ ...mcqFormData, difficulty: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              >
+                <option value="Easy">Easy</option>
+                <option value="Medium">Medium</option>
+                <option value="Hard">Hard</option>
+              </select>
+            </div>
+          </div>
+
+          {/* 4 Options Input */}
+          <div className="space-y-2.5">
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">4 Options *</label>
+            {mcqFormData.options.map((opt, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <span className="w-7 h-7 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-center font-bold text-[#0757B8] dark:text-[#60A5FA] shrink-0">
+                  {String.fromCharCode(65 + idx)}
+                </span>
+                <input
+                  type="text"
+                  required
+                  value={opt}
+                  onChange={(e) => handleMCQOptionChange(idx, e.target.value)}
+                  placeholder={`Option ${String.fromCharCode(65 + idx)}`}
+                  className="flex-1 px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                />
+              </div>
+            ))}
+          </div>
+
+          <div>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Select Correct Answer *</label>
+            <select
+              required
+              value={mcqFormData.correct_answer}
+              onChange={(e) => setMcqFormData({ ...mcqFormData, correct_answer: e.target.value })}
+              className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#22B573] font-bold"
+            >
+              <option value="">-- Select Correct Option --</option>
+              {mcqFormData.options.map((opt, idx) => (
+                <option key={idx} value={opt}>
+                  {String.fromCharCode(65 + idx)}: {opt || `(Empty Option ${String.fromCharCode(65 + idx)})`}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Answer Explanation</label>
+            <textarea
+              rows={2}
+              value={mcqFormData.explanation}
+              onChange={(e) => setMcqFormData({ ...mcqFormData, explanation: e.target.value })}
+              placeholder="Why is this answer correct? (Optional)"
+              className="w-full p-3 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC]"
+            />
+          </div>
+
+          <div className="pt-3 flex items-center justify-end gap-2 border-t border-[#D9E0E8] dark:border-[#30363D]">
+            <button
+              type="button"
+              onClick={() => setIsCreateMCQModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] font-semibold"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={mcqActionLoading}
+              className="px-5 py-2.5 rounded-xl bg-purple-600 hover:opacity-95 text-white font-bold shadow-md shadow-purple-600/20"
+            >
+              {mcqActionLoading ? 'Creating...' : 'Create MCQ'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+};
