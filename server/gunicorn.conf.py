@@ -7,12 +7,11 @@ import multiprocessing
 import os
 
 # Server Socket
-bind = f"0.0.0.0:{os.getenv('PORT', '5000')}"
+bind = f"0.0.0.0:{os.getenv('PORT', '10000')}"
 backlog = 2048
 
 # Worker Processes
-# Formula: 2-4 workers per core or async gevent workers for high I/O concurrency
-workers = int(os.getenv("WEB_CONCURRENCY", max(2, min(8, multiprocessing.cpu_count() * 2))))
+workers = int(os.getenv("WEB_CONCURRENCY", "2"))
 worker_class = os.getenv("GUNICORN_WORKER_CLASS", "gthread")
 threads = int(os.getenv("GUNICORN_THREADS", "4"))
 worker_connections = 1000
@@ -20,7 +19,7 @@ worker_connections = 1000
 # Worker Lifetime & Recycling (Prevents memory leaks under heavy load)
 max_requests = 1000
 max_requests_jitter = 100
-timeout = 30
+timeout = 120
 keepalive = 5
 
 # Logging

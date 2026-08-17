@@ -16,6 +16,14 @@ class Config:
     RUSTC_PATH = os.getenv("RUSTC_PATH", "")
     NODE_PATH = os.getenv("NODE_PATH", "")
     PORT = int(os.getenv("PORT", 5000))
-    DEBUG = os.getenv("FLASK_DEBUG", "True").lower() in ("true", "1", "yes")
-    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+    DEBUG = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1", "yes")
+    
+    # CORS Configuration
+    _cors_raw = os.getenv("CORS_ORIGINS", "")
+    _frontend_url = os.getenv("FRONTEND_URL", "")
+    _origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else []
+    if _frontend_url and _frontend_url not in _origins:
+        _origins.append(_frontend_url.strip())
+    CORS_ORIGINS = _origins if _origins else ["*"]
+    
     JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", 48))

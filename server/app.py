@@ -4,6 +4,8 @@ from flask_cors import CORS
 from config import Config
 from models.db import init_db
 
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 # Import Blueprints
 from routes.auth import auth_bp
 from routes.students import students_bp
@@ -17,6 +19,9 @@ from routes.notifications import notifications_bp
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
+
+    # Support reverse proxy headers (Render/Vercel HTTPS)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
     # Setup CORS
     CORS(
