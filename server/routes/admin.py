@@ -172,6 +172,55 @@ def get_admin_dashboard_stats():
         }
     }), 200
 
+@admin_bp.route("/system/metrics", methods=["GET"])
+@admin_required
+def get_system_metrics():
+    """Return real-time server health, CPU/RAM utilization, cache stats, and compiler worker queue metrics."""
+    import psutil
+    from services.cache_service import cache
+    from services.compiler_pool import compiler_pool
+
+    db = get_db()
+    now = get_utc_now()
+
+    # CPU & RAM Metrics
+    cpu_percent = psutil.cpu_percent(interval=0.1)
+    cpu_count = psutil.cpu_count(logical=True)
+    virtual_mem = psutil.virtual_memory()
+    disk_usage = psutil.disk_usage("/")
+
+    # Active Contests & Online Participants
+    active_contests_count = db.contests.count_documents({
+        "is_published": True,
+        "start_time": {"$lte": now.isoformat()},
+        "end_time": {"$gte": now.isoformat()}
+    })
+    active_participants_count = db.contest_participants.count_documents({
+        "status": "IN_PROGRESS"
+    })
+
+    return jsonify({
+        "success": True,
+        "system": {
+            "cpu_percent": cpu_percent,
+            "cpu_cores": cpu_count,
+            "ram_used_mb": round((virtual_mem.total - virtual_mem.available) / (1024 * 1024), 1),
+            "ram_total_mb": round(virtual_mem.total / (1024 * 1024), 1),
+            "ram_percent": virtual_mem.percent,
+            "disk_percent": disk_usage.percent
+        },
+        "database": {
+            "status": "connected",
+            "active_contests": active_contests_count,
+            "active_contest_participants": active_participants_count,
+            "total_users": db.users.count_documents({}),
+            "total_submissions": db.submissions.count_documents({})
+        },
+        "cache": cache.get_stats(),
+        "compiler_workers": compiler_pool.get_metrics(),
+        "server_time_utc": format_utc_iso(now)
+    }), 200
+
 # ----------------- STUDENT MANAGEMENT -----------------
 
 @admin_bp.route("/students", methods=["GET"])

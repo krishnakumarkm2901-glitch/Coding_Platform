@@ -2,6 +2,8 @@ from flask import Blueprint, request, jsonify
 from models.db import get_db
 from utils.decorators import token_required, student_required
 from services.piston_service import execute_code, normalize_output
+from services.cache_service import cache
+from services.compiler_pool import compiler_pool
 from utils.time_utils import (
     get_utc_now,
     parse_to_utc_datetime,
@@ -18,9 +20,8 @@ def parse_iso_or_datetime(val):
 
 @contests_bp.route("", methods=["GET"])
 def get_contests():
-    """List all published contests with status."""
+    """List all published contests with status and caching."""
     db = get_db()
-    contests_cursor = db.contests.find({"is_published": True}).sort("start_time", -1)
     
     user_id = None
     auth_header = request.headers.get("Authorization")
@@ -31,9 +32,26 @@ def get_contests():
             user_id = payload.get("user_id")
 
     now = get_utc_now()
-    contests_list = []
 
-    for c in contests_cursor:
+    # Cache base contest metadata for 10 seconds to protect DB during high concurrency
+    cache_key = "contests:published:list"
+    cached_contests = cache.get(cache_key)
+    if cached_contests is None:
+        contests_cursor = list(db.contests.find({"is_published": True}).sort("start_time", -1))
+        # Serialize ObjectIds for caching
+        cached_contests = []
+        for c in contests_cursor:
+            c_copy = dict(c)
+            c_copy["_id"] = str(c["_id"])
+            if "problem_ids" in c_copy:
+                c_copy["problem_ids"] = [str(pid) for pid in c_copy["problem_ids"]]
+            if "mcq_ids" in c_copy:
+                c_copy["mcq_ids"] = [str(mid) for mid in c_copy["mcq_ids"]]
+            cached_contests.append(c_copy)
+        cache.set(cache_key, cached_contests, ttl=10)
+
+    contests_list = []
+    for c in cached_contests:
         c_id = str(c["_id"])
         start = parse_to_utc_datetime(c.get("start_time"))
         end = parse_to_utc_datetime(c.get("end_time"))
@@ -536,7 +554,7 @@ def submit_contest(contest_id):
                 mcqs_correct += 1
                 total_score += 10 # 10 points per MCQ
 
-    # 2. Evaluate Code Solutions
+    # 2. Evaluate Code Solutions with Parallel Compiler Worker Pool
     coding_results = {}
     for pid, sol in code_solutions.items():
         lang = sol.get("language", "python")
@@ -555,31 +573,41 @@ def submit_contest(contest_id):
         if not test_cases:
             test_cases = [{"input": prob.get("sample_input", ""), "expected_output": prob.get("sample_output", "")}]
 
-        passed = 0
-        total_tcs = len(test_cases)
-        for tc in test_cases:
-            tc_in = tc.get("input", "")
-            tc_expected = normalize_output(tc.get("expected_output", tc.get("output", "")))
-            res = execute_code(lang, code, tc_in, timeout=5)
-            if normalize_output(res.get("output", "")) == tc_expected:
-                passed += 1
+        # Execute test cases in parallel across worker pool
+        eval_res = compiler_pool.evaluate_test_cases(lang, code, test_cases, timeout=5)
+        passed = eval_res["passed"]
+        total_tcs = eval_res["total"]
+        status = eval_res["status"]
 
         if passed == total_tcs and total_tcs > 0:
             problems_solved += 1
             total_score += 50 # 50 points per solved problem
-            coding_results[pid] = {"status": "Accepted", "passed": passed, "total": total_tcs}
+            coding_results[pid] = {
+                "status": "Accepted",
+                "passed": passed,
+                "total": total_tcs,
+                "time_ms": eval_res["total_time_ms"]
+            }
         else:
             # Partial scoring
             partial_points = int((passed / total_tcs) * 50) if total_tcs > 0 else 0
             total_score += partial_points
-            coding_results[pid] = {"status": "Partial/Wrong", "passed": passed, "total": total_tcs}
+            coding_results[pid] = {
+                "status": status if status != "Accepted" else "Partial/Wrong",
+                "passed": passed,
+                "total": total_tcs,
+                "time_ms": eval_res["total_time_ms"]
+            }
 
     mcq_score = mcqs_correct * 10
     coding_score = max(total_score - mcq_score, 0)
     total_contest_mcqs = len(assigned_mcq_ids)
     total_contest_problems = len(contest.get("problem_ids", []))
 
-    # Update participant record
+    # Invalidate leaderboard cache for this contest
+    cache.delete(f"contest:{contest_id}:leaderboard")
+
+    # Update participant record with full pre-aggregated metrics
     db.contest_participants.update_one(
         {"contest_id": contest_id, "user_id": user_id},
         {
@@ -807,10 +835,19 @@ def get_student_contest_report(contest_id):
 
 @contests_bp.route("/<contest_id>/leaderboard", methods=["GET"])
 def get_contest_leaderboard(contest_id):
-    """Retrieve contest leaderboard sorted by score and submission time."""
+    """Retrieve contest leaderboard sorted by score and submission time with caching."""
     db = get_db()
     if not ObjectId.is_valid(contest_id):
         return jsonify({"error": "Invalid contest ID", "success": False}), 400
+
+    cache_key = f"contest:{contest_id}:leaderboard"
+    cached_leaderboard = cache.get(cache_key)
+    if cached_leaderboard is not None:
+        return jsonify({
+            "success": True,
+            "leaderboard": cached_leaderboard,
+            "total_participants": len(cached_leaderboard)
+        }), 200
 
     participants_cursor = db.contest_participants.find({"contest_id": contest_id}).sort([
         ("score", -1),
@@ -832,6 +869,8 @@ def get_contest_leaderboard(contest_id):
             "tab_switches": len(p.get("anti_cheat_logs", []))
         })
         rank += 1
+
+    cache.set(cache_key, leaderboard, ttl=5)
 
     return jsonify({
         "success": True,

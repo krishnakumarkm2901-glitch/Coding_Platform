@@ -50,10 +50,26 @@ def create_app():
 
     @app.route("/api/health")
     def health_check():
+        from services.cache_service import cache
+        from services.compiler_pool import compiler_pool
+        from utils.time_utils import get_utc_now, format_utc_iso
+        from models.db import get_db
+
+        db_healthy = False
+        try:
+            db = get_db()
+            db.command("ping")
+            db_healthy = True
+        except Exception:
+            pass
+
         return jsonify({
-            "status": "healthy",
-            "timestamp": os.getenv("CURRENT_TIME", "")
-        })
+            "status": "healthy" if db_healthy else "degraded",
+            "database": "connected" if db_healthy else "disconnected",
+            "cache": cache.get_stats(),
+            "compiler_workers": compiler_pool.get_metrics(),
+            "server_time_utc": format_utc_iso(get_utc_now())
+        }), 200 if db_healthy else 503
 
     # Error Handlers
     @app.errorhandler(404)
