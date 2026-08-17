@@ -14,9 +14,11 @@ from datetime import datetime, timezone, timedelta
 import re
 import calendar
 import io
+import logging
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+logger = logging.getLogger(__name__)
 admin_bp = Blueprint("admin", __name__)
 
 def slugify(text):
