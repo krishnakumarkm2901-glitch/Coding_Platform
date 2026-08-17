@@ -1,6 +1,12 @@
 from flask import Blueprint, jsonify, request
 from models.db import get_db
 from utils.decorators import student_required
+from utils.time_utils import (
+    get_utc_now,
+    parse_to_utc_datetime,
+    format_utc_iso,
+    calculate_contest_status
+)
 from bson import ObjectId
 from datetime import datetime, timezone, timedelta
 
@@ -70,33 +76,22 @@ def get_student_profile():
     # Recent/Upcoming Contests
     contests_cursor = db.contests.find({"is_published": True}).sort("start_time", -1).limit(5)
     recent_contests = []
-    now = datetime.now(timezone.utc)
+    now = get_utc_now()
     for c in contests_cursor:
         c_id = str(c["_id"])
         # Check if student joined
         participant = db.contest_participants.find_one({"contest_id": c_id, "user_id": user_id})
         
-        start = c.get("start_time")
-        end = c.get("end_time")
-        status = "Upcoming"
-        if isinstance(start, datetime) and isinstance(end, datetime):
-            if start.tzinfo is None:
-                start = start.replace(tzinfo=timezone.utc)
-            if end.tzinfo is None:
-                end = end.replace(tzinfo=timezone.utc)
-            if now < start:
-                status = "Upcoming"
-            elif start <= now <= end:
-                status = "Active"
-            else:
-                status = "Ended"
+        start = parse_to_utc_datetime(c.get("start_time"))
+        end = parse_to_utc_datetime(c.get("end_time"))
+        status = calculate_contest_status(start, end, now)
 
         recent_contests.append({
             "id": c_id,
             "title": c.get("title"),
             "description": c.get("description", ""),
-            "start_time": start.isoformat() if isinstance(start, datetime) else str(start),
-            "end_time": end.isoformat() if isinstance(end, datetime) else str(end),
+            "start_time": format_utc_iso(start),
+            "end_time": format_utc_iso(end),
             "duration_minutes": c.get("duration_minutes", 60),
             "status": status,
             "has_joined": bool(participant),
@@ -131,7 +126,7 @@ def get_student_profile():
             check_date -= timedelta(days=1)
 
     return jsonify({
-        "success": result.get("success", False),
+        "success": True,
         "student": {
             "id": user_id,
             "name": user.get("name"),

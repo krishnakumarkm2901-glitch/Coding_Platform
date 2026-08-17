@@ -13,20 +13,7 @@ import {
   Zap
 } from 'lucide-react';
 import { PageLoader } from '../../components/common/Loader';
-
-const formatDateTime = (dateStr) => {
-  if (!dateStr) return 'N/A';
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  });
-};
+import { formatISTDateTime as formatDateTime } from '../../utils/date';
 
 export const ContestList = () => {
   const [contests, setContests] = useState([]);
@@ -34,26 +21,31 @@ export const ContestList = () => {
   const [tab, setTab] = useState('active'); // 'active', 'upcoming', 'past'
 
   useEffect(() => {
-    fetchContests();
+    fetchContests(true);
+    // Lightweight polling every 5 seconds for live status transitions
+    const interval = setInterval(() => {
+      fetchContests(false);
+    }, 5000);
+    return () => clearInterval(interval);
   }, []);
 
-  const fetchContests = async () => {
+  const fetchContests = async (showLoader = false) => {
     try {
-      setLoading(true);
+      if (showLoader) setLoading(true);
       const res = await api.get('/contests');
       if (res.data.success) {
-        setContests(res.data.contests);
+        setContests(res.data.contests || []);
       }
     } catch (err) {
-      console.error(err);
+      console.error('Failed to load contests:', err);
     } finally {
-      setLoading(false);
+      if (showLoader) setLoading(false);
     }
   };
 
   const activeContests = contests.filter((c) => c.status === 'Active');
   const upcomingContests = contests.filter((c) => c.status === 'Upcoming');
-  const pastContests = contests.filter((c) => c.status === 'Ended');
+  const pastContests = contests.filter((c) => c.status === 'Past' || c.status === 'Ended');
 
   const getDisplayList = () => {
     if (tab === 'active') return activeContests;
@@ -131,15 +123,31 @@ export const ContestList = () => {
             >
               <div>
                 <div className="flex items-center justify-between gap-2 mb-3">
-                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider ${
-                    c.status === 'Active'
-                      ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
-                      : c.status === 'Upcoming'
-                      ? 'bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20 dark:border-[#0066CC]/40'
-                      : 'bg-slate-200 dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8]'
-                  }`}>
-                    {c.status}
-                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider ${
+                      c.status === 'Active'
+                        ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
+                        : c.status === 'Upcoming'
+                        ? 'bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20 dark:border-[#0066CC]/40'
+                        : 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30'
+                    }`}>
+                      {c.status}
+                    </span>
+
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
+                      (c.contestType === 'BOTH' || c.contest_type === 'BOTH' || (c.problems_count > 0 && c.mcqs_count > 0))
+                        ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30'
+                        : (c.contestType === 'CODING' || c.contest_type === 'CODING' || (c.problems_count > 0 && !c.mcqs_count))
+                          ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
+                          : 'bg-purple-500/15 text-purple-600 border border-purple-500/30'
+                    }`}>
+                      {(c.contestType === 'BOTH' || c.contest_type === 'BOTH' || (c.problems_count > 0 && c.mcqs_count > 0))
+                        ? 'Coding + MCQ'
+                        : (c.contestType === 'CODING' || c.contest_type === 'CODING' || (c.problems_count > 0 && !c.mcqs_count))
+                          ? 'Coding'
+                          : 'MCQ'}
+                    </span>
+                  </div>
 
                   <div className="flex items-center gap-1.5 text-xs text-[#667085] dark:text-[#94A3B8] font-mono">
                     <Users className="w-3.5 h-3.5" />
@@ -182,10 +190,24 @@ export const ContestList = () => {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-[#D9E0E8] dark:border-[#30363D]">
                 <div className="text-[11px] text-[#667085] dark:text-[#94A3B8] font-medium flex items-center gap-1.5 font-mono">
                   <Calendar className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />
-                  <span>Starts: <strong className="text-[#172033] dark:text-[#F8FAFC] font-semibold">{formatDateTime(c.start_time)}</strong></span>
+                  <span>
+                    {c.status === 'Active' ? 'Ends: ' : c.status === 'Past' || c.status === 'Ended' ? 'Ended: ' : 'Starts: '}
+                    <strong className="text-[#172033] dark:text-[#F8FAFC] font-semibold">
+                      {formatDateTime(c.status === 'Active' || c.status === 'Past' || c.status === 'Ended' ? (c.end_time || c.start_time) : c.start_time)}
+                    </strong>
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {(c.status === 'Past' || c.status === 'Ended' || c.has_joined) && (
+                    <Link
+                      to={`/contests/${c.id}/result`}
+                      className="px-3.5 py-2 rounded-xl bg-purple-600/10 hover:bg-purple-600 text-purple-600 dark:text-purple-400 hover:text-white text-xs font-bold border border-purple-500/20 transition shadow-sm"
+                    >
+                      My Result
+                    </Link>
+                  )}
+
                   <Link
                     to={`/contests/${c.id}/leaderboard`}
                     className="px-3.5 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#172033] dark:text-[#F8FAFC] hover:text-[#0757B8] dark:hover:text-[#60A5FA] text-xs font-bold border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"

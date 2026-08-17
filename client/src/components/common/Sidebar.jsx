@@ -10,6 +10,7 @@ import {
   User, 
   Users, 
   FileCode, 
+  CheckSquare,
   CalendarCheck,
   BarChart3,
   X,

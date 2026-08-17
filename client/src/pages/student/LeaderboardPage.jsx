@@ -684,23 +684,35 @@ export const LeaderboardPage = () => {
       ) : (
         /* CONTEST LEADERBOARD TAB */
         <div className="space-y-4">
-          {/* Contest Selector */}
-          <div className="p-5 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm">
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1.5 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
-              <Trophy className="w-3.5 h-3.5 text-[#F2B705]" />
-              <span>Select Contest</span>
-            </label>
-            <select
-              value={selectedContestId}
-              onChange={(e) => setSelectedContestId(e.target.value)}
-              className="w-full sm:max-w-md py-2.5 px-3.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#0757B8] dark:text-[#60A5FA] font-bold text-xs"
-            >
-              {contestsList.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.title} ({c.duration_minutes}m)
-                </option>
-              ))}
-            </select>
+          {/* Contest Selector & Personal Result Link */}
+          <div className="p-5 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="w-full sm:max-w-md">
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1.5 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
+                <Trophy className="w-3.5 h-3.5 text-[#F2B705]" />
+                <span>Select Contest</span>
+              </label>
+              <select
+                value={selectedContestId}
+                onChange={(e) => setSelectedContestId(e.target.value)}
+                className="w-full py-2.5 px-3.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#0757B8] dark:text-[#60A5FA] font-bold text-xs"
+              >
+                {contestsList.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.title} ({c.duration_minutes}m)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedContestId && (
+              <Link
+                to={`/contests/${selectedContestId}/result`}
+                className="px-5 py-2.5 rounded-xl bg-purple-600 hover:opacity-95 text-white font-bold text-xs shadow-md shadow-purple-600/20 flex items-center gap-1.5 self-start sm:self-end transition"
+              >
+                <Award className="w-4 h-4" />
+                <span>View My Performance Result</span>
+              </Link>
+            )}
           </div>
 
           <div className="rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] overflow-hidden shadow-sm">

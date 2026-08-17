@@ -27,6 +27,7 @@ import { DifficultyBadge, TopicTag } from '../../components/common/Badge';
 import { Modal } from '../../components/common/Modal';
 import { PageLoader } from '../../components/common/Loader';
 import { ScientificCalculator } from '../../components/common/ScientificCalculator';
+import { formatISTDateTime as formatDateTime } from '../../utils/date';
 
 export const ContestArena = () => {
   const { id } = useParams();
@@ -40,9 +41,13 @@ export const ContestArena = () => {
   const [mode, setMode] = useState('overview');
   const [terminationReason, setTerminationReason] = useState('');
 
-  // Contest timer (seconds remaining)
+  // Contest countdown to start (for upcoming)
+  const [countdownToStart, setCountdownToStart] = useState(0);
+
+  // Contest timer (seconds remaining in active arena)
   const [timeLeft, setTimeLeft] = useState(0);
   const timerRef = useRef(null);
+  const countdownTimerRef = useRef(null);
   const isTerminatedRef = useRef(false);
   const isSubmittedRef = useRef(false);
 
@@ -71,20 +76,54 @@ export const ContestArena = () => {
   const [calculatorOpen, setCalculatorOpen] = useState(false);
 
   useEffect(() => {
-    fetchContestDetails();
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [id]);
+    fetchContestDetails(true);
+    // Polling every 5s while on overview screen for real-time status transitions
+    const overviewPoll = setInterval(() => {
+      if (mode === 'overview') {
+        fetchContestDetails(false);
+      }
+    }, 5000);
 
-  const fetchContestDetails = async () => {
+    return () => {
+      clearInterval(overviewPoll);
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    };
+  }, [id, mode]);
+
+  // Countdown timer tick effect for upcoming contests
+  useEffect(() => {
+    if (countdownToStart <= 0) return;
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    countdownTimerRef.current = setInterval(() => {
+      setCountdownToStart((prev) => {
+        if (prev <= 1) {
+          clearInterval(countdownTimerRef.current);
+          fetchContestDetails(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => {
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    };
+  }, [countdownToStart > 0]);
+
+  const fetchContestDetails = async (showLoader = false) => {
     try {
-      setLoading(true);
+      if (showLoader) setLoading(true);
       setError('');
       const res = await api.get(`/contests/${id}`);
       if (res.data.success) {
         const c = res.data.contest;
         setContest(c);
+
+        if (c.status === 'Upcoming' && c.time_to_start_seconds > 0) {
+          setCountdownToStart(c.time_to_start_seconds);
+        } else {
+          setCountdownToStart(0);
+        }
 
         // Check if student was already terminated in database
         if (c.is_terminated) {
@@ -99,6 +138,14 @@ export const ContestArena = () => {
           isSubmittedRef.current = true;
           setMode('submitted');
           return;
+        }
+
+        // Initialize active section (coding vs mcqs)
+        const cType = c.contestType || c.contest_type || ((c.problems?.length > 0 && c.mcqs?.length > 0) ? 'BOTH' : c.problems?.length > 0 ? 'CODING' : 'MCQ');
+        if (cType === 'MCQ' || (c.problems?.length === 0 && c.mcqs?.length > 0)) {
+          setActiveSection('mcqs');
+        } else {
+          setActiveSection('coding');
         }
 
         // Initialize coding starter codes
@@ -504,21 +551,62 @@ export const ContestArena = () => {
     );
   }
 
+  if (error || !contest) {
+    return (
+      <div className="p-8 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] text-center max-w-xl mx-auto my-12 shadow-sm space-y-4">
+        <div className="w-14 h-14 rounded-2xl bg-red-500/15 text-red-600 flex items-center justify-center mx-auto">
+          <AlertTriangle className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-extrabold text-[#172033] dark:text-[#F8FAFC]">Contest Unavailable</h2>
+        <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+          {error || 'The requested contest could not be found or loaded.'}
+        </p>
+        <div className="pt-2">
+          <Link to="/contests" className="px-5 py-2.5 rounded-xl bg-[#0757B8] dark:bg-[#0066CC] text-white font-bold text-xs shadow-md">
+            Return to Contests
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   // =========================================================================
   // 📋 3. CONTEST OVERVIEW & STRICT MODE WARNING (Before Start)
   // =========================================================================
   if (mode === 'overview') {
+    const isUpcoming = contest.status === 'Upcoming';
+    const isPast = contest.status === 'Past' || contest.status === 'Ended';
+    const isActive = contest.status === 'Active';
+
     return (
       <div className="max-w-3xl mx-auto space-y-6 animate-fadeIn">
         {/* Header card */}
         <div className="p-6 sm:p-8 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm space-y-4">
-          <div className="flex items-center gap-2">
-            <span className="px-3 py-1 rounded-full text-xs font-bold uppercase bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20">
-              Contest Arena
-            </span>
-            <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-mono">
-              Duration: {contest.duration_minutes} Mins
-            </span>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
+                isActive
+                  ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
+                  : isUpcoming
+                  ? 'bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20'
+                  : 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30'
+              }`}>
+                {contest.status || 'Contest'}
+              </span>
+              <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-mono">
+                Duration: {contest.duration_minutes} Mins
+              </span>
+            </div>
+
+            <div className="text-xs font-mono text-[#667085] dark:text-[#94A3B8]">
+              {isUpcoming ? (
+                <span>Starts: <strong className="text-[#172033] dark:text-[#F8FAFC]">{formatDateTime(contest.start_time)}</strong></span>
+              ) : isActive ? (
+                <span>Ends: <strong className="text-[#172033] dark:text-[#F8FAFC]">{formatDateTime(contest.end_time)}</strong></span>
+              ) : (
+                <span>Ended: <strong className="text-[#172033] dark:text-[#F8FAFC]">{formatDateTime(contest.end_time || contest.start_time)}</strong></span>
+              )}
+            </div>
           </div>
 
           <h1 className="text-2xl sm:text-3xl font-extrabold text-[#172033] dark:text-[#F8FAFC]">
@@ -528,6 +616,29 @@ export const ContestArena = () => {
           <p className="text-sm text-[#667085] dark:text-[#94A3B8]">
             {contest.description || 'Welcome to the competitive coding arena. Test your algorithmic capabilities and technical accuracy.'}
           </p>
+
+          {/* Live Countdown Banner for Upcoming Contests */}
+          {isUpcoming && (
+            <div className="p-4 rounded-2xl bg-[#DDF2FF]/60 dark:bg-[#142A43]/60 border border-[#0757B8]/30 dark:border-[#0066CC]/50 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-[#0757B8] text-white">
+                  <Clock className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-[#0757B8] dark:text-[#60A5FA] uppercase tracking-wide">
+                    Contest Starts In
+                  </div>
+                  <div className="text-lg font-extrabold font-mono text-[#172033] dark:text-[#F8FAFC]">
+                    {countdownToStart > 0 ? formatTimer(countdownToStart) : 'Starting momentarily...'}
+                  </div>
+                </div>
+              </div>
+              <div className="text-right text-[11px] text-[#667085] dark:text-[#94A3B8] font-mono hidden sm:block">
+                Start Time:<br />
+                <span className="font-bold text-[#172033] dark:text-[#F8FAFC]">{formatDateTime(contest.start_time)}</span>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-3 pt-2">
             <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-center">
@@ -577,18 +688,45 @@ export const ContestArena = () => {
         </div>
 
         {/* Action button */}
-        <div className="flex items-center justify-between pt-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
           <Link to="/contests" className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] hover:underline">
             &larr; Back to Contests
           </Link>
 
-          <button
-            onClick={handleStartContest}
-            className="px-8 py-3.5 rounded-2xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-extrabold text-sm shadow-xl shadow-blue-500/25 flex items-center gap-2.5 transition transform active:scale-95"
-          >
-            <Lock className="w-4 h-4" />
-            <span>Start Contest & Lock Arena</span>
-          </button>
+          <div className="flex items-center gap-3">
+            {isPast ? (
+              <div className="flex items-center gap-2">
+                <Link
+                  to={`/contests/${contest.id}/result`}
+                  className="px-5 py-3 rounded-2xl bg-purple-600 hover:opacity-95 text-white font-extrabold text-xs shadow-md transition"
+                >
+                  View My Result
+                </Link>
+                <Link
+                  to={`/contests/${contest.id}/leaderboard`}
+                  className="px-5 py-3 rounded-2xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-extrabold text-xs shadow-md transition"
+                >
+                  Contest Leaderboard
+                </Link>
+              </div>
+            ) : isUpcoming ? (
+              <button
+                disabled
+                className="px-6 py-3.5 rounded-2xl bg-slate-300 dark:bg-slate-700 text-slate-500 dark:text-slate-400 font-bold text-xs cursor-not-allowed flex items-center gap-2"
+              >
+                <Lock className="w-4 h-4" />
+                <span>Starts at {formatDateTime(contest.start_time)}</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleStartContest}
+                className="px-8 py-3.5 rounded-2xl bg-[#22B573] hover:opacity-95 text-white font-extrabold text-sm shadow-xl shadow-emerald-600/25 flex items-center gap-2.5 transition transform active:scale-95"
+              >
+                <Lock className="w-4 h-4" />
+                <span>Start Contest & Lock Arena</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -617,18 +755,18 @@ export const ContestArena = () => {
         </div>
 
         {/* Center: Section Toggles (Coding / MCQs) */}
-        <div className="flex items-center gap-1 p-1 bg-[#F5F7FA] dark:bg-[#0B0F14] rounded-xl border border-[#D9E0E8] dark:border-[#30363D]">
-          <button
-            onClick={() => setActiveSection('coding')}
-            className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
-              activeSection === 'coding'
-                ? 'bg-[#0757B8] dark:bg-[#0066CC] text-white shadow-sm'
-                : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033]'
-            }`}
-          >
-            Coding ({contest.problems?.length || 0})
-          </button>
-          {contest.mcqs?.length > 0 && (
+        {((contest.problems?.length > 0 && contest.mcqs?.length > 0) || contest.contestType === 'BOTH' || contest.contest_type === 'BOTH') && (
+          <div className="flex items-center gap-1 p-1 bg-[#F5F7FA] dark:bg-[#0B0F14] rounded-xl border border-[#D9E0E8] dark:border-[#30363D]">
+            <button
+              onClick={() => setActiveSection('coding')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                activeSection === 'coding'
+                  ? 'bg-[#0757B8] dark:bg-[#0066CC] text-white shadow-sm'
+                  : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033]'
+              }`}
+            >
+              Coding ({contest.problems?.length || 0})
+            </button>
             <button
               onClick={() => setActiveSection('mcqs')}
               className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
@@ -637,10 +775,20 @@ export const ContestArena = () => {
                   : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033]'
               }`}
             >
-              MCQs ({contest.mcqs?.length})
+              MCQs ({contest.mcqs?.length || 0})
             </button>
-          )}
-        </div>
+          </div>
+        )}
+        {((contest.problems?.length > 0 && (!contest.mcqs || contest.mcqs.length === 0)) || contest.contestType === 'CODING' || contest.contest_type === 'CODING') && (
+          <div className="px-3 py-1 bg-[#DDF2FF] dark:bg-[#142A43] border border-[#0757B8]/20 rounded-xl text-xs font-bold text-[#0757B8] dark:text-[#60A5FA]">
+            Coding Assessment ({contest.problems?.length || 0} Problems)
+          </div>
+        )}
+        {((contest.mcqs?.length > 0 && (!contest.problems || contest.problems.length === 0)) || contest.contestType === 'MCQ' || contest.contest_type === 'MCQ') && (
+          <div className="px-3 py-1 bg-purple-500/15 border border-purple-500/30 rounded-xl text-xs font-bold text-purple-600 dark:text-purple-400">
+            Technical MCQ Assessment ({contest.mcqs?.length || 0} Questions)
+          </div>
+        )}
 
         {/* Right: Calculator, Timer & Submit Button */}
         <div className="flex items-center gap-2.5">

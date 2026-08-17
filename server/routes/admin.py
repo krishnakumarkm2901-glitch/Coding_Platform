@@ -1,7 +1,14 @@
-from flask import Blueprint, request, jsonify, send_file
+from flask import Blueprint, request, jsonify, send_file, make_response
 from models.db import get_db
 from utils.security import hash_password
 from utils.decorators import admin_required
+from utils.time_utils import (
+    get_utc_now,
+    parse_to_utc_datetime,
+    format_utc_iso,
+    calculate_contest_status,
+    IST
+)
 from bson import ObjectId
 from datetime import datetime, timezone, timedelta
 import re
@@ -16,7 +23,7 @@ def slugify(text):
     text = re.sub(r'[^\w\s-]', '', text).strip().lower()
     return re.sub(r'[-\s]+', '-', text)
 
-# ----------------- ADMIN DASHBOARD STATS -----------------
+# ----------------- ADMIN_DASHBOARD_STATS -----------------
 
 @admin_bp.route("/stats", methods=["GET"])
 @admin_required
@@ -30,17 +37,14 @@ def get_admin_dashboard_stats():
     total_contests = db.contests.count_documents({})
     total_submissions = db.submissions.count_documents({})
     
-    now = datetime.now(timezone.utc)
+    now = get_utc_now()
     active_contests = 0
     contests = list(db.contests.find({"is_published": True}))
     for c in contests:
-        st = c.get("start_time")
-        et = c.get("end_time")
-        if isinstance(st, datetime) and isinstance(et, datetime):
-            if st.tzinfo is None: st = st.replace(tzinfo=timezone.utc)
-            if et.tzinfo is None: et = et.replace(tzinfo=timezone.utc)
-            if st <= now <= et:
-                active_contests += 1
+        st = parse_to_utc_datetime(c.get("start_time"))
+        et = parse_to_utc_datetime(c.get("end_time"))
+        if st and et and st <= now <= et:
+            active_contests += 1
 
     # Verdicts & Languages Breakdown strictly from live database
     all_subs = list(db.submissions.find({}, {"status": 1, "language": 1, "created_at": 1}))
@@ -951,6 +955,244 @@ def delete_mcq(mcq_id):
     db.mcqs.delete_one({"_id": ObjectId(mcq_id)})
     return jsonify({"success": True, "message": "MCQ deleted successfully"}), 200
 
+# ----------------- EXCEL MCQ IMPORT -----------------
+
+@admin_bp.route("/mcqs/import/template", methods=["GET"])
+@admin_required
+def download_mcq_excel_template():
+    """Download sample Excel template for importing MCQs."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "MCQ Import Template"
+
+    headers = ["Question", "Option 1", "Option 2", "Option 3", "Option 4", "Correct Option", "Topic", "Difficulty"]
+    ws.append(headers)
+
+    # Style header row
+    header_fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    # Sample rows
+    ws.append(["What is 2+2?", "3", "4", "5", "6", 2, "Aptitude & Logical Reasoning", "Easy"])
+    ws.append(["Capital of India?", "Mumbai", "Delhi", "Chennai", "Kolkata", 2, "General", "Easy"])
+    ws.append(["Which data structure uses LIFO?", "Queue", "Stack", "Array", "Linked List", 2, "Data Structures", "Easy"])
+
+    ws.column_dimensions["A"].width = 35
+    ws.column_dimensions["B"].width = 20
+    ws.column_dimensions["C"].width = 20
+    ws.column_dimensions["D"].width = 20
+    ws.column_dimensions["E"].width = 20
+    ws.column_dimensions["F"].width = 16
+    ws.column_dimensions["G"].width = 22
+    ws.column_dimensions["H"].width = 14
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = "MCQ_Import_Template.xlsx"
+    response = make_response(output.getvalue())
+    response.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.headers["Access-Control-Expose-Headers"] = "Content-Disposition, Content-Type"
+    return response
+
+@admin_bp.route("/mcqs/import/preview", methods=["POST"])
+@admin_required
+def preview_mcq_excel_import():
+    """Parse and validate uploaded Excel file with MCQs, returning valid rows and specific errors."""
+    if "file" not in request.files:
+        return jsonify({"error": "No Excel file uploaded", "success": False}), 400
+
+    file = request.files["file"]
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
+        return jsonify({"error": "Invalid file format. Please upload an .xlsx Excel spreadsheet.", "success": False}), 400
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file.read()), data_only=True)
+        ws = wb.active
+        if not ws or ws.max_row < 2:
+            return jsonify({"error": "Excel file is empty or missing data rows.", "success": False}), 400
+
+        # Read header row (row 1)
+        header_row = [str(cell.value or "").strip().lower() for cell in ws[1]]
+        
+        # Identify column indices
+        col_map = {}
+        for idx, h in enumerate(header_row):
+            if "question" in h:
+                col_map["question"] = idx
+            elif "option 1" in h or h == "option1" or h == "a" or "opt 1" in h:
+                col_map["option1"] = idx
+            elif "option 2" in h or h == "option2" or h == "b" or "opt 2" in h:
+                col_map["option2"] = idx
+            elif "option 3" in h or h == "option3" or h == "c" or "opt 3" in h:
+                col_map["option3"] = idx
+            elif "option 4" in h or h == "option4" or h == "d" or "opt 4" in h:
+                col_map["option4"] = idx
+            elif "correct" in h or "answer" in h:
+                col_map["correct_option"] = idx
+            elif "topic" in h:
+                col_map["topic"] = idx
+            elif "difficulty" in h:
+                col_map["difficulty"] = idx
+
+        required_cols = ["question", "option1", "option2", "option3", "option4", "correct_option"]
+        missing_cols = [c for c in required_cols if c not in col_map]
+        if missing_cols:
+            return jsonify({
+                "error": f"Missing required columns in Excel: {', '.join(missing_cols)}. Expected: Question, Option 1, Option 2, Option 3, Option 4, Correct Option",
+                "success": False
+            }), 400
+
+        valid_rows = []
+        errors = []
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            # If entire row is empty, skip
+            if not any(row):
+                continue
+
+            q_val = str(row[col_map["question"]] or "").strip()
+            o1_val = str(row[col_map["option1"]] or "").strip()
+            o2_val = str(row[col_map["option2"]] or "").strip()
+            o3_val = str(row[col_map["option3"]] or "").strip()
+            o4_val = str(row[col_map["option4"]] or "").strip()
+            corr_val = row[col_map["correct_option"]]
+
+            row_errors = []
+
+            # 1. Validate Question
+            if not q_val:
+                row_errors.append("Question is missing.")
+
+            # 2. Validate all 4 options
+            if not o1_val:
+                row_errors.append("Option 1 is missing.")
+            if not o2_val:
+                row_errors.append("Option 2 is missing.")
+            if not o3_val:
+                row_errors.append("Option 3 is missing.")
+            if not o4_val:
+                row_errors.append("Option 4 is missing.")
+
+            # 3. Validate Correct Option (must be 1, 2, 3, or 4)
+            correct_num = None
+            if corr_val is not None:
+                corr_str = str(corr_val).strip()
+                try:
+                    # Handle float e.g. 2.0
+                    val_float = float(corr_str)
+                    if val_float in [1.0, 2.0, 3.0, 4.0]:
+                        correct_num = int(val_float)
+                except ValueError:
+                    # If user wrote "Option 2" or "B"
+                    if corr_str.lower() in ["1", "option 1", "option1", "a", "opt 1"]:
+                        correct_num = 1
+                    elif corr_str.lower() in ["2", "option 2", "option2", "b", "opt 2"]:
+                        correct_num = 2
+                    elif corr_str.lower() in ["3", "option 3", "option3", "c", "opt 3"]:
+                        correct_num = 3
+                    elif corr_str.lower() in ["4", "option 4", "option4", "d", "opt 4"]:
+                        correct_num = 4
+
+            if correct_num is None or correct_num not in [1, 2, 3, 4]:
+                row_errors.append("Correct Option must be 1, 2, 3, or 4.")
+
+            topic_val = str(row[col_map["topic"]] or "").strip() if "topic" in col_map and col_map["topic"] < len(row) and row[col_map["topic"]] else "General"
+            diff_val = str(row[col_map["difficulty"]] or "").strip().capitalize() if "difficulty" in col_map and col_map["difficulty"] < len(row) and row[col_map["difficulty"]] else "Easy"
+            if diff_val not in ["Easy", "Medium", "Hard"]:
+                diff_val = "Easy"
+
+            if row_errors:
+                errors.append({
+                    "row": row_idx,
+                    "reason": "; ".join(row_errors),
+                    "question": q_val or f"Row {row_idx}"
+                })
+            else:
+                options_list = [o1_val, o2_val, o3_val, o4_val]
+                valid_rows.append({
+                    "row": row_idx,
+                    "question": q_val,
+                    "options": options_list,
+                    "correctOption": correct_num,
+                    "correct_option": correct_num,
+                    "correct_answer": options_list[correct_num - 1],
+                    "topic": topic_val,
+                    "difficulty": diff_val,
+                    "type": "MCQ"
+                })
+
+        return jsonify({
+            "success": True,
+            "total_rows": len(valid_rows) + len(errors),
+            "valid_count": len(valid_rows),
+            "invalid_count": len(errors),
+            "valid_rows": valid_rows,
+            "errors": errors
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error parsing MCQ excel file: {e}")
+        return jsonify({"error": f"Failed to read Excel file: {str(e)}", "success": False}), 500
+
+@admin_bp.route("/mcqs/import/commit", methods=["POST"])
+@admin_required
+def commit_mcq_excel_import():
+    """Save validated MCQs to MongoDB."""
+    data = request.get_json() or {}
+    mcqs_to_save = data.get("mcqs", [])
+    if not mcqs_to_save or not isinstance(mcqs_to_save, list):
+        return jsonify({"error": "No valid MCQs provided to save.", "success": False}), 400
+
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    docs = []
+
+    for item in mcqs_to_save:
+        q = str(item.get("question", "")).strip()
+        opts = item.get("options", [])
+        corr_opt = item.get("correctOption") or item.get("correct_option")
+
+        if not q or len(opts) != 4 or not corr_opt or int(corr_opt) not in [1, 2, 3, 4]:
+            continue
+
+        corr_num = int(corr_opt)
+        corr_ans = opts[corr_num - 1] if 1 <= corr_num <= len(opts) else str(opts[0])
+
+        docs.append({
+            "question": q,
+            "options": opts,
+            "correctOption": corr_num,
+            "correct_option": corr_num,
+            "correct_answer": corr_ans,
+            "type": "MCQ",
+            "topic": item.get("topic", "General"),
+            "difficulty": item.get("difficulty", "Easy").capitalize(),
+            "explanation": item.get("explanation", ""),
+            "created_at": now,
+            "createdAt": now
+        })
+
+    if not docs:
+        return jsonify({"error": "No valid MCQ records to insert.", "success": False}), 400
+
+    res = db.mcqs.insert_many(docs)
+    inserted_ids = [str(_id) for _id in res.inserted_ids]
+
+    return jsonify({
+        "success": True,
+        "message": f"Successfully imported {len(inserted_ids)} MCQs.",
+        "imported_count": len(inserted_ids),
+        "imported_ids": inserted_ids
+    }), 201
+
 # ----------------- CONTEST MANAGEMENT -----------------
 
 @admin_bp.route("/contests", methods=["GET"])
@@ -960,6 +1202,7 @@ def list_admin_contests():
     db = get_db()
     contests_cursor = db.contests.find({}).sort("start_time", -1)
     
+    now = get_utc_now()
     contests = []
     for c in contests_cursor:
         c_id = str(c["_id"])
@@ -967,42 +1210,78 @@ def list_admin_contests():
         prob_ids = [str(pid) for pid in c.get("problem_ids", []) if pid]
         mcq_ids = [str(mid) for mid in c.get("mcq_ids", []) if mid]
         
+        start = parse_to_utc_datetime(c.get("start_time"))
+        end = parse_to_utc_datetime(c.get("end_time"))
+        status = calculate_contest_status(start, end, now)
+        
+        c_type = c.get("contestType") or c.get("contest_type")
+        if not c_type:
+            if prob_ids and mcq_ids: c_type = "BOTH"
+            elif prob_ids: c_type = "CODING"
+            else: c_type = "MCQ"
+
         contests.append({
             "id": c_id,
             "title": c.get("title"),
             "description": c.get("description", ""),
-            "start_time": c.get("start_time").isoformat() if isinstance(c.get("start_time"), datetime) else str(c.get("start_time")),
-            "end_time": c.get("end_time").isoformat() if isinstance(c.get("end_time"), datetime) else str(c.get("end_time")),
+            "start_time": format_utc_iso(start),
+            "end_time": format_utc_iso(end),
+            "status": status,
             "duration_minutes": c.get("duration_minutes", 60),
+            "contest_type": c_type,
+            "contestType": c_type,
             "problem_ids": prob_ids,
+            "codingProblemIds": prob_ids,
             "mcq_ids": mcq_ids,
+            "mcqIds": mcq_ids,
             "problems_count": len(prob_ids),
             "mcqs_count": len(mcq_ids),
-            "total_points": c.get("total_points", 100),
+            "total_points": c.get("total_points", len(mcq_ids) * 10 + len(prob_ids) * 50),
             "is_published": c.get("is_published", False),
             "participants_count": participants_count
         })
 
-    return jsonify({"success": True, "contests": contests}), 200
+    return jsonify({
+        "success": True, 
+        "contests": contests,
+        "server_time": format_utc_iso(now)
+    }), 200
 
 @admin_bp.route("/contests", methods=["POST"])
 @admin_required
 def create_contest():
-    """Create a new contest."""
+    """Create a new contest with timezone-aware start and end times and contest type."""
     data = request.get_json() or {}
     title = data.get("title", "").strip()
     if not title:
         return jsonify({"error": "Contest title is required", "success": False}), 400
 
-    start_time_str = data.get("start_time")
-    end_time_str = data.get("end_time")
-    
-    try:
-        start_time = datetime.fromisoformat(start_time_str.replace("Z", "+00:00")) if start_time_str else datetime.now(timezone.utc)
-        end_time = datetime.fromisoformat(end_time_str.replace("Z", "+00:00")) if end_time_str else datetime.now(timezone.utc)
-    except Exception:
-        start_time = datetime.now(timezone.utc)
-        end_time = datetime.now(timezone.utc)
+    contest_type = str(data.get("contestType") or data.get("contest_type") or "").strip().upper()
+    prob_ids = data.get("problem_ids") or data.get("codingProblemIds") or []
+    mcq_ids = data.get("mcq_ids") or data.get("mcqIds") or []
+
+    if not contest_type:
+        if prob_ids and mcq_ids: contest_type = "BOTH"
+        elif prob_ids: contest_type = "CODING"
+        elif mcq_ids: contest_type = "MCQ"
+        else:
+            return jsonify({"error": "Please select at least one contest type.", "success": False}), 400
+
+    if contest_type not in ["MCQ", "CODING", "BOTH"]:
+        return jsonify({"error": "Invalid contest type. Must be MCQ, CODING, or BOTH.", "success": False}), 400
+
+    if contest_type == "MCQ":
+        prob_ids = []
+    elif contest_type == "CODING":
+        mcq_ids = []
+
+    total_points = int(data.get("total_points", 0))
+    if total_points <= 0:
+        total_points = len(mcq_ids) * 10 + len(prob_ids) * 50
+
+    now = get_utc_now()
+    start_time = parse_to_utc_datetime(data.get("start_time")) or now
+    end_time = parse_to_utc_datetime(data.get("end_time")) or (start_time + timedelta(hours=1))
 
     db = get_db()
     contest_doc = {
@@ -1011,11 +1290,15 @@ def create_contest():
         "start_time": start_time,
         "end_time": end_time,
         "duration_minutes": int(data.get("duration_minutes", 60)),
-        "problem_ids": data.get("problem_ids", []),
-        "mcq_ids": data.get("mcq_ids", []),
-        "total_points": int(data.get("total_points", 100)),
+        "contestType": contest_type,
+        "contest_type": contest_type,
+        "problem_ids": prob_ids,
+        "codingProblemIds": prob_ids,
+        "mcq_ids": mcq_ids,
+        "mcqIds": mcq_ids,
+        "total_points": total_points,
         "is_published": data.get("is_published", False),
-        "created_at": datetime.now(timezone.utc)
+        "created_at": now
     }
 
     res = db.contests.insert_one(contest_doc)
@@ -1051,23 +1334,37 @@ def update_contest(contest_id):
     data = request.get_json() or {}
     update_data = {}
 
-    for field in ["title", "description", "duration_minutes", "problem_ids", "mcq_ids", "total_points", "is_published"]:
+    for field in ["title", "description", "duration_minutes", "total_points", "is_published"]:
         if field in data:
             update_data[field] = data[field]
 
+    if "contestType" in data or "contest_type" in data:
+        c_type = str(data.get("contestType") or data.get("contest_type") or "").strip().upper()
+        if c_type in ["MCQ", "CODING", "BOTH"]:
+            update_data["contestType"] = c_type
+            update_data["contest_type"] = c_type
+
+    if "problem_ids" in data or "codingProblemIds" in data:
+        p_ids = data.get("problem_ids") or data.get("codingProblemIds") or []
+        update_data["problem_ids"] = p_ids
+        update_data["codingProblemIds"] = p_ids
+
+    if "mcq_ids" in data or "mcqIds" in data:
+        m_ids = data.get("mcq_ids") or data.get("mcqIds") or []
+        update_data["mcq_ids"] = m_ids
+        update_data["mcqIds"] = m_ids
+
     if "start_time" in data and data["start_time"]:
-        try:
-            update_data["start_time"] = datetime.fromisoformat(str(data["start_time"]).replace("Z", "+00:00"))
-        except Exception:
-            pass
+        parsed_start = parse_to_utc_datetime(data["start_time"])
+        if parsed_start:
+            update_data["start_time"] = parsed_start
 
     if "end_time" in data and data["end_time"]:
-        try:
-            update_data["end_time"] = datetime.fromisoformat(str(data["end_time"]).replace("Z", "+00:00"))
-        except Exception:
-            pass
+        parsed_end = parse_to_utc_datetime(data["end_time"])
+        if parsed_end:
+            update_data["end_time"] = parsed_end
 
-    update_data["updated_at"] = datetime.now(timezone.utc)
+    update_data["updated_at"] = get_utc_now()
 
     db.contests.update_one({"_id": ObjectId(contest_id)}, {"$set": update_data})
     return jsonify({"success": True, "message": "Contest updated successfully"}), 200
@@ -1256,18 +1553,17 @@ def get_contest_attendance():
     month_contest_ids = []
 
     for c in all_contests:
-        st = c.get("start_time")
-        if isinstance(st, datetime):
-            if st.tzinfo is None:
-                st = st.replace(tzinfo=timezone.utc)
-            if st.year == calendar_year and st.month == month:
-                d = st.day
+        st = parse_to_utc_datetime(c.get("start_time"))
+        if st:
+            st_ist = st.astimezone(IST)
+            if st_ist.year == calendar_year and st_ist.month == month:
+                d = st_ist.day
                 if d not in contests_by_day:
                     contests_by_day[d] = []
                 contests_by_day[d].append({
                     "id": str(c["_id"]),
                     "title": c.get("title", "Untitled Contest"),
-                    "start_time": st.isoformat()
+                    "start_time": format_utc_iso(st)
                 })
                 month_contest_ids.append(str(c["_id"]))
 
@@ -1769,6 +2065,7 @@ def list_contests_for_reports():
     db = get_db()
     contests_cursor = db.contests.find({}).sort("start_time", -1)
     
+    now = get_utc_now()
     contests = []
     for c in contests_cursor:
         c_id = str(c["_id"])
@@ -1776,12 +2073,17 @@ def list_contests_for_reports():
         prob_ids = [str(pid) for pid in c.get("problem_ids", []) if pid]
         mcq_ids = [str(mid) for mid in c.get("mcq_ids", []) if mid]
         
+        start = parse_to_utc_datetime(c.get("start_time"))
+        end = parse_to_utc_datetime(c.get("end_time"))
+        status = calculate_contest_status(start, end, now)
+        
         contests.append({
             "id": c_id,
             "title": c.get("title", "Contest"),
             "description": c.get("description", ""),
-            "start_time": c.get("start_time").isoformat() if isinstance(c.get("start_time"), datetime) else str(c.get("start_time")),
-            "end_time": c.get("end_time").isoformat() if isinstance(c.get("end_time"), datetime) else str(c.get("end_time")),
+            "start_time": format_utc_iso(start),
+            "end_time": format_utc_iso(end),
+            "status": status,
             "duration_minutes": c.get("duration_minutes", 60),
             "problems_count": len(prob_ids),
             "mcqs_count": len(mcq_ids),
@@ -1790,7 +2092,7 @@ def list_contests_for_reports():
             "participants_count": participants_count
         })
 
-    return jsonify({"success": True, "contests": contests}), 200
+    return jsonify({"success": True, "contests": contests, "server_time": format_utc_iso(now)}), 200
 
 def calculate_candidate_contest_metrics(contest, problems, participant, submissions):
     """
@@ -1970,6 +2272,17 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
     else:
         anti_cheat_status = "CLEAN"
 
+    # MCQ & Coding Specific Metrics
+    assigned_mcqs = participant.get("assigned_mcq_ids")
+    total_contest_mcqs = len(assigned_mcqs) if assigned_mcqs else int(contest.get("mcqs_per_student") or len(contest.get("mcq_ids", [])))
+    mcqs_correct = int(participant.get("mcqs_correct", 0))
+    mcq_score = float(participant.get("mcq_score", mcqs_correct * 10))
+    mcq_percentage = round((mcqs_correct / max(total_contest_mcqs, 1)) * 100, 1) if total_contest_mcqs > 0 else 0.0
+
+    coding_score = float(participant.get("coding_score", max(float(participant.get("score", 0)) - mcq_score, 0.0)))
+    coding_percentage = round((passed_test_cases / max(total_contest_testcases, 1)) * 100, 1) if total_contest_testcases > 0 else 0.0
+    overall_score = float(participant.get("score", mcq_score + coding_score))
+
     return {
         "solved_count": solved_count,
         "total_contest_problems": total_contest_problems,
@@ -1980,12 +2293,22 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
         "time_complexity_label": complexity_time_label,
         "space_complexity_label": complexity_space_label,
         "final_score": final_score,
+        "mcq_score": mcq_score,
+        "mcqs_correct": mcqs_correct,
+        "total_contest_mcqs": total_contest_mcqs,
+        "mcq_percentage": mcq_percentage,
+        "coding_score": coding_score,
+        "coding_percentage": coding_percentage,
+        "overall_score": overall_score,
         "score_breakdown": {
             "test_cases": score_test_cases,
             "problems_solved": score_problems_solved,
             "time_efficiency": score_time_efficiency,
             "time_complexity": score_time_complexity,
             "space_complexity": score_space_complexity,
+            "mcq_score": mcq_score,
+            "coding_score": coding_score,
+            "overall_score": overall_score,
             "total": final_score
         },
         "anti_cheat": {
@@ -2078,20 +2401,28 @@ def get_contest_report(contest_id):
             "time_complexity": metrics["time_complexity_label"],
             "space_complexity": metrics["space_complexity_label"],
             "final_score": metrics["final_score"],
+            "mcq_score": metrics["mcq_score"],
+            "mcqs_correct": metrics["mcqs_correct"],
+            "total_contest_mcqs": metrics["total_contest_mcqs"],
+            "mcq_percentage": metrics["mcq_percentage"],
+            "coding_score": metrics["coding_score"],
+            "coding_percentage": metrics["coding_percentage"],
+            "overall_score": metrics["overall_score"],
             "score_breakdown": metrics["score_breakdown"],
             "anti_cheat": metrics["anti_cheat"],
             "problem_breakdowns": metrics["problem_breakdowns"]
         })
 
     # Sort leaderboard by:
-    # 1. Final Score (descending)
+    # 1. Overall Score / Final Score (descending)
     # 2. Problems Solved (descending)
-    # 3. Test Cases (descending)
+    # 3. MCQs Correct (descending)
     # 4. Time Taken (ascending)
     leaderboard.sort(key=lambda x: (
+        -x["overall_score"],
         -x["final_score"],
         -x["solved_count"],
-        -x["passed_test_cases"],
+        -x["mcqs_correct"],
         x["time_taken_seconds"]
     ))
 
@@ -2099,10 +2430,10 @@ def get_contest_report(contest_id):
     for idx, item in enumerate(leaderboard, 1):
         item["rank"] = idx
 
-    # Summary KPIs
+    # Summary KPIs for Overall, MCQ, and Coding
     total_candidates = len(leaderboard)
-    avg_score = round(sum(item["final_score"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0
-    highest_score = max((item["final_score"] for item in leaderboard), default=0.0)
+    avg_score = round(sum(item["overall_score"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0
+    highest_score = max((item["overall_score"] for item in leaderboard), default=0.0)
     clean_candidates_count = sum(1 for item in leaderboard if item["anti_cheat"]["status"] == "CLEAN")
     clean_rate = round((clean_candidates_count / max(total_candidates, 1)) * 100, 1) if total_candidates > 0 else 100.0
 
@@ -2113,10 +2444,11 @@ def get_contest_report(contest_id):
             "title": contest.get("title"),
             "description": contest.get("description", ""),
             "duration_minutes": contest.get("duration_minutes", 60),
-            "start_time": contest.get("start_time").isoformat() if isinstance(contest.get("start_time"), datetime) else str(contest.get("start_time")),
-            "end_time": contest.get("end_time").isoformat() if isinstance(contest.get("end_time"), datetime) else str(contest.get("end_time")),
+            "start_time": format_utc_iso(parse_to_utc_datetime(contest.get("start_time"))),
+            "end_time": format_utc_iso(parse_to_utc_datetime(contest.get("end_time"))),
             "problems_count": len(problems),
-            "mcqs_count": len(contest.get("mcq_ids", []))
+            "mcqs_count": len(contest.get("mcq_ids", [])),
+            "total_points": contest.get("total_points", 100)
         },
         "summary": {
             "total_candidates": total_candidates,
@@ -2124,7 +2456,20 @@ def get_contest_report(contest_id):
             "highest_score": highest_score,
             "clean_rate": clean_rate,
             "clean_count": clean_candidates_count,
-            "auto_terminated_count": sum(1 for item in leaderboard if item["anti_cheat"]["auto_terminated"])
+            "auto_terminated_count": sum(1 for item in leaderboard if item["anti_cheat"]["auto_terminated"]),
+            # Overall KPIs
+            "avg_overall_score": avg_score,
+            "highest_overall_score": highest_score,
+            # MCQ KPIs
+            "total_mcqs": len(contest.get("mcq_ids", [])),
+            "avg_mcq_score": round(sum(item["mcq_score"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0,
+            "highest_mcq_score": max((item["mcq_score"] for item in leaderboard), default=0.0),
+            "avg_mcq_accuracy": round(sum(item["mcq_percentage"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0,
+            # Coding KPIs
+            "total_coding_problems": len(problems),
+            "avg_coding_score": round(sum(item["coding_score"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0,
+            "highest_coding_score": max((item["coding_score"] for item in leaderboard), default=0.0),
+            "avg_test_cases_passed": round(sum(item["passed_test_cases"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0
         },
         "leaderboard": leaderboard,
         "problems": [{
@@ -2138,7 +2483,7 @@ def get_contest_report(contest_id):
 @admin_bp.route("/reports/contests/<contest_id>/export", methods=["GET"])
 @admin_required
 def export_contest_report_excel(contest_id):
-    """Generate and stream a 4-sheet formatted Excel report for the contest."""
+    """Generate and stream formatted Excel or CSV reports for Overall, MCQ, or Coding."""
     db = get_db()
     if not ObjectId.is_valid(contest_id):
         return jsonify({"error": "Invalid contest ID", "success": False}), 400
@@ -2146,6 +2491,10 @@ def export_contest_report_excel(contest_id):
     contest = db.contests.find_one({"_id": ObjectId(contest_id)})
     if not contest:
         return jsonify({"error": "Contest not found", "success": False}), 404
+
+    # Report type and format
+    report_type = (request.args.get("report_type") or request.args.get("type") or "overall").strip().lower()
+    export_format = (request.args.get("format") or "excel").strip().lower()
 
     # Fetch problems and participants
     problem_ids = contest.get("problem_ids", [])
@@ -2161,7 +2510,7 @@ def export_contest_report_excel(contest_id):
     participants = list(db.contest_participants.find({"contest_id": contest_id}))
     submissions = list(db.submissions.find({}))
 
-    # Optional department / year filter from request
+    # Filters
     dept_filter = request.args.get("department", "").strip()
     year_filter = request.args.get("year", "").strip()
     search_filter = request.args.get("search", "").strip().lower()
@@ -2206,22 +2555,140 @@ def export_contest_report_excel(contest_id):
             "time_complexity": metrics["time_complexity_label"],
             "space_complexity": metrics["space_complexity_label"],
             "final_score": metrics["final_score"],
+            "mcq_score": metrics["mcq_score"],
+            "mcqs_correct": metrics["mcqs_correct"],
+            "total_contest_mcqs": metrics["total_contest_mcqs"],
+            "mcq_percentage": metrics["mcq_percentage"],
+            "coding_score": metrics["coding_score"],
+            "coding_percentage": metrics["coding_percentage"],
+            "overall_score": metrics["overall_score"],
             "score_breakdown": metrics["score_breakdown"],
             "anti_cheat": metrics["anti_cheat"],
             "problem_breakdowns": metrics["problem_breakdowns"]
         })
 
-    leaderboard.sort(key=lambda x: (
-        -x["final_score"],
-        -x["solved_count"],
-        -x["passed_test_cases"],
-        x["time_taken_seconds"]
-    ))
+    # Sort based on report type
+    if report_type == "mcq":
+        leaderboard.sort(key=lambda x: (-x["mcq_score"], -x["mcqs_correct"], x["time_taken_seconds"]))
+    elif report_type == "coding":
+        leaderboard.sort(key=lambda x: (-x["coding_score"], -x["solved_count"], -x["passed_test_cases"], x["time_taken_seconds"]))
+    else:
+        # overall
+        leaderboard.sort(key=lambda x: (-x["overall_score"], -x["final_score"], -x["solved_count"], -x["mcqs_correct"], x["time_taken_seconds"]))
 
     for idx, item in enumerate(leaderboard, 1):
         item["rank"] = idx
 
-    # Build Excel
+    total_cands = len(leaderboard)
+    avg_overall = round(sum(x["overall_score"] for x in leaderboard) / max(total_cands, 1), 1)
+    highest_overall = max((x["overall_score"] for x in leaderboard), default=0.0)
+    total_mcqs = len(contest.get("mcq_ids", []))
+    avg_mcq = round(sum(x["mcq_score"] for x in leaderboard) / max(total_cands, 1), 1)
+    highest_mcq = max((x["mcq_score"] for x in leaderboard), default=0.0)
+    avg_mcq_acc = round(sum(x["mcq_percentage"] for x in leaderboard) / max(total_cands, 1), 1)
+    total_coding = len(contest.get("problem_ids", []))
+    avg_coding = round(sum(x["coding_score"] for x in leaderboard) / max(total_cands, 1), 1)
+    highest_coding = max((x["coding_score"] for x in leaderboard), default=0.0)
+    clean_count = sum(1 for x in leaderboard if x["anti_cheat"]["status"] == "CLEAN")
+    clean_rate = round((clean_count / max(total_cands, 1)) * 100, 1)
+    auto_terminated_count = sum(1 for x in leaderboard if x["anti_cheat"]["auto_terminated"])
+
+    summary = {
+        "total_candidates": total_cands,
+        "avg_overall_score": avg_overall,
+        "highest_overall_score": highest_overall,
+        "total_mcqs": total_mcqs,
+        "avg_mcq_score": avg_mcq,
+        "highest_mcq_score": highest_mcq,
+        "avg_mcq_accuracy": avg_mcq_acc,
+        "total_coding_problems": total_coding,
+        "avg_coding_score": avg_coding,
+        "highest_coding_score": highest_coding,
+        "clean_rate": clean_rate,
+        "clean_count": clean_count,
+        "auto_terminated_count": auto_terminated_count
+    }
+
+    clean_title = slugify(contest.get("title", "contest"))
+
+    # ================= CSV EXPORT =================
+    if export_format == "csv":
+        import csv
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        if report_type == "mcq":
+            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Correct MCQs", "Total MCQs", "MCQ Score", "Accuracy %", "Time Taken", "Anti-Cheat Status"])
+            for item in leaderboard:
+                writer.writerow([
+                    item["rank"],
+                    item["student_id"],
+                    item["name"],
+                    item["department"],
+                    item["year"],
+                    item["mcqs_correct"],
+                    item["total_contest_mcqs"],
+                    item["mcq_score"],
+                    f"{item['mcq_percentage']}%",
+                    item["time_taken"],
+                    item["anti_cheat"]["status"]
+                ])
+            filename = f"MCQ_Report_{clean_title}.csv"
+        elif report_type == "coding":
+            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Problems Solved", "Total Problems", "Passed Test Cases", "Total Test Cases", "Coding Score", "Time Taken", "Time Complexity", "Space Complexity", "Anti-Cheat Status"])
+            for item in leaderboard:
+                writer.writerow([
+                    item["rank"],
+                    item["student_id"],
+                    item["name"],
+                    item["department"],
+                    item["year"],
+                    item["solved_count"],
+                    item["total_contest_problems"],
+                    item["passed_test_cases"],
+                    item["total_contest_testcases"],
+                    item["coding_score"],
+                    item["time_taken"],
+                    item["time_complexity"],
+                    item["space_complexity"],
+                    item["anti_cheat"]["status"]
+                ])
+            filename = f"CODING_Report_{clean_title}.csv"
+        else:
+            # Overall
+            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "MCQ Score", "Coding Score", "Overall Score", "Performance Index / 100", "Problems Solved", "Test Cases", "Time Taken", "Anti-Cheat Status"])
+            for item in leaderboard:
+                writer.writerow([
+                    item["rank"],
+                    item["student_id"],
+                    item["name"],
+                    item["department"],
+                    item["year"],
+                    item["mcq_score"],
+                    item["coding_score"],
+                    item["overall_score"],
+                    item["final_score"],
+                    f"{item['solved_count']} / {item['total_contest_problems']}",
+                    f"{item['passed_test_cases']} / {item['total_contest_testcases']}",
+                    item["time_taken"],
+                    item["anti_cheat"]["status"]
+                ])
+            filename = f"OVERALL_Report_{clean_title}.csv"
+
+        csv_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
+        csv_bytes.seek(0)
+        resp = send_file(
+            csv_bytes,
+            mimetype="text/csv",
+            as_attachment=True,
+            download_name=filename
+        )
+        resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+        resp.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        resp.headers["Access-Control-Expose-Headers"] = "Content-Disposition, Content-Type"
+        return resp
+
+    # ================= EXCEL EXPORT =================
     wb = openpyxl.Workbook()
     header_fill = PatternFill(start_color="303442", end_color="303442", fill_type="solid")
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -2233,106 +2700,218 @@ def export_contest_report_excel(contest_id):
     terminated_fill = PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid")
     flagged_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
 
-    # SHEET 1: Main Leaderboard (Matches screen columns exactly: Rank, Candidate, Problems, Test Cases, Time, Time Comp, Space Comp, Final Score, Anti-Cheat)
-    ws_lead = wb.active
-    ws_lead.title = "Contest Leaderboard"
+    if report_type == "mcq":
+        # 1. MCQ Report Sheet
+        ws_main = wb.active
+        ws_main.title = "MCQ Performance Report"
+        ws_main.merge_cells("A1:I1")
+        t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — MCQ Performance Report: {contest.get('title')}")
+        t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+        t_cell.fill = PatternFill(start_color="7C3AED", end_color="7C3AED", fill_type="solid")
+        t_cell.alignment = center_align
 
-    # Banner
-    ws_lead.merge_cells("A1:I1")
-    t_cell = ws_lead.cell(row=1, column=1, value=f"NIT Campus Coder — Contest Report: {contest.get('title')}")
-    t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
-    t_cell.fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
-    t_cell.alignment = center_align
+        mcq_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Correct MCQs", "Total MCQs", "MCQ Score", "Accuracy %", "Time Taken", "Status"]
+        for c_i, h in enumerate(mcq_headers, 1):
+            cell = ws_main.cell(row=3, column=c_i, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_align if c_i not in [2, 3, 4] else left_align
 
-    lead_headers = [
-        "Rank", "Candidate", "Problems", "Test Cases", "Time", "Time Comp", "Space Comp", "Final Score", "Anti-Cheat"
-    ]
-    for c_i, h in enumerate(lead_headers, 1):
-        cell = ws_lead.cell(row=3, column=c_i, value=h)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = center_align if c_i not in [2] else left_align
+        for r_i, item in enumerate(leaderboard, 4):
+            ws_main.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
+            ws_main.cell(row=r_i, column=2, value=item["student_id"]).alignment = left_align
+            ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
+            ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
+            ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
+            ws_main.cell(row=r_i, column=6, value=item["mcqs_correct"]).alignment = center_align
+            ws_main.cell(row=r_i, column=7, value=item["total_contest_mcqs"]).alignment = center_align
+            
+            sc_cell = ws_main.cell(row=r_i, column=8, value=item["mcq_score"])
+            sc_cell.alignment = center_align
+            sc_cell.font = Font(name="Calibri", size=11, bold=True)
+            
+            ws_main.cell(row=r_i, column=9, value=f"{item['mcq_percentage']}%").alignment = center_align
+            ws_main.cell(row=r_i, column=10, value=item["time_taken"]).alignment = center_align
+            
+            st_cell = ws_main.cell(row=r_i, column=11, value=item["anti_cheat"]["status"])
+            st_cell.alignment = center_align
+            st_cell.font = Font(name="Calibri", size=10, bold=True)
+            if item["anti_cheat"]["status"] == "CLEAN": st_cell.fill = clean_fill
+            elif item["anti_cheat"]["status"] == "AUTO_TERMINATED": st_cell.fill = terminated_fill
+            else: st_cell.fill = flagged_fill
 
-    for r_i, item in enumerate(leaderboard, 4):
-        ws_lead.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
-        
-        # Candidate combined name, ID, Dept
-        candidate_val = f"{item['name']}\n{item['student_id']} | {item['department']}"
-        c_cell = ws_lead.cell(row=r_i, column=2, value=candidate_val)
-        c_cell.alignment = candidate_align
+        filename = f"MCQ_Report_{clean_title}.xlsx"
 
-        ws_lead.cell(row=r_i, column=3, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
-        ws_lead.cell(row=r_i, column=4, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
-        ws_lead.cell(row=r_i, column=5, value=item["time_taken"]).alignment = center_align
-        ws_lead.cell(row=r_i, column=6, value=item["time_complexity"]).alignment = center_align
-        ws_lead.cell(row=r_i, column=7, value=item["space_complexity"]).alignment = center_align
-        
-        f_cell = ws_lead.cell(row=r_i, column=8, value=item["final_score"])
-        f_cell.alignment = center_align
-        f_cell.font = Font(name="Calibri", size=11, bold=True)
+    elif report_type == "coding":
+        # 1. Coding Report Sheet
+        ws_main = wb.active
+        ws_main.title = "Coding Performance Report"
+        ws_main.merge_cells("A1:K1")
+        t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — Coding Performance Report: {contest.get('title')}")
+        t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+        t_cell.fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
+        t_cell.alignment = center_align
 
-        st_cell = ws_lead.cell(row=r_i, column=9, value=item["anti_cheat"]["status"])
-        st_cell.alignment = center_align
-        st_cell.font = Font(name="Calibri", size=10, bold=True)
-        if item["anti_cheat"]["status"] == "CLEAN":
-            st_cell.fill = clean_fill
-        elif item["anti_cheat"]["status"] == "AUTO_TERMINATED":
-            st_cell.fill = terminated_fill
-        else:
-            st_cell.fill = flagged_fill
+        coding_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Problems Solved", "Test Cases", "Coding Score", "Time Taken", "Time Comp", "Space Comp", "Status"]
+        for c_i, h in enumerate(coding_headers, 1):
+            cell = ws_main.cell(row=3, column=c_i, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_align if c_i not in [2, 3, 4] else left_align
 
-    # SHEET 2: Overview & Summary
-    ws_sum = wb.create_sheet(title="Contest Overview")
-    ws_sum.merge_cells("A1:D1")
-    t_sum = ws_sum.cell(row=1, column=1, value=f"Contest Overview & Performance Summary")
-    t_sum.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
-    t_sum.fill = PatternFill(start_color="303442", end_color="303442", fill_type="solid")
-    t_sum.alignment = center_align
+        for r_i, item in enumerate(leaderboard, 4):
+            ws_main.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
+            ws_main.cell(row=r_i, column=2, value=item["student_id"]).alignment = left_align
+            ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
+            ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
+            ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
+            ws_main.cell(row=r_i, column=6, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
+            ws_main.cell(row=r_i, column=7, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
+            
+            sc_cell = ws_main.cell(row=r_i, column=8, value=item["coding_score"])
+            sc_cell.alignment = center_align
+            sc_cell.font = Font(name="Calibri", size=11, bold=True)
+            
+            ws_main.cell(row=r_i, column=9, value=item["time_taken"]).alignment = center_align
+            ws_main.cell(row=r_i, column=10, value=item["time_complexity"]).alignment = center_align
+            ws_main.cell(row=r_i, column=11, value=item["space_complexity"]).alignment = center_align
+            
+            st_cell = ws_main.cell(row=r_i, column=12, value=item["anti_cheat"]["status"])
+            st_cell.alignment = center_align
+            st_cell.font = Font(name="Calibri", size=10, bold=True)
+            if item["anti_cheat"]["status"] == "CLEAN": st_cell.fill = clean_fill
+            elif item["anti_cheat"]["status"] == "AUTO_TERMINATED": st_cell.fill = terminated_fill
+            else: st_cell.fill = flagged_fill
 
-    sum_data = [
-        ("Contest Title", contest.get("title")),
-        ("Duration", f"{contest.get('duration_minutes', 60)} Minutes"),
-        ("Start Time", str(contest.get("start_time"))),
-        ("Total Candidates", len(leaderboard)),
-        ("Average Final Score", f"{round(sum(x['final_score'] for x in leaderboard)/max(len(leaderboard),1), 1)} / 100"),
-        ("Highest Score", f"{max((x['final_score'] for x in leaderboard), default=0)} / 100"),
-        ("Clean Integrity Rate", f"{round(sum(1 for x in leaderboard if x['anti_cheat']['status'] == 'CLEAN')/max(len(leaderboard),1)*100, 1)}%"),
-        ("Auto-Terminated Candidates", sum(1 for x in leaderboard if x['anti_cheat']['auto_terminated']))
-    ]
+        # 2. Problem-wise breakdown sheet for Coding
+        ws_prob = wb.create_sheet(title="Coding Problems Breakdown")
+        ws_prob.merge_cells("A1:I1")
+        p_title = ws_prob.cell(row=1, column=1, value="NIT Campus Coder — Candidate Problem-by-Problem Submissions")
+        p_title.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+        p_title.fill = PatternFill(start_color="303442", end_color="303442", fill_type="solid")
+        p_title.alignment = center_align
 
-    for r_i, (k, v) in enumerate(sum_data, 3):
-        c_k = ws_sum.cell(row=r_i, column=1, value=k)
-        c_k.font = Font(name="Calibri", size=11, bold=True)
-        ws_sum.cell(row=r_i, column=2, value=str(v))
+        prob_headers = ["Student ID", "Candidate Name", "Problem Title", "Difficulty", "Verdict", "Test Cases Passed", "Runtime (ms)", "Memory (MB)", "Language"]
+        for c_i, h in enumerate(prob_headers, 1):
+            cell = ws_prob.cell(row=3, column=c_i, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = left_align
 
-    # SHEET 3: Problem-wise Performance
-    ws_prob = wb.create_sheet(title="Problem-wise Performance")
-    prob_headers = ["Student ID", "Candidate Name", "Problem Title", "Difficulty", "Verdict", "Passed Test Cases", "Runtime (ms)", "Memory (MB)", "Language"]
-    for c_i, h in enumerate(prob_headers, 1):
-        cell = ws_prob.cell(row=1, column=c_i, value=h)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = left_align
+        p_row = 4
+        for item in leaderboard:
+            for pb in item.get("problem_breakdowns", []):
+                ws_prob.cell(row=p_row, column=1, value=item["student_id"])
+                ws_prob.cell(row=p_row, column=2, value=item["name"])
+                ws_prob.cell(row=p_row, column=3, value=pb["problem_title"])
+                ws_prob.cell(row=p_row, column=4, value=pb["difficulty"])
+                v_cell = ws_prob.cell(row=p_row, column=5, value=pb["status"])
+                if pb["status"] == "Accepted": v_cell.fill = clean_fill
+                elif pb["status"] == "Not Attempted": pass
+                else: v_cell.fill = terminated_fill
+                ws_prob.cell(row=p_row, column=6, value=f"{pb['passed_test_cases']} / {pb['total_test_cases']}")
+                ws_prob.cell(row=p_row, column=7, value=pb["runtime"])
+                ws_prob.cell(row=p_row, column=8, value=pb["memory"])
+                ws_prob.cell(row=p_row, column=9, value=pb["language"])
+                p_row += 1
 
-    p_row = 2
-    for item in leaderboard:
-        for pb in item["problem_breakdowns"]:
-            ws_prob.cell(row=p_row, column=1, value=item["student_id"])
-            ws_prob.cell(row=p_row, column=2, value=item["name"])
-            ws_prob.cell(row=p_row, column=3, value=pb["problem_title"])
-            ws_prob.cell(row=p_row, column=4, value=pb["difficulty"])
-            v_cell = ws_prob.cell(row=p_row, column=5, value=pb["status"])
-            if pb["status"] == "Accepted": v_cell.fill = clean_fill
-            elif pb["status"] == "Not Attempted": pass
-            else: v_cell.fill = terminated_fill
-            ws_prob.cell(row=p_row, column=6, value=f"{pb['passed_test_cases']} / {pb['total_test_cases']}")
-            ws_prob.cell(row=p_row, column=7, value=pb["runtime"])
-            ws_prob.cell(row=p_row, column=8, value=pb["memory"])
-            ws_prob.cell(row=p_row, column=9, value=pb["language"])
-            p_row += 1
+        filename = f"CODING_Report_{clean_title}.xlsx"
 
-    # SHEET 4: Anti-Cheat Audit
-    ws_audit = wb.create_sheet(title="Anti-Cheat Security Audit")
+    else:
+        # 1. Overall Combined Report Sheet
+        ws_main = wb.active
+        ws_main.title = "Overall Performance"
+        ws_main.merge_cells("A1:L1")
+        t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — Overall Performance Report: {contest.get('title')}")
+        t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+        t_cell.fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
+        t_cell.alignment = center_align
+
+        overall_headers = [
+            "Rank", "Student ID", "Candidate Name", "Department", "Year", 
+            "MCQ Marks", "Coding Marks", "Overall Score", "Problems Solved", 
+            "Test Cases", "Time Taken", "Anti-Cheat Status"
+        ]
+        for c_i, h in enumerate(overall_headers, 1):
+            cell = ws_main.cell(row=3, column=c_i, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_align if c_i not in [2, 3, 4] else left_align
+
+        for r_i, item in enumerate(leaderboard, 4):
+            ws_main.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
+            ws_main.cell(row=r_i, column=2, value=item["student_id"]).alignment = left_align
+            ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
+            ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
+            ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
+            
+            # MCQ Score
+            mcq_cell = ws_main.cell(row=r_i, column=6, value=item["mcq_score"])
+            mcq_cell.alignment = center_align
+            mcq_cell.font = Font(name="Calibri", size=11, bold=True, color="7C3AED")
+
+            # Coding Score
+            cod_cell = ws_main.cell(row=r_i, column=7, value=item["coding_score"])
+            cod_cell.alignment = center_align
+            cod_cell.font = Font(name="Calibri", size=11, bold=True, color="059669")
+
+            # Overall Score
+            sc_cell = ws_main.cell(row=r_i, column=8, value=item["overall_score"])
+            sc_cell.alignment = center_align
+            sc_cell.font = Font(name="Calibri", size=11, bold=True)
+            if item["overall_score"] >= 80: sc_cell.fill = clean_fill
+            elif item["overall_score"] >= 50: sc_cell.fill = flagged_fill
+            else: sc_cell.fill = terminated_fill
+
+            ws_main.cell(row=r_i, column=9, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
+            ws_main.cell(row=r_i, column=10, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
+            ws_main.cell(row=r_i, column=11, value=item["time_taken"]).alignment = center_align
+            
+            st_cell = ws_main.cell(row=r_i, column=12, value=item["anti_cheat"]["status"])
+            st_cell.alignment = center_align
+            st_cell.font = Font(name="Calibri", size=10, bold=True)
+            if item["anti_cheat"]["status"] == "CLEAN": st_cell.fill = clean_fill
+            elif item["anti_cheat"]["status"] == "AUTO_TERMINATED": st_cell.fill = terminated_fill
+            else: st_cell.fill = flagged_fill
+
+        # 2. Summary Statistics Sheet
+        ws_sum = wb.create_sheet(title="Executive Summary")
+        ws_sum.merge_cells("A1:B1")
+        s_title = ws_sum.cell(row=1, column=1, value=f"Executive KPI Summary — {contest.get('title')}")
+        s_title.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+        s_title.fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
+        s_title.alignment = center_align
+
+        sum_metrics = [
+            ("Contest Title", contest.get("title")),
+            ("Duration (Minutes)", contest.get("duration_minutes", 60)),
+            ("Total Candidates Attended", summary.get("total_candidates", 0)),
+            ("Average Overall Score", summary.get("avg_overall_score", 0)),
+            ("Highest Overall Score", summary.get("highest_overall_score", 0)),
+            ("Total MCQs in Contest", summary.get("total_mcqs", 0)),
+            ("Average MCQ Score", summary.get("avg_mcq_score", 0)),
+            ("Highest MCQ Score", summary.get("highest_mcq_score", 0)),
+            ("Average MCQ Accuracy (%)", f"{summary.get('avg_mcq_accuracy', 0)}%"),
+            ("Total Coding Problems", summary.get("total_coding_problems", 0)),
+            ("Average Coding Score", summary.get("avg_coding_score", 0)),
+            ("Highest Coding Score", summary.get("highest_coding_score", 0)),
+            ("Clean Integrity Rate (%)", f"{summary.get('clean_rate', 100)}%"),
+            ("Terminated / Flagged Count", f"{summary.get('auto_terminated_count', 0)} Terminated / {len(leaderboard) - summary.get('clean_count', 0)} Flagged")
+        ]
+
+        ws_sum.cell(row=3, column=1, value="Metric").fill = header_fill
+        ws_sum.cell(row=3, column=1).font = header_font
+        ws_sum.cell(row=3, column=2, value="Value").fill = header_fill
+        ws_sum.cell(row=3, column=2).font = header_font
+
+        for r_i, (k, v) in enumerate(sum_metrics, 4):
+            ws_sum.cell(row=r_i, column=1, value=k).font = Font(name="Calibri", size=11, bold=True)
+            ws_sum.cell(row=r_i, column=2, value=str(v))
+
+        filename = f"OVERALL_Report_{clean_title}.xlsx"
+
+    # Shared Anti-Cheat Audit Sheet in Excel
+    ws_audit = wb.create_sheet(title="Anti-Cheat Audit")
     audit_headers = ["Student ID", "Candidate Name", "Department", "Anti-Cheat Status", "Auto-Terminated", "Termination Reason", "Flags Count", "Security Events Summary"]
     for c_i, h in enumerate(audit_headers, 1):
         cell = ws_audit.cell(row=1, column=c_i, value=h)
@@ -2358,7 +2937,7 @@ def export_contest_report_excel(contest_id):
         ws_audit.cell(row=a_i, column=8, value=events_summary)
 
     # Adjust widths for all sheets
-    for ws in [ws_lead, ws_sum, ws_prob, ws_audit]:
+    for ws in wb.worksheets:
         for col in ws.columns:
             max_len = max(len(str(cell.value or '')) for cell in col)
             col_letter = openpyxl.utils.get_column_letter(col[0].column)
@@ -2368,23 +2947,24 @@ def export_contest_report_excel(contest_id):
     wb.save(out)
     out.seek(0)
 
-    clean_title = slugify(contest.get("title", "contest"))
-    filename = f"contest_report_{clean_title}.xlsx"
-
     from services.notification_service import create_notification
     create_notification(
         user_id=request.current_user["_id"],
         title="Contest Report Generated",
-        message=f"Successfully generated and downloaded Excel performance report for contest '{contest.get('title')}'.",
+        message=f"Successfully generated and downloaded {report_type.upper()} report for contest '{contest.get('title')}'.",
         notif_type="contest"
     )
 
-    return send_file(
+    resp = send_file(
         out,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
         download_name=filename
     )
+    resp.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    resp.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    resp.headers["Access-Control-Expose-Headers"] = "Content-Disposition, Content-Type"
+    return resp
 
 # ----------------- ADMIN NOTIFICATIONS & ANNOUNCEMENTS -----------------
 

@@ -1,26 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
-import { 
-  BarChart3, 
-  Trophy, 
-  Search, 
-  Filter, 
-  RotateCcw, 
-  FileSpreadsheet, 
-  Users, 
-  CheckCircle2, 
-  AlertCircle, 
-  Percent, 
-  Clock, 
-  Cpu, 
-  HardDrive, 
-  ShieldAlert, 
-  ShieldCheck, 
-  Eye, 
-  Code2, 
-  Sparkles, 
+import {
+  BarChart3,
+  Trophy,
+  Search,
+  Filter,
+  RotateCcw,
+  FileSpreadsheet,
+  Users,
+  CheckCircle2,
+  AlertCircle,
+  Percent,
+  Clock,
+  Cpu,
+  HardDrive,
+  ShieldAlert,
+  ShieldCheck,
+  Eye,
+  Code2,
+  Sparkles,
   Award,
   Layers,
+  HelpCircle,
+  Download,
+  FileText,
   Check,
   X
 } from 'lucide-react';
@@ -48,16 +51,35 @@ export const ManageContestReports = () => {
   const [yearFilter, setYearFilter] = useState('All');
   const [search, setSearch] = useState('');
 
+  // 3 Report Views: 'overall' | 'mcq' | 'coding'
+  const [activeReportTab, setActiveReportTab] = useState('overall');
+
   const [reportData, setReportData] = useState({
     contest: null,
-    summary: { total_candidates: 0, average_score: 0, highest_score: 0, clean_rate: 100, clean_count: 0, auto_terminated_count: 0 },
+    summary: {
+      total_candidates: 0,
+      average_score: 0,
+      highest_score: 0,
+      clean_rate: 100,
+      clean_count: 0,
+      auto_terminated_count: 0,
+      total_mcqs: 0,
+      avg_mcq_score: 0,
+      highest_mcq_score: 0,
+      avg_mcq_accuracy: 0,
+      total_coding_problems: 0,
+      avg_coding_score: 0,
+      highest_coding_score: 0,
+      avg_test_cases_passed: 0
+    },
     leaderboard: [],
     problems: []
   });
 
   const [loading, setLoading] = useState(true);
-  const [exporting, setExporting] = useState(false);
+  const [exportingType, setExportingType] = useState(null); // 'overall_excel' | 'mcq_excel' | 'coding_excel' | ...
   const [selectedCandidate, setSelectedCandidate] = useState(null);
+  const [modalTab, setModalTab] = useState('overall'); // 'overall' | 'coding' | 'anticheat'
 
   useEffect(() => {
     fetchContestsList();
@@ -124,69 +146,143 @@ export const ManageContestReports = () => {
     }
   };
 
-  const handleExportExcel = async () => {
+  // Download Handler for Overall, MCQ, and Coding Reports (Excel / CSV)
+  const handleExportReport = async (reportType = 'overall', format = 'excel') => {
     if (!selectedContestId) return;
     try {
-      setExporting(true);
-      const token = localStorage.getItem('token');
-      const params = new URLSearchParams({
-        department: deptFilter !== 'All' ? deptFilter : '',
-        year: yearFilter !== 'All' ? yearFilter : '',
-        search: search.trim()
+      setExportingType(`${reportType}_${format}`);
+      const params = {
+        department: deptFilter !== 'All' ? deptFilter : undefined,
+        year: yearFilter !== 'All' ? yearFilter : undefined,
+        search: search.trim() || undefined,
+        report_type: reportType,
+        format: format
+      };
+
+      const response = await api.get(`/admin/reports/contests/${selectedContestId}/export`, {
+        params,
+        responseType: 'blob'
       });
 
-      const response = await fetch(`/api/admin/reports/contests/${selectedContestId}/export?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
+      const mimeType = format === 'csv'
+        ? 'text/csv;charset=utf-8;'
+        : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+      const blob = new Blob([response.data], { type: mimeType });
+
+      const contestTitle = (reportData.contest?.title || 'Contest').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const extension = format === 'csv' ? 'csv' : 'xlsx';
+      const filename = `${reportType.toUpperCase()}_Report_${contestTitle}.${extension}`;
+
+      // 1. Try Native File System Access API (Never blocked by Chrome on local IP)
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: filename,
+            types: [{
+              description: format === 'csv' ? 'CSV File (*.csv)' : 'Excel Spreadsheet (*.xlsx)',
+              accept: { [mimeType]: [`.${extension}`] }
+            }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return;
+        } catch (pickerErr) {
+          if (pickerErr.name === 'AbortError') {
+            // User cancelled save dialog
+            return;
+          }
+          // If picker fails (e.g. security policy), fall through to standard anchor download
         }
-      });
+      }
 
-      if (!response.ok) throw new Error('Excel export failed');
-
-      const blob = await response.blob();
+      // 2. Standard Blob Object URL Anchor Download
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const contestTitle = reportData.contest?.title || 'Contest';
-      a.download = `Contest_Report_${contestTitle.replace(/\s+/g, '_')}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+
+      setTimeout(() => {
+        if (link.parentNode) link.parentNode.removeChild(link);
+        window.URL.revokeObjectURL(url);
+      }, 300);
     } catch (err) {
-      console.error('Failed to export Excel report:', err);
-      alert('Failed to generate Excel report. Please try again.');
+      console.error(`Failed to export ${reportType} report:`, err);
+      alert(`Failed to generate ${reportType.toUpperCase()} report. Please try again.`);
     } finally {
-      setExporting(false);
+      setExportingType(null);
     }
   };
 
   const selectedContest = contestsList.find(c => c.id === selectedContestId);
 
+  // Filter and sort leaderboard based on active tab
+  const displayLeaderboard = [...(reportData.leaderboard || [])].sort((a, b) => {
+    if (activeReportTab === 'mcq') {
+      return (b.mcq_score || 0) - (a.mcq_score || 0) || (b.mcqs_correct || 0) - (a.mcqs_correct || 0);
+    }
+    if (activeReportTab === 'coding') {
+      return (b.coding_score || 0) - (a.coding_score || 0) || (b.solved_count || 0) - (a.solved_count || 0);
+    }
+    return (b.overall_score || 0) - (a.overall_score || 0) || (b.final_score || 0) - (a.final_score || 0);
+  });
+
   return (
     <div className="space-y-6 animate-fadeIn pb-12">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-extrabold text-[#172033] dark:text-[#F8FAFC] tracking-tight flex items-center gap-2.5">
             <BarChart3 className="w-6 h-6 text-[#0757B8] dark:text-[#60A5FA]" />
             Contest Performance Reports
           </h1>
           <p className="text-sm text-[#667085] dark:text-[#94A3B8] mt-1">
-            Contest-wise scoring breakdown, time/space complexity analysis, integrity logs, and leaderboard
+            Overall, Technical MCQ, and Algorithmic Coding performance breakdown with candidate auditing
           </p>
         </div>
 
-        {/* Export Excel Button */}
-        <button
-          type="button"
-          onClick={handleExportExcel}
-          disabled={!selectedContestId || exporting || loading}
-          className="px-5 py-2.5 rounded-2xl bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 transition disabled:opacity-50"
-        >
-          <FileSpreadsheet className="w-4 h-4" />
-          <span>{exporting ? 'Generating Excel Report...' : 'Export Excel'}</span>
-        </button>
+        {/* 3 Admin Download Buttons */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Download Overall */}
+          <button
+            type="button"
+            onClick={() => handleExportReport('overall', 'excel')}
+            disabled={!selectedContestId || loading || exportingType !== null}
+            className="px-4 py-2.5 rounded-2xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-blue-500/20 flex items-center gap-2 transition disabled:opacity-50"
+            title="Download Overall Performance Report (Excel)"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>{exportingType === 'overall_excel' ? 'Downloading...' : 'Download Overall'}</span>
+          </button>
+
+          {/* Download MCQ */}
+          <button
+            type="button"
+            onClick={() => handleExportReport('mcq', 'excel')}
+            disabled={!selectedContestId || loading || exportingType !== null}
+            className="px-4 py-2.5 rounded-2xl bg-purple-600 hover:opacity-95 text-white font-bold text-xs shadow-md shadow-purple-600/20 flex items-center gap-2 transition disabled:opacity-50"
+            title="Download MCQ Performance Report (Excel)"
+          >
+            <HelpCircle className="w-4 h-4" />
+            <span>{exportingType === 'mcq_excel' ? 'Downloading...' : 'Download MCQ'}</span>
+          </button>
+
+          {/* Download Coding */}
+          <button
+            type="button"
+            onClick={() => handleExportReport('coding', 'excel')}
+            disabled={!selectedContestId || loading || exportingType !== null}
+            className="px-4 py-2.5 rounded-2xl bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 transition disabled:opacity-50"
+            title="Download Coding Performance Report (Excel)"
+          >
+            <Code2 className="w-4 h-4" />
+            <span>{exportingType === 'coding_excel' ? 'Downloading...' : 'Download Coding'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Contest Selector & Filter Toolbar */}
@@ -278,124 +374,298 @@ export const ManageContestReports = () => {
         </div>
       </div>
 
-      {/* KPI Overview Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {/* Total Candidates */}
-        <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-2xl bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] flex items-center justify-center shrink-0">
-            <Users className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-[10px] uppercase font-bold text-[#667085] dark:text-[#94A3B8]">Candidates</div>
-            <div className="text-xl font-extrabold font-mono text-[#172033] dark:text-[#F8FAFC]">
-              {reportData.summary?.total_candidates || 0}
-            </div>
-          </div>
+      {/* 3 ADMIN REPORT NAVIGATION TABS */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] shadow-sm">
+          {/* Overall Report Tab */}
+          <button
+            type="button"
+            onClick={() => setActiveReportTab('overall')}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold transition ${activeReportTab === 'overall'
+                ? 'bg-[#0757B8] dark:bg-[#0066CC] text-white shadow-md'
+                : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC]'
+              }`}
+          >
+            <BarChart3 className="w-4 h-4" />
+            <span>Overall Report</span>
+          </button>
+
+          {/* MCQ Report Tab */}
+          <button
+            type="button"
+            onClick={() => setActiveReportTab('mcq')}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold transition ${activeReportTab === 'mcq'
+                ? 'bg-purple-600 text-white shadow-md'
+                : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC]'
+              }`}
+          >
+            <HelpCircle className="w-4 h-4" />
+            <span>MCQ Report</span>
+          </button>
+
+          {/* Coding Report Tab */}
+          <button
+            type="button"
+            onClick={() => setActiveReportTab('coding')}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold transition ${activeReportTab === 'coding'
+                ? 'bg-[#22B573] text-white shadow-md'
+                : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC]'
+              }`}
+          >
+            <Code2 className="w-4 h-4" />
+            <span>Coding Report</span>
+          </button>
         </div>
 
-        {/* Average Score */}
-        <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-2xl bg-[#0757B8]/15 text-[#0757B8] dark:text-[#60A5FA] flex items-center justify-center shrink-0">
-            <Percent className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-[10px] uppercase font-bold text-[#0757B8] dark:text-[#60A5FA]">Average Score</div>
-            <div className="text-xl font-extrabold font-mono text-[#0757B8] dark:text-[#60A5FA]">
-              {reportData.summary?.average_score || 0} <span className="text-xs font-normal text-[#667085]">/ 100</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Highest Score */}
-        <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-2xl bg-[#22B573]/15 text-[#22B573] flex items-center justify-center shrink-0">
-            <Award className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-[10px] uppercase font-bold text-[#22B573]">Top Score</div>
-            <div className="text-xl font-extrabold font-mono text-[#22B573]">
-              {reportData.summary?.highest_score || 0} <span className="text-xs font-normal text-[#667085]">/ 100</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Clean Integrity Rate */}
-        <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-2xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
-            <ShieldCheck className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-[10px] uppercase font-bold text-purple-600 dark:text-purple-400">Clean Attempts</div>
-            <div className="text-xl font-extrabold font-mono text-[#172033] dark:text-[#F8FAFC]">
-              {reportData.summary?.clean_rate || 100}%
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* 5-Factor Weighted Score Formula Banner */}
-      <div className="p-4 rounded-3xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-[#0757B8] dark:text-[#60A5FA]" />
-            <span className="font-bold text-[#172033] dark:text-[#F8FAFC]">
-              Standard Weighted Scoring Formula (Out of 100)
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono font-bold">
-            <span className="px-2.5 py-1 rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-              Test Cases: 50%
-            </span>
-            <span className="px-2.5 py-1 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-              Problems: 20%
-            </span>
-            <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-              Time Efficiency: 10%
-            </span>
-            <span className="px-2.5 py-1 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/20">
-              Time Comp: 10%
-            </span>
-            <span className="px-2.5 py-1 rounded-xl bg-pink-500/15 text-pink-600 dark:text-pink-400 border border-pink-500/20">
-              Space Comp: 10%
-            </span>
-          </div>
+        {/* CSV Alternative Download Link */}
+        <div className="flex items-center gap-2 text-xs font-mono text-[#667085] dark:text-[#94A3B8]">
+          <span>Export active view as CSV:</span>
+          <button
+            onClick={() => handleExportReport(activeReportTab, 'csv')}
+            disabled={!selectedContestId || loading || exportingType !== null}
+            className="font-bold text-[#0757B8] dark:text-[#60A5FA] hover:underline"
+          >
+            {activeReportTab.toUpperCase()}.CSV
+          </button>
         </div>
       </div>
 
-      {/* Ranked Leaderboard Table */}
+      {/* KPI Overview Summary Cards (Customized per Active Tab) */}
+      {activeReportTab === 'overall' && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 animate-fadeIn">
+          {/* Candidates */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] flex items-center justify-center shrink-0">
+              <Users className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-[#667085] dark:text-[#94A3B8]">Total Candidates</div>
+              <div className="text-xl font-extrabold font-mono text-[#172033] dark:text-[#F8FAFC]">
+                {reportData.summary?.total_candidates || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Average Overall Score */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#0757B8]/15 text-[#0757B8] dark:text-[#60A5FA] flex items-center justify-center shrink-0">
+              <Percent className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-[#0757B8] dark:text-[#60A5FA]">Average Score</div>
+              <div className="text-xl font-extrabold font-mono text-[#0757B8] dark:text-[#60A5FA]">
+                {reportData.summary?.avg_overall_score || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Top Overall Score */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#22B573]/15 text-[#22B573] flex items-center justify-center shrink-0">
+              <Award className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-[#22B573]">Top Score</div>
+              <div className="text-xl font-extrabold font-mono text-[#22B573]">
+                {reportData.summary?.highest_overall_score || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Clean Integrity Rate */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-purple-600 dark:text-purple-400">Clean Rate</div>
+              <div className="text-xl font-extrabold font-mono text-[#172033] dark:text-[#F8FAFC]">
+                {reportData.summary?.clean_rate || 100}%
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeReportTab === 'mcq' && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 animate-fadeIn">
+          {/* Total MCQs */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
+              <HelpCircle className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-purple-600 dark:text-purple-400">Total MCQs</div>
+              <div className="text-xl font-extrabold font-mono text-[#172033] dark:text-[#F8FAFC]">
+                {reportData.summary?.total_mcqs || reportData.contest?.mcqs_count || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Average MCQ Score */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
+              <Percent className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-purple-600 dark:text-purple-400">Avg MCQ Score</div>
+              <div className="text-xl font-extrabold font-mono text-purple-600 dark:text-purple-400">
+                {reportData.summary?.avg_mcq_score || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Top MCQ Score */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#22B573]/15 text-[#22B573] flex items-center justify-center shrink-0">
+              <Award className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-[#22B573]">Top MCQ Score</div>
+              <div className="text-xl font-extrabold font-mono text-[#22B573]">
+                {reportData.summary?.highest_mcq_score || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Average Accuracy */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-[#0757B8] dark:text-[#60A5FA]">Avg MCQ Accuracy</div>
+              <div className="text-xl font-extrabold font-mono text-[#172033] dark:text-[#F8FAFC]">
+                {reportData.summary?.avg_mcq_accuracy || 0}%
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeReportTab === 'coding' && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 animate-fadeIn">
+          {/* Coding Problems */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#0757B8]/15 text-[#0757B8] dark:text-[#60A5FA] flex items-center justify-center shrink-0">
+              <Code2 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-[#0757B8] dark:text-[#60A5FA]">Coding Problems</div>
+              <div className="text-xl font-extrabold font-mono text-[#172033] dark:text-[#F8FAFC]">
+                {reportData.summary?.total_coding_problems || reportData.contest?.problems_count || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Average Coding Score */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#22B573]/15 text-[#22B573] flex items-center justify-center shrink-0">
+              <Percent className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-[#22B573]">Avg Coding Score</div>
+              <div className="text-xl font-extrabold font-mono text-[#22B573]">
+                {reportData.summary?.avg_coding_score || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Top Coding Score */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#22B573]/15 text-[#22B573] flex items-center justify-center shrink-0">
+              <Award className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-[#22B573]">Top Coding Score</div>
+              <div className="text-xl font-extrabold font-mono text-[#22B573]">
+                {reportData.summary?.highest_coding_score || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Avg Test Cases Passed */}
+          <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+              <Cpu className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">Avg Test Cases</div>
+              <div className="text-xl font-extrabold font-mono text-[#172033] dark:text-[#F8FAFC]">
+                {reportData.summary?.avg_test_cases_passed || 0}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DYNAMIC REPORT TABLE BASED ON ACTIVE TAB */}
       <div className="rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] overflow-hidden shadow-sm">
         {loading ? (
           <div className="py-20">
-            <PageLoader text="Compiling contest submissions & calculating complexity leaderboard..." />
+            <PageLoader text="Compiling contest report data..." />
           </div>
-        ) : reportData.leaderboard.length === 0 ? (
+        ) : displayLeaderboard.length === 0 ? (
           <div className="py-20 text-center text-[#667085] dark:text-[#94A3B8] text-xs">
             No candidate submissions or records found for this contest.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-sans">
+              {/* TABLE HEADERS */}
               <thead className="bg-[#303442] text-white font-bold uppercase tracking-wider text-[11px]">
-                <tr>
-                  <th className="py-4 px-3 text-center min-w-[55px]">Rank</th>
-                  <th className="py-4 px-3 min-w-[200px]">Candidate</th>
-                  <th className="py-4 px-3 text-center min-w-[90px]">Problems</th>
-                  <th className="py-4 px-3 text-center min-w-[100px]">Test Cases</th>
-                  <th className="py-4 px-3 text-center min-w-[90px]">Time</th>
-                  <th className="py-4 px-3 text-center min-w-[110px]">Time Comp</th>
-                  <th className="py-4 px-3 text-center min-w-[110px]">Space Comp</th>
-                  <th className="py-4 px-3 text-center min-w-[100px]">Final Score</th>
-                  <th className="py-4 px-3 text-center min-w-[120px]">Anti-Cheat</th>
-                  <th className="py-4 px-3 text-right min-w-[90px]">Action</th>
-                </tr>
+                {activeReportTab === 'overall' && (
+                  <tr>
+                    <th className="py-4 px-3 text-center min-w-[55px]">Rank</th>
+                    <th className="py-4 px-3 min-w-[200px]">Candidate</th>
+                    <th className="py-4 px-3 text-center min-w-[90px]">MCQ Marks</th>
+                    <th className="py-4 px-3 text-center min-w-[90px]">Coding Marks</th>
+                    <th className="py-4 px-3 text-center min-w-[100px]">Total Score</th>
+                    <th className="py-4 px-3 text-center min-w-[90px]">Problems</th>
+                    <th className="py-4 px-3 text-center min-w-[95px]">Test Cases</th>
+                    <th className="py-4 px-3 text-center min-w-[90px]">Time</th>
+                    <th className="py-4 px-3 text-center min-w-[120px]">Anti-Cheat</th>
+                    <th className="py-4 px-3 text-right min-w-[90px]">Action</th>
+                  </tr>
+                )}
+
+                {activeReportTab === 'mcq' && (
+                  <tr>
+                    <th className="py-4 px-3 text-center min-w-[55px]">Rank</th>
+                    <th className="py-4 px-3 min-w-[200px]">Candidate</th>
+                    <th className="py-4 px-3 text-center min-w-[110px]">MCQs Correct</th>
+                    <th className="py-4 px-3 text-center min-w-[100px]">MCQ Marks</th>
+                    <th className="py-4 px-3 text-center min-w-[100px]">Accuracy</th>
+                    <th className="py-4 px-3 text-center min-w-[100px]">Time Taken</th>
+                    <th className="py-4 px-3 text-center min-w-[120px]">Status</th>
+                    <th className="py-4 px-3 text-right min-w-[90px]">Action</th>
+                  </tr>
+                )}
+
+                {activeReportTab === 'coding' && (
+                  <tr>
+                    <th className="py-4 px-3 text-center min-w-[55px]">Rank</th>
+                    <th className="py-4 px-3 min-w-[200px]">Candidate</th>
+                    <th className="py-4 px-3 text-center min-w-[100px]">Problems</th>
+                    <th className="py-4 px-3 text-center min-w-[100px]">Test Cases</th>
+                    <th className="py-4 px-3 text-center min-w-[110px]">Coding Marks</th>
+                    <th className="py-4 px-3 text-center min-w-[90px]">Time</th>
+                    <th className="py-4 px-3 text-center min-w-[110px]">Time Comp</th>
+                    <th className="py-4 px-3 text-center min-w-[110px]">Space Comp</th>
+                    <th className="py-4 px-3 text-center min-w-[120px]">Anti-Cheat</th>
+                    <th className="py-4 px-3 text-right min-w-[90px]">Action</th>
+                  </tr>
+                )}
               </thead>
+
+              {/* TABLE BODY */}
               <tbody className="divide-y divide-[#D9E0E8] dark:divide-[#30363D]/60 text-xs">
-                {reportData.leaderboard.map((cand) => {
-                  const isTop1 = cand.rank === 1;
-                  const isTop2 = cand.rank === 2;
-                  const isTop3 = cand.rank === 3;
-                  const ac = cand.anti_cheat;
+                {displayLeaderboard.map((cand, idx) => {
+                  const rank = idx + 1;
+                  const isTop1 = rank === 1;
+                  const isTop2 = rank === 2;
+                  const isTop3 = rank === 3;
+                  const ac = cand.anti_cheat || {};
 
                   return (
                     <tr key={cand.participant_id} className="hover:bg-[#F5F7FA] dark:hover:bg-[#151A21]/60 transition">
@@ -414,7 +684,7 @@ export const ManageContestReports = () => {
                             🥉
                           </span>
                         ) : (
-                          <span className="text-[#667085] dark:text-[#94A3B8]">#{cand.rank}</span>
+                          <span className="text-[#667085] dark:text-[#94A3B8]">#{rank}</span>
                         )}
                       </td>
 
@@ -430,60 +700,90 @@ export const ManageContestReports = () => {
                         </div>
                       </td>
 
-                      {/* Problems Solved */}
-                      <td className="py-3.5 px-3 text-center font-mono font-bold text-[#172033] dark:text-[#F8FAFC]">
-                        <span className={cand.solved_count === cand.total_contest_problems ? 'text-[#22B573]' : ''}>
-                          {cand.solved_count} / {cand.total_contest_problems}
-                        </span>
-                      </td>
+                      {/* OVERALL VIEW COLUMNS */}
+                      {activeReportTab === 'overall' && (
+                        <>
+                          <td className="py-3.5 px-3 text-center font-mono font-bold text-purple-600 dark:text-purple-400">
+                            {cand.mcq_score || 0}
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono font-bold text-[#22B573]">
+                            {cand.coding_score || 0}
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono">
+                            <span className="px-2.5 py-1 rounded-full text-xs font-extrabold bg-[#0757B8]/15 text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/30">
+                              {cand.overall_score || 0}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono text-[#667085] dark:text-[#94A3B8]">
+                            {cand.solved_count} / {cand.total_contest_problems}
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono text-[#667085] dark:text-[#94A3B8]">
+                            {cand.passed_test_cases} / {cand.total_contest_testcases}
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                            {cand.time_taken}
+                          </td>
+                        </>
+                      )}
 
-                      {/* Test Cases Passed */}
-                      <td className="py-3.5 px-3 text-center font-mono text-[#667085] dark:text-[#94A3B8]">
-                        <span className="font-bold text-[#172033] dark:text-[#F8FAFC]">{cand.passed_test_cases}</span>
-                        <span className="text-[10px]"> / {cand.total_contest_testcases}</span>
-                      </td>
+                      {/* MCQ VIEW COLUMNS */}
+                      {activeReportTab === 'mcq' && (
+                        <>
+                          <td className="py-3.5 px-3 text-center font-mono font-bold text-[#172033] dark:text-[#F8FAFC]">
+                            {cand.mcqs_correct} / {cand.total_contest_mcqs}
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono">
+                            <span className="px-2.5 py-1 rounded-full text-xs font-extrabold bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30">
+                              {cand.mcq_score || 0}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono font-bold text-[#22B573]">
+                            {cand.mcq_percentage || 0}%
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                            {cand.time_taken}
+                          </td>
+                        </>
+                      )}
 
-                      {/* Time Taken */}
-                      <td className="py-3.5 px-3 text-center font-mono text-[11px] text-[#667085] dark:text-[#94A3B8]">
-                        {cand.time_taken}
-                      </td>
+                      {/* CODING VIEW COLUMNS */}
+                      {activeReportTab === 'coding' && (
+                        <>
+                          <td className="py-3.5 px-3 text-center font-mono font-bold text-[#172033] dark:text-[#F8FAFC]">
+                            {cand.solved_count} / {cand.total_contest_problems}
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono text-[#667085] dark:text-[#94A3B8]">
+                            {cand.passed_test_cases} / {cand.total_contest_testcases}
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono">
+                            <span className="px-2.5 py-1 rounded-full text-xs font-extrabold bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30">
+                              {cand.coding_score || 0}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                            {cand.time_taken}
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono">
+                            <span className="px-2 py-0.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[10px] font-bold text-purple-600 dark:text-purple-400">
+                              {cand.time_complexity}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono">
+                            <span className="px-2 py-0.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[10px] font-bold text-pink-600 dark:text-pink-400">
+                              {cand.space_complexity}
+                            </span>
+                          </td>
+                        </>
+                      )}
 
-                      {/* Time Complexity */}
-                      <td className="py-3.5 px-3 text-center font-mono">
-                        <span className="px-2 py-0.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[10px] font-bold text-purple-600 dark:text-purple-400">
-                          {cand.time_complexity}
-                        </span>
-                      </td>
-
-                      {/* Space Complexity */}
-                      <td className="py-3.5 px-3 text-center font-mono">
-                        <span className="px-2 py-0.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[10px] font-bold text-pink-600 dark:text-pink-400">
-                          {cand.space_complexity}
-                        </span>
-                      </td>
-
-                      {/* Final Score */}
-                      <td className="py-3.5 px-3 text-center font-mono">
-                        <span className={`px-2.5 py-1 rounded-full text-xs font-extrabold shadow-sm ${
-                          cand.final_score >= 80
-                            ? 'bg-[#22B573]/20 text-[#22B573] border border-[#22B573]/40'
-                            : cand.final_score >= 50
-                              ? 'bg-[#F2B705]/20 text-[#F2B705] border border-[#F2B705]/40'
-                              : 'bg-[#EF4444]/20 text-[#EF4444] border border-[#EF4444]/40'
-                        }`}>
-                          {cand.final_score}
-                        </span>
-                      </td>
-
-                      {/* Anti-Cheat */}
+                      {/* Anti-Cheat Status */}
                       <td className="py-3.5 px-3 text-center">
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
-                          ac.status === 'AUTO_TERMINATED'
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${ac.status === 'AUTO_TERMINATED'
                             ? 'bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30'
                             : ac.status === 'FLAGGED'
                               ? 'bg-[#F2B705]/15 text-[#F2B705] border border-[#F2B705]/30'
                               : 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
-                        }`}>
+                          }`}>
                           {ac.status === 'AUTO_TERMINATED' ? (
                             <>
                               <ShieldAlert className="w-3 h-3" />
@@ -503,11 +803,14 @@ export const ManageContestReports = () => {
                         </span>
                       </td>
 
-                      {/* Action */}
+                      {/* Audit Button */}
                       <td className="py-3.5 px-3 text-right">
                         <button
                           type="button"
-                          onClick={() => setSelectedCandidate(cand)}
+                          onClick={() => {
+                            setSelectedCandidate(cand);
+                            setModalTab('overall');
+                          }}
                           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#DDF2FF] dark:bg-[#142A43] hover:bg-[#0757B8] dark:hover:bg-[#0066CC] text-[#0757B8] dark:text-[#60A5FA] hover:text-white border border-[#0757B8]/20 text-xs font-bold transition shadow-sm"
                         >
                           <Eye className="w-3.5 h-3.5" />
@@ -527,7 +830,7 @@ export const ManageContestReports = () => {
       <Modal
         isOpen={Boolean(selectedCandidate)}
         onClose={() => setSelectedCandidate(null)}
-        title="Candidate Contest Audit & Score Breakdown"
+        title="Candidate Contest Audit & Performance Breakdown"
         maxWidth="max-w-3xl"
       >
         {selectedCandidate && (
@@ -544,148 +847,141 @@ export const ManageContestReports = () => {
               </div>
 
               <div className="text-right">
-                <div className="text-[10px] uppercase font-bold text-[#667085] dark:text-[#94A3B8]">Final Score</div>
+                <div className="text-[10px] uppercase font-bold text-[#667085] dark:text-[#94A3B8]">Total Marks</div>
                 <div className="text-2xl font-extrabold font-mono text-[#0757B8] dark:text-[#60A5FA]">
-                  {selectedCandidate.final_score} <span className="text-xs font-normal text-[#667085]">/ 100</span>
+                  {selectedCandidate.overall_score || 0}
                 </div>
               </div>
             </div>
 
-            {/* Score Breakdown Cards */}
-            <div>
-              <div className="text-[11px] uppercase font-bold text-[#667085] dark:text-[#94A3B8] mb-1.5 tracking-wider">
-                Weighted Score Breakdown
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center font-mono">
-                <div className="p-2.5 rounded-2xl bg-blue-500/10 border border-blue-500/20">
-                  <div className="text-[9px] text-blue-600 dark:text-blue-400 uppercase font-bold">Test Cases (50%)</div>
-                  <div className="text-base font-bold text-[#172033] dark:text-[#F8FAFC] mt-0.5">{selectedCandidate.score_breakdown.test_cases} pts</div>
-                </div>
-                <div className="p-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
-                  <div className="text-[9px] text-emerald-600 dark:text-emerald-400 uppercase font-bold">Solved (20%)</div>
-                  <div className="text-base font-bold text-[#172033] dark:text-[#F8FAFC] mt-0.5">{selectedCandidate.score_breakdown.problems_solved} pts</div>
-                </div>
-                <div className="p-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/20">
-                  <div className="text-[9px] text-amber-600 dark:text-amber-400 uppercase font-bold">Efficiency (10%)</div>
-                  <div className="text-base font-bold text-[#172033] dark:text-[#F8FAFC] mt-0.5">{selectedCandidate.score_breakdown.time_efficiency} pts</div>
-                </div>
-                <div className="p-2.5 rounded-2xl bg-purple-500/10 border border-purple-500/20">
-                  <div className="text-[9px] text-purple-600 dark:text-purple-400 uppercase font-bold">Time Comp (10%)</div>
-                  <div className="text-base font-bold text-[#172033] dark:text-[#F8FAFC] mt-0.5">{selectedCandidate.score_breakdown.time_complexity} pts</div>
-                </div>
-                <div className="p-2.5 rounded-2xl bg-pink-500/10 border border-pink-500/20">
-                  <div className="text-[9px] text-pink-600 dark:text-pink-400 uppercase font-bold">Space Comp (10%)</div>
-                  <div className="text-base font-bold text-[#172033] dark:text-[#F8FAFC] mt-0.5">{selectedCandidate.score_breakdown.space_complexity} pts</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Problem-by-Problem Evaluation Breakdown */}
-            <div>
-              <div className="text-[11px] uppercase font-bold text-[#667085] dark:text-[#94A3B8] mb-1.5 tracking-wider">
-                Coding Challenges Performance
-              </div>
-              <div className="rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] overflow-hidden">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#303442] text-white font-bold uppercase text-[10px]">
-                    <tr>
-                      <th className="py-2.5 px-3">Problem Title</th>
-                      <th className="py-2.5 px-3">Verdict</th>
-                      <th className="py-2.5 px-3 text-center">Test Cases</th>
-                      <th className="py-2.5 px-3 text-center">Runtime</th>
-                      <th className="py-2.5 px-3 text-center">Memory</th>
-                      <th className="py-2.5 px-3 text-right">Language</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#D9E0E8] dark:divide-[#30363D]/60 font-sans">
-                    {selectedCandidate.problem_breakdowns?.map((pb, pIdx) => (
-                      <tr key={pIdx} className="hover:bg-[#F5F7FA] dark:hover:bg-[#151A21]/50">
-                        <td className="py-2.5 px-3 font-bold text-[#172033] dark:text-[#F8FAFC]">
-                          {pb.problem_title}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            pb.status === 'Accepted'
-                              ? 'bg-[#22B573]/20 text-[#22B573]'
-                              : pb.status === 'Not Attempted'
-                                ? 'bg-slate-200 text-[#667085]'
-                                : 'bg-[#EF4444]/20 text-[#EF4444]'
-                          }`}>
-                            {pb.status}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono">
-                          {pb.passed_test_cases} / {pb.total_test_cases}
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono text-[11px]">
-                          {pb.runtime > 0 ? `${pb.runtime} ms` : '-'}
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono text-[11px]">
-                          {pb.memory > 0 ? `${pb.memory} MB` : '-'}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono uppercase text-[11px]">
-                          {pb.language}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Anti-Cheat Audit Box */}
-            <div className="p-3.5 rounded-2xl bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="font-bold flex items-center gap-1.5 text-[#172033] dark:text-[#F8FAFC]">
-                  <ShieldAlert className="w-4 h-4 text-[#0757B8] dark:text-[#60A5FA]" />
-                  <span>Anti-Cheat Security & Integrity Record</span>
-                </div>
-                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                  selectedCandidate.anti_cheat.auto_terminated
-                    ? 'bg-[#EF4444]/20 text-[#EF4444]'
-                    : selectedCandidate.anti_cheat.flags_count > 0
-                      ? 'bg-[#F2B705]/20 text-[#F2B705]'
-                      : 'bg-[#22B573]/20 text-[#22B573]'
-                }`}>
-                  {selectedCandidate.anti_cheat.status}
-                </span>
-              </div>
-
-              {selectedCandidate.anti_cheat.auto_terminated && (
-                <div className="p-2.5 rounded-xl bg-[#EF4444]/10 border border-[#EF4444]/25 text-[#EF4444] text-xs font-semibold">
-                  Reason: {selectedCandidate.anti_cheat.termination_reason || 'Exited strict contest mode.'}
-                </div>
-              )}
-
-              {selectedCandidate.anti_cheat.logs?.length > 0 ? (
-                <div className="space-y-1 pt-1 max-h-36 overflow-y-auto">
-                  {selectedCandidate.anti_cheat.logs.map((log, lIdx) => (
-                    <div key={lIdx} className="p-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] flex items-center justify-between font-mono text-[10px]">
-                      <div>
-                        <span className="font-bold text-[#EF4444]">{log.event_type}</span>: {log.detail}
-                      </div>
-                      <div className="text-[#667085] dark:text-[#94A3B8]">
-                        {new Date(log.timestamp).toLocaleTimeString()}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-[11px] text-[#22B573] font-semibold py-1">
-                  ✓ Clean attempt with 0 security violations recorded.
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end pt-2">
+            {/* Modal Navigation Tabs */}
+            <div className="flex items-center gap-2 border-b border-[#D9E0E8] dark:border-[#30363D] pb-2">
               <button
                 type="button"
-                onClick={() => setSelectedCandidate(null)}
-                className="px-5 py-2.5 rounded-xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold"
+                onClick={() => setModalTab('overall')}
+                className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${modalTab === 'overall'
+                    ? 'bg-[#0757B8] text-white'
+                    : 'text-[#667085] dark:text-[#94A3B8] hover:bg-slate-200 dark:hover:bg-slate-800'
+                  }`}
               >
-                Close Audit
+                Overall Breakdown
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalTab('coding')}
+                className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${modalTab === 'coding'
+                    ? 'bg-[#22B573] text-white'
+                    : 'text-[#667085] dark:text-[#94A3B8] hover:bg-slate-200 dark:hover:bg-slate-800'
+                  }`}
+              >
+                Coding Problems ({selectedCandidate.problem_breakdowns?.length || 0})
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalTab('anticheat')}
+                className={`px-3 py-1.5 rounded-lg font-bold text-xs transition ${modalTab === 'anticheat'
+                    ? 'bg-purple-600 text-white'
+                    : 'text-[#667085] dark:text-[#94A3B8] hover:bg-slate-200 dark:hover:bg-slate-800'
+                  }`}
+              >
+                Anti-Cheat Integrity Logs
               </button>
             </div>
+
+            {/* Tab 1: Overall Breakdown */}
+            {modalTab === 'overall' && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-center">
+                    <div className="text-[10px] font-bold text-[#667085] uppercase">MCQ Marks</div>
+                    <div className="text-xl font-extrabold font-mono text-purple-600 mt-1">
+                      {selectedCandidate.mcq_score || 0}
+                    </div>
+                    <div className="text-[10px] text-[#667085] mt-0.5">
+                      {selectedCandidate.mcqs_correct || 0} / {selectedCandidate.total_contest_mcqs || 0} Correct
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-center">
+                    <div className="text-[10px] font-bold text-[#667085] uppercase">Coding Marks</div>
+                    <div className="text-xl font-extrabold font-mono text-[#22B573] mt-1">
+                      {selectedCandidate.coding_score || 0}
+                    </div>
+                    <div className="text-[10px] text-[#667085] mt-0.5">
+                      {selectedCandidate.solved_count || 0} Solved
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-center">
+                    <div className="text-[10px] font-bold text-[#667085] uppercase">Time Taken</div>
+                    <div className="text-xl font-extrabold font-mono text-[#0757B8] dark:text-[#60A5FA] mt-1">
+                      {selectedCandidate.time_taken}
+                    </div>
+                    <div className="text-[10px] text-[#667085] mt-0.5">Total Duration</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Tab 2: Coding Breakdown */}
+            {modalTab === 'coding' && (
+              <div className="space-y-2">
+                {(!selectedCandidate.problem_breakdowns || selectedCandidate.problem_breakdowns.length === 0) ? (
+                  <div className="p-6 text-center text-[#667085] text-xs">No coding problems attempted in this contest.</div>
+                ) : (
+                  selectedCandidate.problem_breakdowns.map((pb, idx) => (
+                    <div key={idx} className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-[#172033] dark:text-[#F8FAFC]">
+                          {idx + 1}. {pb.problem_title}
+                        </div>
+                        <div className="text-[11px] text-[#667085] dark:text-[#94A3B8] font-mono mt-0.5">
+                          Language: {pb.language || 'python'} • Runtime: {pb.runtime || 0}ms • Memory: {pb.memory || 0}MB
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${pb.status === 'Accepted'
+                            ? 'bg-[#22B573]/15 text-[#22B573]'
+                            : 'bg-amber-500/15 text-amber-600'
+                          }`}>
+                          {pb.status} ({pb.passed_test_cases}/{pb.total_test_cases} TCs)
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* Tab 3: Anti-Cheat Audit */}
+            {modalTab === 'anticheat' && (
+              <div className="space-y-2">
+                <div className={`p-3.5 rounded-xl border ${selectedCandidate.anti_cheat?.status === 'AUTO_TERMINATED'
+                    ? 'bg-red-500/10 border-red-500/30 text-red-600'
+                    : selectedCandidate.anti_cheat?.status === 'FLAGGED'
+                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+                      : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600'
+                  }`}>
+                  <div className="font-bold uppercase tracking-wider text-[10px]">Security Verdict: {selectedCandidate.anti_cheat?.status}</div>
+                  {selectedCandidate.anti_cheat?.termination_reason && (
+                    <div className="text-xs font-semibold mt-1">Reason: {selectedCandidate.anti_cheat.termination_reason}</div>
+                  )}
+                </div>
+
+                {(!selectedCandidate.anti_cheat?.logs || selectedCandidate.anti_cheat.logs.length === 0) ? (
+                  <div className="p-6 text-center text-[#667085] text-xs">Zero security integrity events recorded. Clean submission.</div>
+                ) : (
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                    {selectedCandidate.anti_cheat.logs.map((log, idx) => (
+                      <div key={idx} className="p-2.5 rounded-lg bg-[#0B0F14] border border-[#30363D] text-[11px] font-mono text-slate-300 flex items-center justify-between">
+                        <span>{log.event_type || 'SECURITY_EVENT'}: {log.detail}</span>
+                        <span className="text-[10px] text-slate-500">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Modal>

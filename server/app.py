@@ -19,7 +19,12 @@ def create_app():
     app.config.from_object(Config)
 
     # Setup CORS
-    CORS(app, resources={r"/api/*": {"origins": Config.CORS_ORIGINS}}, supports_credentials=True)
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": Config.CORS_ORIGINS}},
+        supports_credentials=True,
+        expose_headers=["Content-Disposition", "Content-Type"]
+    )
 
     # Initialize Database
     with app.app_context():

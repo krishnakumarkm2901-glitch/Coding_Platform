@@ -17,20 +17,7 @@ import {
 } from 'lucide-react';
 import { DifficultyBadge, StatusBadge } from '../../components/common/Badge';
 import { PageLoader } from '../../components/common/Loader';
-
-const formatDateTime = (dateStr) => {
-  if (!dateStr) return 'N/A';
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  });
-};
+import { formatISTDateTime as formatDateTime } from '../../utils/date';
 
 export const StudentDashboard = () => {
   const { user } = useAuth();
@@ -269,9 +256,13 @@ export const StudentDashboard = () => {
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                        c.status === 'Active' ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30' : 'bg-slate-200 dark:bg-[#20252C] text-[#667085] dark:text-[#94A3B8]'
+                        c.status === 'Active'
+                          ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
+                          : c.status === 'Upcoming'
+                          ? 'bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20'
+                          : 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30'
                       }`}>
-                        {c.status}
+                        {c.status || 'Upcoming'}
                       </span>
                       <h3 className="text-xs sm:text-sm font-bold text-[#172033] dark:text-[#F8FAFC]">{c.title}</h3>
                     </div>

@@ -59,6 +59,9 @@ def setup_indexes(database):
         # Contests indexes
         database.contests.create_index([("is_published", ASCENDING), ("start_time", ASCENDING)])
         database.contest_participants.create_index([("contest_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
+        database.contest_participants.create_index([("contest_id", ASCENDING), ("student_id", ASCENDING)])
+        database.contest_assigned_questions.create_index([("contest_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
+        database.contest_assigned_questions.create_index([("contest_id", ASCENDING), ("student_id", ASCENDING)])
         database.contest_submissions.create_index([("contest_id", ASCENDING), ("user_id", ASCENDING)])
     except Exception as e:
         logger.warning(f"Index creation notice: {e}")

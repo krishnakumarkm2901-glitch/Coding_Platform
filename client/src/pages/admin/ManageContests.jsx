@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import { 
   Trophy, 
@@ -17,24 +17,14 @@ import {
   Search,
   Check,
   X,
-  PlusCircle
+  PlusCircle,
+  FileSpreadsheet,
+  Upload,
+  Download
 } from 'lucide-react';
 import { Modal } from '../../components/common/Modal';
 import { PageLoader } from '../../components/common/Loader';
-
-const formatDateTime = (dateStr) => {
-  if (!dateStr) return 'N/A';
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  });
-};
+import { formatISTDateTime as formatDateTime, toISTDateTimeInput } from '../../utils/date';
 
 export const ManageContests = () => {
   const [contests, setContests] = useState([]);
@@ -59,6 +49,15 @@ export const ManageContests = () => {
   const [participantsLoading, setParticipantsLoading] = useState(false);
 
   const [successMsg, setSuccessMsg] = useState('');
+
+  // Excel MCQ Import States
+  const [isImportMCQModalOpen, setIsImportMCQModalOpen] = useState(false);
+  const [importMCQFile, setImportMCQFile] = useState(null);
+  const [importMCQLoading, setImportMCQLoading] = useState(false);
+  const [importMCQCommitLoading, setImportMCQCommitLoading] = useState(false);
+  const [importMCQPreviewData, setImportMCQPreviewData] = useState(null);
+  const [importMCQErrorMsg, setImportMCQErrorMsg] = useState('');
+  const mcqFileInputRef = useRef(null);
 
   // Create Coding Problem inside contest states
   const [isCreateProblemModalOpen, setIsCreateProblemModalOpen] = useState(false);
@@ -271,6 +270,104 @@ export const ManageContests = () => {
     }
   };
 
+  // ----------------- EXCEL MCQ IMPORT HANDLERS -----------------
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const response = await api.get('/admin/mcqs/import/template', {
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'MCQ_Import_Template.xlsx';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to download template:', err);
+      alert('Failed to download template. Please try again.');
+    }
+  };
+
+  const handleOpenImportMCQModal = () => {
+    setImportMCQFile(null);
+    setImportMCQPreviewData(null);
+    setImportMCQErrorMsg('');
+    setIsImportMCQModalOpen(true);
+    if (mcqFileInputRef.current) mcqFileInputRef.current.value = '';
+  };
+
+  const handleMCQFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImportMCQFile(file);
+    setImportMCQErrorMsg('');
+    setImportMCQPreviewData(null);
+
+    const formDataPayload = new FormData();
+    formDataPayload.append('file', file);
+
+    try {
+      setImportMCQLoading(true);
+      const res = await api.post('/admin/mcqs/import/preview', formDataPayload, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      if (res.data.success) {
+        setImportMCQPreviewData(res.data);
+      }
+    } catch (err) {
+      setImportMCQErrorMsg(err.response?.data?.error || 'Failed to parse Excel file. Please verify format.');
+    } finally {
+      setImportMCQLoading(false);
+    }
+  };
+
+  const handleCommitImportMCQ = async () => {
+    if (!importMCQPreviewData || !importMCQPreviewData.valid_rows?.length) return;
+
+    try {
+      setImportMCQCommitLoading(true);
+      setImportMCQErrorMsg('');
+
+      const res = await api.post('/admin/mcqs/import/commit', {
+        mcqs: importMCQPreviewData.valid_rows
+      });
+
+      if (res.data.success) {
+        const importedIds = res.data.imported_ids || [];
+
+        // Refresh local MCQs list
+        const mRes = await api.get('/admin/mcqs', { params: { limit: 500 } });
+        if (mRes.data.success) {
+          setAllMCQs(mRes.data.mcqs || []);
+        }
+
+        // Automatically assign all imported MCQs to current contest form
+        setFormData((prev) => ({
+          ...prev,
+          mcq_ids: Array.from(new Set([...prev.mcq_ids, ...importedIds]))
+        }));
+
+        setIsImportMCQModalOpen(false);
+        setSuccessMsg(`Successfully imported and assigned ${res.data.imported_count} MCQs!`);
+        setTimeout(() => setSuccessMsg(''), 5000);
+      }
+    } catch (err) {
+      setImportMCQErrorMsg(err.response?.data?.error || 'Failed to save MCQs.');
+    } finally {
+      setImportMCQCommitLoading(false);
+    }
+  };
+
+  const [hasCoding, setHasCoding] = useState(true);
+  const [hasMCQ, setHasMCQ] = useState(true);
+
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -284,6 +381,11 @@ export const ManageContests = () => {
 
   useEffect(() => {
     fetchInitialData();
+    // Lightweight polling every 6 seconds for live status updates
+    const pollInterval = setInterval(() => {
+      fetchContestsOnly();
+    }, 6000);
+    return () => clearInterval(pollInterval);
   }, []);
 
   const fetchInitialData = async () => {
@@ -291,8 +393,8 @@ export const ManageContests = () => {
       setLoading(true);
       const [cRes, pRes, mRes] = await Promise.all([
         api.get('/admin/contests'),
-        api.get('/admin/problems', { params: { limit: 100 } }),
-        api.get('/admin/mcqs', { params: { limit: 100 } }),
+        api.get('/admin/problems', { params: { limit: 200 } }),
+        api.get('/admin/mcqs', { params: { limit: 500 } }),
       ]);
 
       if (cRes.data.success) setContests(cRes.data.contests || []);
@@ -305,10 +407,23 @@ export const ManageContests = () => {
     }
   };
 
+  const fetchContestsOnly = async () => {
+    try {
+      const res = await api.get('/admin/contests');
+      if (res.data.success) {
+        setContests(res.data.contests || []);
+      }
+    } catch (err) {
+      // Quiet fail during background poll
+    }
+  };
+
   const handleOpenAdd = () => {
     setEditingId(null);
     setProblemSearch('');
     setMcqSearch('');
+    setHasCoding(true);
+    setHasMCQ(true);
     const now = new Date();
     const future = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
@@ -316,8 +431,8 @@ export const ManageContests = () => {
       title: '',
       description: '',
       duration_minutes: 60,
-      start_time: now.toISOString().slice(0, 16),
-      end_time: future.toISOString().slice(0, 16),
+      start_time: toISTDateTimeInput(now),
+      end_time: toISTDateTimeInput(future),
       is_published: true,
       problem_ids: [],
       mcq_ids: [],
@@ -330,15 +445,30 @@ export const ManageContests = () => {
     setEditingId(contest.id);
     setProblemSearch('');
     setMcqSearch('');
-    const probIds = (contest.problem_ids || []).map(id => String(id));
-    const mcqIds = (contest.mcq_ids || []).map(id => String(id));
+    const probIds = (contest.problem_ids || contest.codingProblemIds || []).map(id => String(id));
+    const mcqIds = (contest.mcq_ids || contest.mcqIds || []).map(id => String(id));
+
+    const cType = contest.contestType || contest.contest_type;
+    if (cType === 'CODING') {
+      setHasCoding(true);
+      setHasMCQ(false);
+    } else if (cType === 'MCQ') {
+      setHasCoding(false);
+      setHasMCQ(true);
+    } else if (cType === 'BOTH') {
+      setHasCoding(true);
+      setHasMCQ(true);
+    } else {
+      setHasCoding(probIds.length > 0 || mcqIds.length === 0);
+      setHasMCQ(mcqIds.length > 0 || probIds.length === 0);
+    }
 
     setFormData({
       title: contest.title || '',
       description: contest.description || '',
       duration_minutes: contest.duration_minutes || 60,
-      start_time: contest.start_time ? new Date(contest.start_time).toISOString().slice(0, 16) : '',
-      end_time: contest.end_time ? new Date(contest.end_time).toISOString().slice(0, 16) : '',
+      start_time: toISTDateTimeInput(contest.start_time),
+      end_time: toISTDateTimeInput(contest.end_time),
       is_published: Boolean(contest.is_published),
       problem_ids: probIds,
       mcq_ids: mcqIds,
@@ -423,18 +553,34 @@ export const ManageContests = () => {
       return;
     }
 
+    if (!hasCoding && !hasMCQ) {
+      setErrorMsg('Please select at least one contest type.');
+      return;
+    }
+
+    const contestType = (hasCoding && hasMCQ) ? 'BOTH' : hasCoding ? 'CODING' : 'MCQ';
+    const payload = {
+      ...formData,
+      contest_type: contestType,
+      contestType: contestType,
+      problem_ids: hasCoding ? formData.problem_ids : [],
+      codingProblemIds: hasCoding ? formData.problem_ids : [],
+      mcq_ids: hasMCQ ? formData.mcq_ids : [],
+      mcqIds: hasMCQ ? formData.mcq_ids : [],
+    };
+
     try {
       setActionLoading(true);
       setErrorMsg('');
 
       if (editingId) {
-        const res = await api.put(`/admin/contests/${editingId}`, formData);
+        const res = await api.put(`/admin/contests/${editingId}`, payload);
         if (res.data.success) {
           setIsModalOpen(false);
           fetchInitialData();
         }
       } else {
-        const res = await api.post('/admin/contests', formData);
+        const res = await api.post('/admin/contests', payload);
         if (res.data.success) {
           setIsModalOpen(false);
           fetchInitialData();
@@ -495,6 +641,7 @@ export const ManageContests = () => {
           {contests.map((c) => {
             const probCount = c.problem_ids?.length ?? c.problems_count ?? 0;
             const mcqCount = c.mcq_ids?.length ?? c.mcqs_count ?? 0;
+            const cType = c.contestType || c.contest_type || (probCount > 0 && mcqCount > 0 ? 'BOTH' : probCount > 0 ? 'CODING' : 'MCQ');
 
             return (
               <div
@@ -503,16 +650,41 @@ export const ManageContests = () => {
               >
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <button
-                      onClick={() => handleTogglePublish(c)}
-                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase transition ${
-                        c.is_published
-                          ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
-                          : 'bg-slate-200 dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8]'
-                      }`}
-                    >
-                      {c.is_published ? 'Published' : 'Draft / Unpublished'}
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={() => handleTogglePublish(c)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase transition ${
+                          c.is_published
+                            ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
+                            : 'bg-slate-200 dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8]'
+                        }`}
+                      >
+                        {c.is_published ? 'Published' : 'Draft / Unpublished'}
+                      </button>
+
+                      {/* Contest Type Badge */}
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                        cType === 'BOTH'
+                          ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30'
+                          : cType === 'CODING'
+                            ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
+                            : 'bg-purple-500/15 text-purple-600 border border-purple-500/30'
+                      }`}>
+                        {cType === 'BOTH' ? 'Coding + MCQ' : cType === 'CODING' ? 'Coding Only' : 'MCQ Only'}
+                      </span>
+
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          c.status === 'Active'
+                            ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
+                            : c.status === 'Upcoming'
+                            ? 'bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20 dark:border-[#0066CC]/40'
+                            : 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30'
+                        }`}
+                      >
+                        {c.status || 'Upcoming'}
+                      </span>
+                    </div>
 
                     <div className="flex items-center gap-2 text-xs font-mono text-[#667085] dark:text-[#94A3B8]">
                       <Users className="w-3.5 h-3.5" />
@@ -563,13 +735,15 @@ export const ManageContests = () => {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleOpenEdit(c)}
-                      className="p-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
+                      className="p-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#667085] dark:text-[#94A3B8] hover:text-[#0757B8] dark:hover:text-[#60A5FA] transition"
+                      title="Edit Contest"
                     >
                       <Edit className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => handleDelete(c.id)}
-                      className="p-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#EF4444]/20 text-[#EF4444] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
+                      className="p-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#EF4444]/15 text-[#667085] dark:text-[#94A3B8] hover:text-[#EF4444] transition"
+                      title="Delete Contest"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -658,126 +832,178 @@ export const ManageContests = () => {
             </div>
           </div>
 
-          {/* Coding Problem Selector */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
-                Assign Coding Problems ({formData.problem_ids.length} Selected)
+          {/* Contest Type Checkboxes */}
+          <div className="p-4 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-2">
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide text-[10px]">
+              Contest Type * (Select at least one)
+            </label>
+            <div className="flex items-center gap-8 text-xs font-bold text-[#172033] dark:text-[#F8FAFC]">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={hasCoding}
+                  onChange={(e) => setHasCoding(e.target.checked)}
+                  className="w-4 h-4 rounded text-[#0757B8] focus:ring-[#0757B8] dark:bg-[#20252C] dark:border-[#30363D]"
+                />
+                <div className="flex items-center gap-1.5">
+                  <Code2 className="w-4 h-4 text-[#22B573]" />
+                  <span>Coding</span>
+                </div>
               </label>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleOpenCreateProblemModal}
-                  className="px-2 py-1 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold text-[10px] flex items-center gap-1 border border-[#22B573]/20 shadow-sm transition"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>Create Coding Problem</span>
-                </button>
-                <span className="text-[#0757B8] dark:text-[#60A5FA] font-bold">Total: {allProblems.length} available</span>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={hasMCQ}
+                  onChange={(e) => setHasMCQ(e.target.checked)}
+                  className="w-4 h-4 rounded text-purple-600 focus:ring-purple-600 dark:bg-[#20252C] dark:border-[#30363D]"
+                />
+                <div className="flex items-center gap-1.5">
+                  <HelpCircle className="w-4 h-4 text-purple-600" />
+                  <span>MCQ</span>
+                </div>
+              </label>
+            </div>
+            {!hasCoding && !hasMCQ && (
+              <div className="text-[11px] font-bold text-red-500 flex items-center gap-1 pt-1">
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span>Please select at least one contest type.</span>
+              </div>
+            )}
+          </div>
+
+          {/* Coding Problem Selector */}
+          {hasCoding && (
+            <div className="animate-fadeIn">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
+                  Assign Coding Problems ({formData.problem_ids.length} Selected)
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenCreateProblemModal}
+                    className="px-2 py-1 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold text-[10px] flex items-center gap-1 border border-[#22B573]/20 shadow-sm transition"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Create Coding Problem</span>
+                  </button>
+                  <span className="text-[#0757B8] dark:text-[#60A5FA] font-bold">Total: {allProblems.length} available</span>
+                </div>
+              </div>
+
+              <div className="relative mb-2">
+                <input
+                  type="text"
+                  value={problemSearch}
+                  onChange={(e) => setProblemSearch(e.target.value)}
+                  placeholder="Filter problems by title or topic..."
+                  className="w-full pl-8 pr-3 py-1.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs"
+                />
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl">
+                {filteredProblems.map((p) => {
+                  const pIdStr = String(p.id || p._id);
+                  const isSelected = formData.problem_ids.includes(pIdStr);
+
+                  return (
+                    <button
+                      key={pIdStr}
+                      type="button"
+                      onClick={() => handleToggleProblemSelect(pIdStr)}
+                      className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
+                        isSelected
+                          ? 'bg-[#DDF2FF] dark:bg-[#142A43] border-[#0757B8] text-[#0757B8] dark:text-[#60A5FA] font-bold shadow-sm'
+                          : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
+                      }`}
+                    >
+                      <div className="truncate pr-2">
+                        <div className="truncate font-semibold">{p.title}</div>
+                        <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                          p.difficulty === 'Easy' ? 'bg-[#22B573]/15 text-[#22B573]' : p.difficulty === 'Medium' ? 'bg-[#F2B705]/15 text-[#F2B705]' : 'bg-[#EF4444]/15 text-[#EF4444]'
+                        }`}>
+                          {p.difficulty}
+                        </span>
+                        {isSelected && <Check className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
-
-            <div className="relative mb-2">
-              <input
-                type="text"
-                value={problemSearch}
-                onChange={(e) => setProblemSearch(e.target.value)}
-                placeholder="Filter problems by title or topic..."
-                className="w-full pl-8 pr-3 py-1.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs"
-              />
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl">
-              {filteredProblems.map((p) => {
-                const pIdStr = String(p.id || p._id);
-                const isSelected = formData.problem_ids.includes(pIdStr);
-
-                return (
-                  <button
-                    key={pIdStr}
-                    type="button"
-                    onClick={() => handleToggleProblemSelect(pIdStr)}
-                    className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
-                      isSelected
-                        ? 'bg-[#DDF2FF] dark:bg-[#142A43] border-[#0757B8] text-[#0757B8] dark:text-[#60A5FA] font-bold shadow-sm'
-                        : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
-                    }`}
-                  >
-                    <div className="truncate pr-2">
-                      <div className="truncate font-semibold">{p.title}</div>
-                      <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
-                        p.difficulty === 'Easy' ? 'bg-[#22B573]/15 text-[#22B573]' : p.difficulty === 'Medium' ? 'bg-[#F2B705]/15 text-[#F2B705]' : 'bg-[#EF4444]/15 text-[#EF4444]'
-                      }`}>
-                        {p.difficulty}
-                      </span>
-                      {isSelected && <Check className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          )}
 
           {/* Technical MCQ Selector */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
-                Assign Technical MCQs ({formData.mcq_ids.length} Selected)
-              </label>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleOpenCreateMCQModal}
-                  className="px-2 py-1 rounded-xl bg-purple-600 hover:opacity-95 text-white font-bold text-[10px] flex items-center gap-1 border border-purple-600/20 shadow-sm transition"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>Create MCQ</span>
-                </button>
-                <span className="text-purple-600 dark:text-purple-400 font-bold">Total: {allMCQs.length} available</span>
+          {hasMCQ && (
+            <div className="animate-fadeIn">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
+                  Assign Technical MCQs ({formData.mcq_ids.length} Selected)
+                </label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleOpenImportMCQModal}
+                    className="px-2.5 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] flex items-center gap-1 border border-emerald-600/20 shadow-sm transition"
+                  >
+                    <FileSpreadsheet className="w-3 h-3" />
+                    <span>Import from Excel</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleOpenCreateMCQModal}
+                    className="px-2.5 py-1 rounded-xl bg-purple-600 hover:opacity-95 text-white font-bold text-[10px] flex items-center gap-1 border border-purple-600/20 shadow-sm transition"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Create MCQ</span>
+                  </button>
+                  <span className="text-purple-600 dark:text-purple-400 font-bold">Total: {allMCQs.length} available</span>
+                </div>
+              </div>
+
+              <div className="relative mb-2">
+                <input
+                  type="text"
+                  value={mcqSearch}
+                  onChange={(e) => setMcqSearch(e.target.value)}
+                  placeholder="Filter MCQs by question or topic..."
+                  className="w-full pl-8 pr-3 py-1.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs"
+                />
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl">
+                {filteredMCQs.map((m) => {
+                  const mIdStr = String(m.id || m._id);
+                  const isSelected = formData.mcq_ids.includes(mIdStr);
+
+                  return (
+                    <button
+                      key={mIdStr}
+                      type="button"
+                      onClick={() => handleToggleMCQSelect(mIdStr)}
+                      className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
+                        isSelected
+                          ? 'bg-purple-500/15 border-purple-500 text-purple-600 dark:text-purple-400 font-bold shadow-sm'
+                          : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
+                      }`}
+                    >
+                      <div className="truncate pr-2">
+                        <div className="truncate font-semibold">{m.question}</div>
+                        <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
+                      </div>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0" />}
+                    </button>
+                  );
+                })}
               </div>
             </div>
-
-            <div className="relative mb-2">
-              <input
-                type="text"
-                value={mcqSearch}
-                onChange={(e) => setMcqSearch(e.target.value)}
-                placeholder="Filter MCQs by question or topic..."
-                className="w-full pl-8 pr-3 py-1.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs"
-              />
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl">
-              {filteredMCQs.map((m) => {
-                const mIdStr = String(m.id || m._id);
-                const isSelected = formData.mcq_ids.includes(mIdStr);
-
-                return (
-                  <button
-                    key={mIdStr}
-                    type="button"
-                    onClick={() => handleToggleMCQSelect(mIdStr)}
-                    className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
-                      isSelected
-                        ? 'bg-purple-500/15 border-purple-500 text-purple-600 dark:text-purple-400 font-bold shadow-sm'
-                        : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
-                    }`}
-                  >
-                    <div className="truncate pr-2">
-                      <div className="truncate font-semibold">{m.question}</div>
-                      <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
-                    </div>
-                    {isSelected && <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0" />}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          )}
 
           {/* Published Checkbox */}
           <div className="pt-2">
@@ -1235,6 +1461,208 @@ export const ManageContests = () => {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* EXCEL IMPORT MCQ MODAL */}
+      <Modal
+        isOpen={isImportMCQModalOpen}
+        onClose={() => setIsImportMCQModalOpen(false)}
+        title="Import MCQs from Excel"
+        maxWidth="max-w-4xl"
+      >
+        <div className="space-y-5 text-xs">
+          {/* Instructions Box */}
+          <div className="p-4 rounded-2xl bg-[#0757B8]/10 border border-[#0757B8]/20 flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <HelpCircle className="w-5 h-5 text-[#0757B8] dark:text-[#60A5FA] shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <div className="font-bold text-[#0757B8] dark:text-[#60A5FA]">Required Excel Format (.xlsx)</div>
+                <p className="text-[#667085] dark:text-[#94A3B8] leading-relaxed">
+                  Columns: <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 text-purple-600 dark:text-purple-400 font-bold">Question</code>, <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">Option 1</code>, <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">Option 2</code>, <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">Option 3</code>, <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">Option 4</code>, and <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 text-emerald-600 dark:text-emerald-400 font-bold">Correct Option</code> (1, 2, 3, or 4).
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleDownloadTemplate}
+              className="px-3 py-1.5 rounded-xl bg-[#FFFFFF] dark:bg-[#20252C] hover:bg-[#F5F7FA] dark:hover:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] font-bold text-xs shadow-sm flex items-center gap-1.5 shrink-0 transition"
+              title="Download Sample Template"
+            >
+              <Download className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />
+              <span>Sample Template</span>
+            </button>
+          </div>
+
+          {/* File Upload / Selection Area */}
+          <div className="p-6 rounded-2xl border-2 border-dashed border-[#D9E0E8] dark:border-[#30363D] bg-[#F5F7FA] dark:bg-[#151A21] flex flex-col items-center justify-center text-center space-y-3">
+            <input
+              type="file"
+              ref={mcqFileInputRef}
+              accept=".xlsx,.xls"
+              onChange={handleMCQFileSelect}
+              className="hidden"
+              id="contest-mcq-excel-input"
+            />
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+              <Upload className="w-6 h-6" />
+            </div>
+            <div>
+              <label
+                htmlFor="contest-mcq-excel-input"
+                className="cursor-pointer px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-sm transition"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>{importMCQFile ? 'Choose Different File' : 'Select Excel File (.xlsx)'}</span>
+              </label>
+              {importMCQFile && (
+                <div className="mt-2 text-xs font-bold text-[#172033] dark:text-[#F8FAFC]">
+                  Selected: <span className="text-[#0757B8] dark:text-[#60A5FA] font-mono">{importMCQFile.name}</span> ({(importMCQFile.size / 1024).toFixed(1)} KB)
+                </div>
+              )}
+            </div>
+          </div>
+
+          {importMCQErrorMsg && (
+            <div className="p-3.5 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs flex items-center gap-2 font-bold">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{importMCQErrorMsg}</span>
+            </div>
+          )}
+
+          {importMCQLoading && (
+            <div className="p-8 text-center space-y-2">
+              <PageLoader text="Reading and validating Excel rows..." />
+            </div>
+          )}
+
+          {/* PREVIEW & VALIDATION SUMMARY */}
+          {importMCQPreviewData && (
+            <div className="space-y-4">
+              {/* Summary Cards */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="p-3.5 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] text-center">
+                  <div className="text-[10px] uppercase font-bold text-[#667085] dark:text-[#94A3B8]">Total Rows</div>
+                  <div className="text-xl font-extrabold text-[#172033] dark:text-[#F8FAFC] font-mono mt-0.5">
+                    {importMCQPreviewData.total_rows}
+                  </div>
+                </div>
+                <div className="p-3.5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 text-center">
+                  <div className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400">Valid</div>
+                  <div className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">
+                    {importMCQPreviewData.valid_count}
+                  </div>
+                </div>
+                <div className={`p-3.5 rounded-2xl border text-center ${importMCQPreviewData.invalid_count > 0 ? 'border-red-500/30 bg-red-500/10' : 'border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C]'}`}>
+                  <div className={`text-[10px] uppercase font-bold ${importMCQPreviewData.invalid_count > 0 ? 'text-[#EF4444]' : 'text-[#667085] dark:text-[#94A3B8]'}`}>
+                    Invalid
+                  </div>
+                  <div className={`text-xl font-extrabold font-mono mt-0.5 ${importMCQPreviewData.invalid_count > 0 ? 'text-[#EF4444]' : 'text-[#172033] dark:text-[#F8FAFC]'}`}>
+                    {importMCQPreviewData.invalid_count}
+                  </div>
+                </div>
+              </div>
+
+              {/* Invalid Rows Warning Table */}
+              {importMCQPreviewData.errors?.length > 0 && (
+                <div className="p-4 rounded-2xl border border-[#EF4444]/30 bg-[#EF4444]/10 space-y-2.5">
+                  <div className="flex items-center gap-2 font-bold text-[#EF4444]">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{importMCQPreviewData.errors.length} Invalid Row(s) Detected (Will NOT be imported):</span>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                    {importMCQPreviewData.errors.map((err, eIdx) => (
+                      <div key={eIdx} className="p-2 rounded-xl bg-[#FFFFFF] dark:bg-[#151A21] border border-[#EF4444]/30 text-xs flex items-start gap-2">
+                        <span className="px-1.5 py-0.5 rounded bg-[#EF4444]/20 text-[#EF4444] font-mono font-bold shrink-0">
+                          Row {err.row}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <span className="font-bold text-[#EF4444]">{err.reason}</span>
+                          {err.question && (
+                            <span className="text-[#667085] dark:text-[#94A3B8] ml-1 truncate block text-[11px]">
+                              "{err.question}"
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Valid Rows Preview Table */}
+              {importMCQPreviewData.valid_rows?.length > 0 && (
+                <div className="space-y-2">
+                  <div className="font-bold text-[#172033] dark:text-[#F8FAFC] flex items-center justify-between">
+                    <span>Valid MCQs Preview ({importMCQPreviewData.valid_rows.length})</span>
+                    <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">Ready to Import & Assign</span>
+                  </div>
+
+                  <div className="max-h-64 overflow-y-auto border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl divide-y divide-[#D9E0E8] dark:divide-[#30363D]">
+                    {importMCQPreviewData.valid_rows.map((row, rIdx) => (
+                      <div key={rIdx} className="p-3.5 bg-[#FFFFFF] dark:bg-[#20252C] hover:bg-[#F5F7FA] dark:hover:bg-[#151A21] transition space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-2 min-w-0">
+                            <span className="w-5 h-5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-mono font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">
+                              {rIdx + 1}
+                            </span>
+                            <span className="font-bold text-[#172033] dark:text-[#F8FAFC] leading-snug">{row.question}</span>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold shrink-0">
+                            Correct: Option {row.correctOption}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pl-7">
+                          {row.options.map((opt, oIdx) => {
+                            const isCorrect = row.correctOption === (oIdx + 1);
+                            return (
+                              <div
+                                key={oIdx}
+                                className={`p-2 rounded-xl border flex items-center gap-1.5 ${
+                                  isCorrect
+                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-bold'
+                                    : 'bg-[#F5F7FA] dark:bg-[#151A21] border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8]'
+                                }`}
+                              >
+                                <span className="font-mono text-[10px] opacity-75">{oIdx + 1}.</span>
+                                <span className="truncate">{opt}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Modal Action Buttons */}
+          <div className="pt-3 border-t border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={() => setIsImportMCQModalOpen(false)}
+              className="px-4 py-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] font-semibold transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleCommitImportMCQ}
+              disabled={importMCQCommitLoading || !importMCQPreviewData || importMCQPreviewData.valid_count === 0}
+              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-md shadow-emerald-600/20 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 transition"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>
+                {importMCQCommitLoading
+                  ? 'Importing MCQs...'
+                  : importMCQPreviewData
+                  ? `Import & Assign (${importMCQPreviewData.valid_count})`
+                  : 'Import & Assign MCQs'}
+              </span>
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

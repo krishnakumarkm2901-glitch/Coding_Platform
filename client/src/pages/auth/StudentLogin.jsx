@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { ThemeToggle } from '../../components/common/ThemeToggle';
-import { Code2, Lock, User, ArrowRight, AlertCircle, Sparkles, ShieldCheck } from 'lucide-react';
+import { Code2, Lock, User, ArrowRight, AlertCircle, ShieldCheck } from 'lucide-react';
 
 export const StudentLogin = () => {
   const [studentId, setStudentId] = useState('');
@@ -36,11 +36,6 @@ export const StudentLogin = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDemoLogin = (id) => {
-    setStudentId(id);
-    setPassword('student123');
   };
 
   return (
@@ -123,26 +118,6 @@ export const StudentLogin = () => {
               )}
             </button>
           </form>
-
-          {/* Quick Demo Accounts */}
-          <div className="mt-6 pt-6 border-t border-[#D9E0E8] dark:border-[#30363D]">
-            <div className="text-xs text-[#667085] dark:text-[#94A3B8] font-bold mb-2.5 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />
-              <span>Quick Demo Accounts (Password: student123)</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {['STU001', 'STU002', 'STU003'].map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => handleDemoLogin(id)}
-                  className="py-2 px-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] text-xs font-mono font-bold text-[#172033] dark:text-[#F8FAFC] border border-[#D9E0E8] dark:border-[#30363D] hover:border-[#0757B8] dark:hover:border-[#0066CC] transition text-center"
-                >
-                  {id}
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
 
       </div>

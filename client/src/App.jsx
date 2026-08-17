@@ -20,6 +20,7 @@ import { SubmissionsPage } from './pages/student/SubmissionsPage';
 import { MCQPage } from './pages/student/MCQPage';
 import { ContestList } from './pages/student/ContestList';
 import { ContestArena } from './pages/student/ContestArena';
+import { StudentContestResult } from './pages/student/StudentContestResult';
 import { LeaderboardPage } from './pages/student/LeaderboardPage';
 import { ProfilePage } from './pages/student/ProfilePage';
 import { NotificationsPage } from './pages/student/NotificationsPage';
@@ -33,6 +34,7 @@ import { ManageContests } from './pages/admin/ManageContests';
 import { ManageAttendance } from './pages/admin/ManageAttendance';
 import { ManageContestReports } from './pages/admin/ManageContestReports';
 import { ManageSubmissions } from './pages/admin/ManageSubmissions';
+import { ManageMCQs } from './pages/admin/ManageMCQs';
 import { AdminSettings } from './pages/admin/AdminSettings';
 import { ManageNotifications } from './pages/admin/ManageNotifications';
 
@@ -63,6 +65,7 @@ export default function App() {
               <Route path="/mcqs" element={<MCQPage />} />
               <Route path="/contests" element={<ContestList />} />
               <Route path="/contests/:id" element={<ContestArena />} />
+              <Route path="/contests/:id/result" element={<StudentContestResult />} />
               <Route path="/contests/:id/leaderboard" element={<LeaderboardPage />} />
               <Route path="/leaderboard" element={<LeaderboardPage />} />
               <Route path="/profile" element={<ProfilePage />} />
@@ -83,6 +86,7 @@ export default function App() {
               <Route path="dashboard" element={<AdminDashboard />} />
               <Route path="students" element={<ManageStudents />} />
               <Route path="problems" element={<ManageProblems />} />
+              <Route path="mcqs" element={<ManageMCQs />} />
               <Route path="contests" element={<ManageContests />} />
               <Route path="attendance" element={<ManageAttendance />} />
               <Route path="reports" element={<ManageContestReports />} />

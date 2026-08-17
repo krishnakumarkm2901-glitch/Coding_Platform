@@ -2,25 +2,19 @@ from flask import Blueprint, request, jsonify
 from models.db import get_db
 from utils.decorators import token_required, student_required
 from services.piston_service import execute_code, normalize_output
+from utils.time_utils import (
+    get_utc_now,
+    parse_to_utc_datetime,
+    format_utc_iso,
+    calculate_contest_status
+)
 from bson import ObjectId
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 contests_bp = Blueprint("contests", __name__)
 
 def parse_iso_or_datetime(val):
-    if not val:
-        return None
-    if isinstance(val, datetime):
-        if val.tzinfo is None:
-            return val.replace(tzinfo=timezone.utc)
-        return val
-    try:
-        dt = datetime.fromisoformat(str(val).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return None
+    return parse_to_utc_datetime(val)
 
 @contests_bp.route("", methods=["GET"])
 def get_contests():
@@ -36,22 +30,15 @@ def get_contests():
         if payload:
             user_id = payload.get("user_id")
 
-    now = datetime.now(timezone.utc)
+    now = get_utc_now()
     contests_list = []
 
     for c in contests_cursor:
         c_id = str(c["_id"])
-        start = parse_iso_or_datetime(c.get("start_time"))
-        end = parse_iso_or_datetime(c.get("end_time"))
+        start = parse_to_utc_datetime(c.get("start_time"))
+        end = parse_to_utc_datetime(c.get("end_time"))
         
-        status = "Upcoming"
-        if start and end:
-            if now < start:
-                status = "Upcoming"
-            elif start <= now <= end:
-                status = "Active"
-            else:
-                status = "Ended"
+        status = calculate_contest_status(start, end, now)
 
         has_joined = False
         user_score = 0
@@ -63,13 +50,21 @@ def get_contests():
 
         participants_count = db.contest_participants.count_documents({"contest_id": c_id})
 
+        c_type = c.get("contestType") or c.get("contest_type")
+        if not c_type:
+            has_p = bool(c.get("problem_ids", []))
+            has_m = bool(c.get("mcq_ids", []))
+            c_type = "BOTH" if (has_p and has_m) else "CODING" if has_p else "MCQ"
+
         contests_list.append({
             "id": c_id,
             "title": c.get("title"),
             "description": c.get("description", ""),
-            "start_time": start.isoformat() if start else None,
-            "end_time": end.isoformat() if end else None,
+            "start_time": format_utc_iso(start),
+            "end_time": format_utc_iso(end),
             "duration_minutes": c.get("duration_minutes", 60),
+            "contest_type": c_type,
+            "contestType": c_type,
             "problems_count": len(c.get("problem_ids", [])),
             "mcqs_count": len(c.get("mcq_ids", [])),
             "total_points": c.get("total_points", 100),
@@ -79,12 +74,92 @@ def get_contests():
             "user_score": user_score
         })
 
-    return jsonify({"success": True, "contests": contests_list}), 200
+    return jsonify({
+        "success": True, 
+        "contests": contests_list,
+        "server_time": format_utc_iso(now)
+    }), 200
+
+import random
+
+def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None):
+    """
+    Fetch or generate a fixed, randomized subset of MCQs for a student.
+    - If pool is 40 questions, selects 20 questions (or contest.mcqs_per_student).
+    - Shuffles the selected questions into a random order.
+    - Persists the assigned question IDs so the exact same 20 questions and order remain fixed.
+    """
+    if now is None:
+        now = get_utc_now()
+
+    contest_id_str = str(contest.get("_id") or contest.get("id"))
+    all_mcq_ids = [str(mid) for mid in contest.get("mcq_ids", []) if mid]
+    if not all_mcq_ids:
+        return []
+
+    # 1. Check if student already has assigned MCQs in contest_assigned_questions
+    assigned_doc = db.contest_assigned_questions.find_one({
+        "contest_id": contest_id_str,
+        "user_id": user_id
+    })
+    if assigned_doc and assigned_doc.get("question_ids"):
+        return assigned_doc["question_ids"]
+
+    # Also check existing contest_participants doc
+    participant = db.contest_participants.find_one({
+        "contest_id": contest_id_str,
+        "user_id": user_id
+    })
+    if participant and participant.get("assigned_mcq_ids"):
+        return participant["assigned_mcq_ids"]
+
+    # 2. Determine target count (default 20, or min(20, total) if pool is smaller, or custom mcqs_per_student)
+    target_count = int(contest.get("mcqs_per_student") or 20)
+    if target_count <= 0 or target_count > len(all_mcq_ids):
+        target_count = min(20, len(all_mcq_ids)) if len(all_mcq_ids) >= 20 else len(all_mcq_ids)
+
+    # 3. Randomly select target_count questions from the pool
+    if len(all_mcq_ids) > target_count:
+        selected_ids = random.sample(all_mcq_ids, target_count)
+    else:
+        selected_ids = list(all_mcq_ids)
+
+    # 4. Shuffle the selected subset so question #1 is randomized across candidates
+    random.shuffle(selected_ids)
+
+    # 5. Persist with atomic $setOnInsert upsert to prevent race conditions during concurrent loads
+    try:
+        db.contest_assigned_questions.update_one(
+            {"contest_id": contest_id_str, "user_id": user_id},
+            {"$setOnInsert": {
+                "contest_id": contest_id_str,
+                "user_id": user_id,
+                "student_id": student_id,
+                "question_ids": selected_ids,
+                "assigned_at": now
+            }},
+            upsert=True
+        )
+    except Exception:
+        pass
+
+    # Read back to ensure we always return the stored winning sequence
+    stored = db.contest_assigned_questions.find_one({"contest_id": contest_id_str, "user_id": user_id})
+    final_ids = stored.get("question_ids", selected_ids) if stored else selected_ids
+
+    # Update participant if exists
+    if participant:
+        db.contest_participants.update_one(
+            {"_id": participant["_id"]},
+            {"$set": {"assigned_mcq_ids": final_ids}}
+        )
+
+    return final_ids
 
 @contests_bp.route("/<contest_id>", methods=["GET"])
 @token_required
 def get_contest_details(contest_id):
-    """Get full details of contest, including problems and MCQs if joined/started."""
+    """Get full details of contest, including problems and personalized MCQs if joined/started."""
     db = get_db()
     if not ObjectId.is_valid(contest_id):
         return jsonify({"error": "Invalid contest ID", "success": False}), 400
@@ -93,21 +168,24 @@ def get_contest_details(contest_id):
     if not contest:
         return jsonify({"error": "Contest not found", "success": False}), 404
 
-    now = datetime.now(timezone.utc)
-    start = parse_iso_or_datetime(contest.get("start_time"))
-    end = parse_iso_or_datetime(contest.get("end_time"))
+    now = get_utc_now()
+    start = parse_to_utc_datetime(contest.get("start_time"))
+    end = parse_to_utc_datetime(contest.get("end_time"))
 
-    status = "Upcoming"
-    if start and end:
-        if now < start:
-            status = "Upcoming"
-        elif start <= now <= end:
-            status = "Active"
-        else:
-            status = "Ended"
+    status = calculate_contest_status(start, end, now)
+
+    c_type = contest.get("contestType") or contest.get("contest_type")
+    if not c_type:
+        has_p = bool(contest.get("problem_ids", []))
+        has_m = bool(contest.get("mcq_ids", []))
+        c_type = "BOTH" if (has_p and has_m) else "CODING" if has_p else "MCQ"
+
+    # Time until start (if upcoming)
+    time_to_start_seconds = max(0, int((start - now).total_seconds())) if (start and now < start) else 0
 
     # Check participant status
     user_id = request.current_user["_id"]
+    user_role = request.current_user.get("role", "STUDENT")
     participant = db.contest_participants.find_one({"contest_id": contest_id, "user_id": user_id})
 
     is_terminated = False
@@ -125,7 +203,7 @@ def get_contest_details(contest_id):
     duration_secs = int(contest.get("duration_minutes", 60)) * 60
     remaining_seconds = duration_secs
     if participant and participant.get("joined_at"):
-        joined_at = parse_iso_or_datetime(participant.get("joined_at"))
+        joined_at = parse_to_utc_datetime(participant.get("joined_at"))
         if joined_at:
             elapsed = (now - joined_at).total_seconds()
             remaining_seconds = max(0, int(duration_secs - elapsed))
@@ -156,20 +234,30 @@ def get_contest_details(contest_id):
                 "points": 50
             })
 
-    # Fetch MCQs
+    # Fetch Personalized Assigned MCQs for student (or all if admin)
     mcqs = []
-    mcq_ids = [ObjectId(mid) for mid in contest.get("mcq_ids", []) if ObjectId.is_valid(mid)]
-    if mcq_ids:
-        mcq_docs = list(db.mcqs.find({"_id": {"$in": mcq_ids}}))
-        for m in mcq_docs:
-            mcqs.append({
-                "id": str(m["_id"]),
-                "question": m.get("question"),
-                "options": m.get("options", []),
-                "topic": m.get("topic"),
-                "difficulty": m.get("difficulty", "Easy"),
-                "points": 10
-            })
+    if user_role == "ADMIN":
+        assigned_mcq_ids = [str(mid) for mid in contest.get("mcq_ids", []) if mid]
+    else:
+        assigned_mcq_ids = get_or_assign_student_mcqs(db, contest, user_id, request.current_user.get("student_id"), now)
+
+    if assigned_mcq_ids:
+        valid_obj_ids = [ObjectId(mid) for mid in assigned_mcq_ids if ObjectId.is_valid(mid)]
+        mcq_docs = list(db.mcqs.find({"_id": {"$in": valid_obj_ids}}))
+        mcq_map = {str(m["_id"]): m for m in mcq_docs}
+
+        # Preserve the EXACT shuffled assigned sequence
+        for mid in assigned_mcq_ids:
+            m = mcq_map.get(mid)
+            if m:
+                mcqs.append({
+                    "id": str(m["_id"]),
+                    "question": m.get("question"),
+                    "options": m.get("options", []),
+                    "topic": m.get("topic"),
+                    "difficulty": m.get("difficulty", "Easy"),
+                    "points": 10
+                })
 
     return jsonify({
         "success": True,
@@ -177,10 +265,14 @@ def get_contest_details(contest_id):
             "id": contest_id,
             "title": contest.get("title"),
             "description": contest.get("description"),
-            "start_time": start.isoformat() if start else None,
-            "end_time": end.isoformat() if end else None,
+            "start_time": format_utc_iso(start),
+            "end_time": format_utc_iso(end),
             "duration_minutes": contest.get("duration_minutes", 60),
+            "contest_type": c_type,
+            "contestType": c_type,
             "status": status,
+            "server_time": format_utc_iso(now),
+            "time_to_start_seconds": time_to_start_seconds,
             "remaining_seconds": remaining_seconds,
             "is_registered": bool(participant),
             "has_submitted": participant.get("submitted", False) if participant else False,
@@ -205,6 +297,28 @@ def join_contest(contest_id):
     if not contest or not contest.get("is_published"):
         return jsonify({"error": "Contest not found or unpublished", "success": False}), 404
 
+    now = get_utc_now()
+    start = parse_to_utc_datetime(contest.get("start_time"))
+    end = parse_to_utc_datetime(contest.get("end_time"))
+
+    # Guard: Cannot join before start time
+    if start and now < start:
+        time_diff = int((start - now).total_seconds())
+        return jsonify({
+            "error": "Contest has not started yet. Please wait until the scheduled start time.",
+            "status": "Upcoming",
+            "time_to_start_seconds": max(0, time_diff),
+            "success": False
+        }), 403
+
+    # Guard: Cannot join after end time
+    if end and now > end:
+        return jsonify({
+            "error": "Contest has already ended. Joining is no longer allowed.",
+            "status": "Past",
+            "success": False
+        }), 403
+
     user = request.current_user
     user_id = user["_id"]
 
@@ -227,10 +341,9 @@ def join_contest(contest_id):
                 "success": False
             }), 403
 
-    now = datetime.now(timezone.utc)
-    end = parse_iso_or_datetime(contest.get("end_time"))
     duration_secs = int(contest.get("duration_minutes", 60)) * 60
     remaining_seconds = duration_secs
+    assigned_mcq_ids = get_or_assign_student_mcqs(db, contest, user_id, user.get("student_id"), now)
 
     if not existing:
         db.contest_participants.insert_one({
@@ -240,6 +353,7 @@ def join_contest(contest_id):
             "student_name": user.get("name"),
             "department": user.get("department", "CSE"),
             "joined_at": now,
+            "assigned_mcq_ids": assigned_mcq_ids,
             "status": "IN_PROGRESS",
             "score": 0,
             "problems_solved": 0,
@@ -255,14 +369,14 @@ def join_contest(contest_id):
             ]
         })
     else:
-        joined_at = parse_iso_or_datetime(existing.get("joined_at"))
+        joined_at = parse_to_utc_datetime(existing.get("joined_at"))
         if joined_at:
             elapsed = (now - joined_at).total_seconds()
             remaining_seconds = max(0, int(duration_secs - elapsed))
         else:
             db.contest_participants.update_one(
                 {"_id": existing["_id"]},
-                {"$set": {"joined_at": now}}
+                {"$set": {"joined_at": now, "assigned_mcq_ids": assigned_mcq_ids}}
             )
 
     if end:
@@ -294,7 +408,7 @@ def terminate_contest(contest_id):
         "event_type": "TERMINATION_VIOLATION",
         "detail": f"Contest Terminated: {detail}",
         "reason": reason,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": get_utc_now().isoformat()
     }
 
     db.contest_participants.update_one(
@@ -304,7 +418,7 @@ def terminate_contest(contest_id):
                 "status": "AUTO_TERMINATED",
                 "submitted": True,
                 "auto_terminated": True,
-                "terminated_at": datetime.now(timezone.utc),
+                "terminated_at": get_utc_now(),
                 "termination_reason": detail
             },
             "$push": {"anti_cheat_logs": event_record}
@@ -351,7 +465,7 @@ def log_anti_cheat_event(contest_id):
     event_record = {
         "event_type": event_type,
         "detail": event_detail,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": get_utc_now().isoformat()
     }
 
     db.contest_participants.update_one(
@@ -376,13 +490,17 @@ def submit_contest(contest_id):
     if not contest:
         return jsonify({"error": "Contest not found", "success": False}), 404
 
-    now = datetime.now(timezone.utc)
-    end = parse_iso_or_datetime(contest.get("end_time"))
+    now = get_utc_now()
+    start = parse_to_utc_datetime(contest.get("start_time"))
+    end = parse_to_utc_datetime(contest.get("end_time"))
     
-    # Allow 15 seconds grace period for network delays
-    if end and now > (end + datetime.resolution * 15):
-        # Even if late, accept auto-submission with expired notice
-        pass
+    # Submissions not allowed before start
+    if start and now < start:
+        return jsonify({"error": "Contest has not started yet. Submissions are not accepted.", "success": False}), 403
+
+    # Allow 60 seconds grace period for network delays / auto-submission flight
+    if end and now > (end + timedelta(seconds=60)):
+        return jsonify({"error": "Contest has already ended. Submissions are no longer accepted.", "success": False}), 403
 
     user = request.current_user
     user_id = user["_id"]
@@ -390,15 +508,28 @@ def submit_contest(contest_id):
 
     mcq_answers = data.get("mcq_answers", {})
     code_solutions = data.get("code_solutions", {}) # dict of problem_id -> {language, code}
+    # Also support coding_submissions array
+    coding_submissions = data.get("coding_submissions", [])
+    if coding_submissions and isinstance(coding_submissions, list):
+        for sub in coding_submissions:
+            pid = str(sub.get("problem_id", ""))
+            if pid:
+                code_solutions[pid] = {
+                    "language": sub.get("language", "python"),
+                    "code": sub.get("code", "")
+                }
 
     total_score = 0
     mcqs_correct = 0
     problems_solved = 0
 
     # 1. Evaluate MCQs
+    participant = db.contest_participants.find_one({"contest_id": contest_id, "user_id": user_id})
+    assigned_mcq_ids = participant.get("assigned_mcq_ids") if participant else get_or_assign_student_mcqs(db, contest, user_id, user.get("student_id"), now)
+    
     if mcq_answers:
-        mcq_ids = [ObjectId(mid) for mid in mcq_answers.keys() if ObjectId.is_valid(mid)]
-        mcq_docs = list(db.mcqs.find({"_id": {"$in": mcq_ids}}))
+        mcq_ids_eval = [ObjectId(mid) for mid in assigned_mcq_ids if ObjectId.is_valid(mid)]
+        mcq_docs = list(db.mcqs.find({"_id": {"$in": mcq_ids_eval}}))
         for m in mcq_docs:
             mid_str = str(m["_id"])
             if str(mcq_answers.get(mid_str, "")).strip().lower() == str(m.get("correct_answer", "")).strip().lower():
@@ -443,16 +574,28 @@ def submit_contest(contest_id):
             total_score += partial_points
             coding_results[pid] = {"status": "Partial/Wrong", "passed": passed, "total": total_tcs}
 
+    mcq_score = mcqs_correct * 10
+    coding_score = max(total_score - mcq_score, 0)
+    total_contest_mcqs = len(assigned_mcq_ids)
+    total_contest_problems = len(contest.get("problem_ids", []))
+
     # Update participant record
     db.contest_participants.update_one(
         {"contest_id": contest_id, "user_id": user_id},
         {
             "$set": {
                 "score": total_score,
+                "mcq_score": mcq_score,
+                "coding_score": coding_score,
                 "problems_solved": problems_solved,
+                "total_problems": total_contest_problems,
                 "mcqs_correct": mcqs_correct,
+                "total_mcqs": total_contest_mcqs,
+                "mcq_answers": mcq_answers,
+                "code_solutions": code_solutions,
+                "coding_results": coding_results,
                 "submitted": True,
-                "submitted_at": datetime.now(timezone.utc)
+                "submitted_at": get_utc_now()
             }
         },
         upsert=True
@@ -462,9 +605,204 @@ def submit_contest(contest_id):
         "success": True,
         "message": "Contest submitted successfully",
         "score": total_score,
+        "mcq_score": mcq_score,
+        "coding_score": coding_score,
         "problems_solved": problems_solved,
         "mcqs_correct": mcqs_correct,
-        "coding_results": coding_results
+        "coding_results": coding_results,
+        "result": {
+            "total_score": total_score,
+            "mcq_score": mcq_score,
+            "coding_score": coding_score,
+            "problems_solved": problems_solved,
+            "mcqs_correct": mcqs_correct,
+            "coding_results": coding_results
+        }
+    }), 200
+
+@contests_bp.route("/<contest_id>/my-report", methods=["GET"])
+@student_required
+def get_student_contest_report(contest_id):
+    """
+    Retrieve personal contest report for the authenticated student only.
+    Access Control: Only the student's own performance is returned.
+    No export/download capability is provided.
+    """
+    db = get_db()
+    if not ObjectId.is_valid(contest_id):
+        return jsonify({"error": "Invalid contest ID", "success": False}), 400
+
+    contest = db.contests.find_one({"_id": ObjectId(contest_id)})
+    if not contest:
+        return jsonify({"error": "Contest not found", "success": False}), 404
+
+    user = request.current_user
+    user_id = user["_id"]
+
+    participant = db.contest_participants.find_one({"contest_id": contest_id, "user_id": user_id})
+    if not participant:
+        return jsonify({
+            "error": "No participation or submission record found for this contest.",
+            "success": False
+        }), 404
+
+    # Calculate student rank among all participants
+    all_participants = list(db.contest_participants.find({"contest_id": contest_id}).sort([
+        ("score", -1),
+        ("submitted_at", 1)
+    ]))
+    student_rank = 1
+    for idx, p in enumerate(all_participants, 1):
+        if str(p.get("user_id")) == str(user_id):
+            student_rank = idx
+            break
+
+    # Fetch contest MCQs
+    assigned_mcq_ids = participant.get("assigned_mcq_ids")
+    if not assigned_mcq_ids:
+        assigned_mcq_ids = get_or_assign_student_mcqs(db, contest, user_id, user.get("student_id"), get_utc_now())
+    
+    valid_mcq_ids = [ObjectId(mid) for mid in assigned_mcq_ids if ObjectId.is_valid(str(mid))]
+    mcq_docs_list = list(db.mcqs.find({"_id": {"$in": valid_mcq_ids}}))
+    mcq_map = {str(m["_id"]): m for m in mcq_docs_list}
+    mcq_docs = [mcq_map[mid] for mid in assigned_mcq_ids if mid in mcq_map]
+
+    saved_answers = participant.get("mcq_answers", {})
+    
+    mcq_breakdowns = []
+    mcqs_correct_count = 0
+    for idx, m in enumerate(mcq_docs, 1):
+        mid_str = str(m["_id"])
+        selected = saved_answers.get(mid_str)
+        correct = str(m.get("correct_answer", "")).strip()
+        is_correct = bool(selected and str(selected).strip().lower() == correct.lower())
+        if is_correct:
+            mcqs_correct_count += 1
+        
+        mcq_breakdowns.append({
+            "id": mid_str,
+            "question_number": idx,
+            "title": m.get("title", f"Question {idx}"),
+            "question": m.get("question", ""),
+            "options": m.get("options", []),
+            "selected_option": selected or "Not Answered",
+            "correct_option": correct,
+            "is_correct": is_correct,
+            "explanation": m.get("explanation", ""),
+            "marks_obtained": 10 if is_correct else 0,
+            "total_marks": 10
+        })
+
+    # Fetch contest Problems
+    prob_ids = contest.get("problem_ids", [])
+    problems = []
+    for pid in prob_ids:
+        if ObjectId.is_valid(str(pid)):
+            p_doc = db.problems.find_one({"_id": ObjectId(str(pid))})
+            if p_doc: problems.append(p_doc)
+        else:
+            p_doc = db.problems.find_one({"id": pid})
+            if p_doc: problems.append(p_doc)
+
+    coding_results = participant.get("coding_results", {})
+    code_solutions = participant.get("code_solutions", {})
+    problem_breakdowns = []
+    total_passed_tc = 0
+    total_contest_tc = 0
+
+    for idx, prob in enumerate(problems, 1):
+        p_id = str(prob["_id"])
+        res = coding_results.get(p_id, {})
+        sol = code_solutions.get(p_id, {})
+        tcs = prob.get("test_cases", [])
+        total_tcs = len(tcs) or 4
+        passed_tcs = res.get("passed", total_tcs if res.get("status") == "Accepted" else 0)
+        total_passed_tc += passed_tcs
+        total_contest_tc += total_tcs
+
+        status = res.get("status", "Accepted" if participant.get("problems_solved", 0) >= idx else "Not Attempted")
+        problem_breakdowns.append({
+            "problem_id": p_id,
+            "problem_number": idx,
+            "title": prob.get("title", f"Problem {idx}"),
+            "difficulty": prob.get("difficulty", "Medium"),
+            "topic": prob.get("topic", "Algorithms"),
+            "status": status,
+            "passed_test_cases": passed_tcs,
+            "total_test_cases": total_tcs,
+            "language": sol.get("language", "python"),
+            "code": sol.get("code", "")
+        })
+
+    total_mcqs = len(mcq_docs) or len(contest.get("mcq_ids", []))
+    total_problems = len(problems) or len(prob_ids)
+    mcq_score = float(participant.get("mcq_score", mcqs_correct_count * 10))
+    coding_score = float(participant.get("coding_score", max(float(participant.get("score", 0)) - mcq_score, 0.0)))
+    overall_score = float(participant.get("score", mcq_score + coding_score))
+    
+    # Calculate time taken
+    joined_at = participant.get("joined_at")
+    submitted_at = participant.get("submitted_at")
+    if isinstance(joined_at, datetime) and isinstance(submitted_at, datetime):
+        time_taken_sec = max(int((submitted_at - joined_at).total_seconds()), 60)
+    else:
+        time_taken_sec = 600
+    mins = time_taken_sec // 60
+    secs = time_taken_sec % 60
+    time_taken_formatted = f"{mins}m {secs:02d}s"
+
+    auto_terminated = bool(participant.get("auto_terminated") or participant.get("status") == "AUTO_TERMINATED")
+
+    return jsonify({
+        "success": True,
+        "contest": {
+            "id": str(contest["_id"]),
+            "title": contest.get("title"),
+            "description": contest.get("description", ""),
+            "duration_minutes": contest.get("duration_minutes", 60),
+            "start_time": format_utc_iso(parse_to_utc_datetime(contest.get("start_time"))),
+            "end_time": format_utc_iso(parse_to_utc_datetime(contest.get("end_time"))),
+            "total_mcqs": total_mcqs,
+            "total_problems": total_problems
+        },
+        "student": {
+            "name": user.get("name"),
+            "student_id": user.get("student_id"),
+            "department": user.get("department", "CSE")
+        },
+        "overall": {
+            "overall_score": overall_score,
+            "mcq_score": mcq_score,
+            "coding_score": coding_score,
+            "rank": student_rank,
+            "total_candidates": len(all_participants),
+            "time_taken": time_taken_formatted,
+            "time_taken_seconds": time_taken_sec,
+            "status": "COMPLETED" if not auto_terminated else "AUTO_TERMINATED",
+            "submitted_at": format_utc_iso(submitted_at) if submitted_at else None
+        },
+        "mcq": {
+            "mcq_score": mcq_score,
+            "mcqs_correct": mcqs_correct_count,
+            "total_mcqs": total_mcqs,
+            "accuracy_percentage": round((mcqs_correct_count / max(total_mcqs, 1)) * 100, 1) if total_mcqs > 0 else 0.0,
+            "breakdowns": mcq_breakdowns
+        },
+        "coding": {
+            "coding_score": coding_score,
+            "problems_solved": participant.get("problems_solved", sum(1 for p in problem_breakdowns if p["status"] == "Accepted")),
+            "total_problems": total_problems,
+            "passed_test_cases": total_passed_tc,
+            "total_test_cases": total_contest_tc or (total_problems * 4),
+            "coding_percentage": round((total_passed_tc / max(total_contest_tc or (total_problems * 4), 1)) * 100, 1) if total_problems > 0 else 0.0,
+            "breakdowns": problem_breakdowns
+        },
+        "anti_cheat": {
+            "status": "AUTO_TERMINATED" if auto_terminated else ("FLAGGED" if participant.get("anti_cheat_logs") else "CLEAN"),
+            "auto_terminated": auto_terminated,
+            "termination_reason": participant.get("termination_reason", ""),
+            "flags_count": len(participant.get("anti_cheat_logs", []))
+        }
     }), 200
 
 @contests_bp.route("/<contest_id>/leaderboard", methods=["GET"])
