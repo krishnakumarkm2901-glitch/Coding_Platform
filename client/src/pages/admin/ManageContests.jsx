@@ -483,7 +483,7 @@ export const ManageContests = () => {
         // Automatically assign all imported MCQs to current contest form
         setFormData((prev) => ({
           ...prev,
-          mcq_ids: Array.from(new Set([...prev.mcq_ids, ...importedIds]))
+          mcq_ids: importedIds
         }));
 
         setIsImportMCQModalOpen(false);
@@ -693,6 +693,19 @@ export const ManageContests = () => {
       return;
     }
 
+    if (hasMCQ) {
+      const mcqCount = formData.mcq_ids?.length || 0;
+      const perStudent = Number(formData.mcqs_per_student || 20);
+      if (perStudent <= 0) {
+        setErrorMsg('Questions per student must be greater than 0.');
+        return;
+      }
+      if (perStudent > mcqCount) {
+        setErrorMsg(`Questions per student (${perStudent}) cannot exceed the configured question count (${mcqCount}).`);
+        return;
+      }
+    }
+
     const contestType = (hasCoding && hasMCQ) ? 'BOTH' : hasCoding ? 'CODING' : 'MCQ';
     const payload = {
       ...formData,
@@ -837,7 +850,7 @@ export const ManageContests = () => {
                     </div>
                     <div>
                       <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">MCQs</div>
-                      <div className="font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">{mcqCount} MCQs & {c.mcqs_per_student || 20} Questions/Student</div>
+                      <div className="font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">{mcqCount} MCQs Available & {c.mcqs_per_student || 20} Questions/Student</div>
                     </div>
                     <div>
                       <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Duration</div>

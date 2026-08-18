@@ -54,7 +54,10 @@ def get_student_profile():
 
     # Contests
     total_contests = db.contests.count_documents({"is_published": True})
-    user_participations = list(db.contest_participants.find({"user_id": user_id}))
+    user_id_objs = [str(user_id)]
+    if ObjectId.is_valid(user_id):
+        user_id_objs.append(ObjectId(user_id))
+    user_participations = list(db.contest_participants.find({"user_id": {"$in": user_id_objs}}))
     joined_contests_count = len(user_participations)
     total_contest_score = sum([p.get("score", 0) for p in user_participations])
 
@@ -80,7 +83,16 @@ def get_student_profile():
     for c in contests_cursor:
         c_id = str(c["_id"])
         # Check if student joined
-        participant = db.contest_participants.find_one({"contest_id": c_id, "user_id": user_id})
+        user_id_objs = [str(user_id)]
+        if ObjectId.is_valid(user_id):
+            user_id_objs.append(ObjectId(user_id))
+        c_id_objs = [c_id]
+        if ObjectId.is_valid(c_id):
+            c_id_objs.append(ObjectId(c_id))
+        participant = db.contest_participants.find_one({
+            "contest_id": {"$in": c_id_objs},
+            "user_id": {"$in": user_id_objs}
+        })
         
         start = parse_to_utc_datetime(c.get("start_time"))
         end = parse_to_utc_datetime(c.get("end_time"))

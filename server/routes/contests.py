@@ -121,18 +121,26 @@ def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None):
     if not all_mcq_ids:
         return []
 
+    user_id_objs = [str(user_id)]
+    if ObjectId.is_valid(user_id):
+        user_id_objs.append(ObjectId(user_id))
+    
+    contest_id_objs = [contest_id_str]
+    if ObjectId.is_valid(contest_id_str):
+        contest_id_objs.append(ObjectId(contest_id_str))
+
     # 1. Check if student already has assigned MCQs in contest_assigned_questions
     assigned_doc = db.contest_assigned_questions.find_one({
-        "contest_id": contest_id_str,
-        "user_id": user_id
+        "contest_id": {"$in": contest_id_objs},
+        "user_id": {"$in": user_id_objs}
     })
     if assigned_doc and assigned_doc.get("question_ids"):
         return assigned_doc["question_ids"]
 
     # Also check existing contest_participants doc
     participant = db.contest_participants.find_one({
-        "contest_id": contest_id_str,
-        "user_id": user_id
+        "contest_id": {"$in": contest_id_objs},
+        "user_id": {"$in": user_id_objs}
     })
     if participant and participant.get("assigned_mcq_ids"):
         return participant["assigned_mcq_ids"]
@@ -151,24 +159,23 @@ def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None):
     # 4. Shuffle the selected subset so question #1 is randomized across candidates
     random.shuffle(selected_ids)
 
-    # 5. Persist with atomic $setOnInsert upsert to prevent race conditions during concurrent loads
+    # 5. Persist
     try:
-        db.contest_assigned_questions.update_one(
-            {"contest_id": contest_id_str, "user_id": user_id},
-            {"$setOnInsert": {
-                "contest_id": contest_id_str,
-                "user_id": user_id,
-                "student_id": student_id,
-                "question_ids": selected_ids,
-                "assigned_at": now
-            }},
-            upsert=True
-        )
+        db.contest_assigned_questions.insert_one({
+            "contest_id": contest_id_str,
+            "user_id": str(user_id),
+            "student_id": student_id,
+            "question_ids": selected_ids,
+            "assigned_at": now
+        })
     except Exception:
         pass
 
     # Read back to ensure we always return the stored winning sequence
-    stored = db.contest_assigned_questions.find_one({"contest_id": contest_id_str, "user_id": user_id})
+    stored = db.contest_assigned_questions.find_one({
+        "contest_id": {"$in": contest_id_objs},
+        "user_id": {"$in": user_id_objs}
+    })
     final_ids = stored.get("question_ids", selected_ids) if stored else selected_ids
 
     # Update participant if exists
@@ -210,7 +217,18 @@ def get_contest_details(contest_id):
     # Check participant status
     user_id = request.current_user["_id"]
     user_role = request.current_user.get("role", "STUDENT")
-    participant = db.contest_participants.find_one({"contest_id": contest_id, "user_id": user_id})
+    
+    user_id_objs = [str(user_id)]
+    if ObjectId.is_valid(user_id):
+        user_id_objs.append(ObjectId(user_id))
+    contest_id_objs = [contest_id]
+    if ObjectId.is_valid(contest_id):
+        contest_id_objs.append(ObjectId(contest_id))
+
+    participant = db.contest_participants.find_one({
+        "contest_id": {"$in": contest_id_objs},
+        "user_id": {"$in": user_id_objs}
+    })
 
     is_terminated = False
     termination_reason = ""
@@ -347,7 +365,17 @@ def join_contest(contest_id):
     user = request.current_user
     user_id = user["_id"]
 
-    existing = db.contest_participants.find_one({"contest_id": contest_id, "user_id": user_id})
+    user_id_objs = [str(user_id)]
+    if ObjectId.is_valid(user_id):
+        user_id_objs.append(ObjectId(user_id))
+    contest_id_objs = [contest_id]
+    if ObjectId.is_valid(contest_id):
+        contest_id_objs.append(ObjectId(contest_id))
+
+    existing = db.contest_participants.find_one({
+        "contest_id": {"$in": contest_id_objs},
+        "user_id": {"$in": user_id_objs}
+    })
     if existing:
         if existing.get("auto_terminated") or existing.get("status") == "AUTO_TERMINATED":
             return jsonify({
@@ -549,7 +577,17 @@ def submit_contest(contest_id):
     problems_solved = 0
 
     # 1. Evaluate MCQs
-    participant = db.contest_participants.find_one({"contest_id": contest_id, "user_id": user_id})
+    user_id_objs = [str(user_id)]
+    if ObjectId.is_valid(user_id):
+        user_id_objs.append(ObjectId(user_id))
+    contest_id_objs = [contest_id]
+    if ObjectId.is_valid(contest_id):
+        contest_id_objs.append(ObjectId(contest_id))
+
+    participant = db.contest_participants.find_one({
+        "contest_id": {"$in": contest_id_objs},
+        "user_id": {"$in": user_id_objs}
+    })
     assigned_mcq_ids = participant.get("assigned_mcq_ids") if participant else get_or_assign_student_mcqs(db, contest, user_id, user.get("student_id"), now)
     
     if mcq_answers:
@@ -674,7 +712,17 @@ def get_student_contest_report(contest_id):
     user = request.current_user
     user_id = user["_id"]
 
-    participant = db.contest_participants.find_one({"contest_id": contest_id, "user_id": user_id})
+    user_id_objs = [str(user_id)]
+    if ObjectId.is_valid(user_id):
+        user_id_objs.append(ObjectId(user_id))
+    contest_id_objs = [contest_id]
+    if ObjectId.is_valid(contest_id):
+        contest_id_objs.append(ObjectId(contest_id))
+
+    participant = db.contest_participants.find_one({
+        "contest_id": {"$in": contest_id_objs},
+        "user_id": {"$in": user_id_objs}
+    })
     if not participant:
         return jsonify({
             "error": "No participation or submission record found for this contest.",
@@ -905,8 +953,11 @@ def get_global_leaderboard():
 
     for r in results:
         uid = r["_id"]
+        uid_objs = [str(uid)]
+        if ObjectId.is_valid(uid):
+            uid_objs.append(ObjectId(uid))
         # Fetch contest score
-        contest_parts = list(db.contest_participants.find({"user_id": uid}))
+        contest_parts = list(db.contest_participants.find({"user_id": {"$in": uid_objs}}))
         contest_score = sum([cp.get("score", 0) for cp in contest_parts])
         total_score = (r.get("problems_solved", 0) * 10) + contest_score
 
