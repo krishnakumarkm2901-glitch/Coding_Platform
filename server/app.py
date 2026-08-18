@@ -52,7 +52,49 @@ def create_app():
             "status": "Online",
             "version": "1.0.0"
         })
+    @app.route("/api/clean-database", methods=["GET", "POST"])
+    def clean_database():
+        from models.db import get_db
+        db = get_db()
+        if db is None:
+            return jsonify({"error": "Database not connected", "success": False}), 500
 
+        # Keep ONLY admin users (role == 'ADMIN')
+        res_users = db.users.delete_many({"role": {"$ne": "ADMIN"}})
+        
+        # Clear all other collections
+        res_problems = db.problems.delete_many({})
+        res_testcases = db.test_cases.delete_many({})
+        res_mcqs = db.mcqs.delete_many({})
+        res_contests = db.contests.delete_many({})
+        res_participants = db.contest_participants.delete_many({})
+        res_submissions = db.submissions.delete_many({})
+        res_results = db.results.delete_many({})
+        res_notifications = db.notifications.delete_many({})
+
+        # Try clearing any optional auxiliary collections if present
+        for col_name in ["daily_problems", "attendance", "activity_logs"]:
+            if col_name in db.list_collection_names():
+                db[col_name].delete_many({})
+
+        admin_count = db.users.count_documents({"role": "ADMIN"})
+
+        return jsonify({
+            "success": True,
+            "message": "Database cleaned successfully! All data deleted except Admin accounts.",
+            "preserved_admin_count": admin_count,
+            "deleted": {
+                "students_and_non_admins": res_users.deleted_count,
+                "problems": res_problems.deleted_count,
+                "test_cases": res_testcases.deleted_count,
+                "mcqs": res_mcqs.deleted_count,
+                "contests": res_contests.deleted_count,
+                "contest_participants": res_participants.deleted_count,
+                "submissions": res_submissions.deleted_count,
+                "results": res_results.deleted_count,
+                "notifications": res_notifications.deleted_count
+            }
+        }), 200
 
     @app.route("/api/health")
     def health_check():
