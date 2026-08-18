@@ -7,7 +7,7 @@ export const Footer = () => {
         <div className="flex items-center gap-2">
           <img src="/nit-logo.jpg" alt="NIT Logo" className="w-5 h-5 object-contain rounded-md" />
           <div className="flex flex-col sm:flex-row items-center gap-1 sm:gap-2">
-            <span className="font-semibold text-[#172033] dark:text-[#F8FAFC]">Developed by Krishna Kumar KM</span>
+            <span className="font-semibold text-[#172033] dark:text-[#F8FAFC]">Developed by Krishna Kumar KM, Abhishek Praveen G</span>
             <span>Batch: 2023–2027 | CSE</span>
           </div>
         </div>

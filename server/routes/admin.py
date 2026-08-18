@@ -318,8 +318,8 @@ def add_student():
     department = data.get("department", "CSE").strip()
     year = data.get("year", "1st Year").strip()
 
-    if not student_id or not name or not password:
-        return jsonify({"error": "Student ID, Name, and Password are required", "success": False}), 400
+    if not student_id or not name:
+        return jsonify({"error": "Student ID and Name are required", "success": False}), 400
 
     db = get_db()
     if db.users.find_one({"student_id": student_id}):
@@ -332,7 +332,7 @@ def add_student():
         "student_id": student_id,
         "name": name,
         "email": email or f"{student_id.lower()}@college.edu",
-        "password": hash_password(password),
+        "password": hash_password(password or "student123"),
         "department": department,
         "year": year,
         "role": "STUDENT",
@@ -390,6 +390,33 @@ def delete_student(student_id):
 
     db.users.delete_one({"_id": ObjectId(student_id)})
     return jsonify({"success": True, "message": "Student deleted successfully"}), 200
+
+@admin_bp.route("/students/bulk-delete", methods=["POST"])
+@admin_required
+def bulk_delete_students():
+    """Delete multiple student accounts in bulk."""
+    db = get_db()
+    data = request.get_json() or {}
+    student_ids = data.get("ids", [])
+
+    if not student_ids:
+        return jsonify({"error": "No student IDs provided", "success": False}), 400
+
+    # Validate ObjectId format for all ids
+    invalid_ids = [sid for sid in student_ids if not ObjectId.is_valid(sid)]
+    if invalid_ids:
+        return jsonify({"error": f"Invalid student ID format: {', '.join(invalid_ids)}", "success": False}), 400
+
+    object_ids = [ObjectId(sid) for sid in student_ids]
+    
+    # Perform bulk delete using delete_many()
+    result = db.users.delete_many({"_id": {"$in": object_ids}})
+    
+    return jsonify({
+        "success": True,
+        "message": f"Successfully deleted {result.deleted_count} students",
+        "deleted_count": result.deleted_count
+    }), 200
 
 @admin_bp.route("/students/<student_id>/reset-password", methods=["POST"])
 @admin_required
@@ -471,10 +498,10 @@ def normalize_header(header):
     h = str(header).strip().lower()
     h = re.sub(r'[\s_\-]+', '_', h)
     
-    if h in ["student_id", "studentid", "register_no", "reg_no", "regno", "register_number", "reg_number"]:
-        return "student_id"
-    if h in ["full_name", "fullname", "name", "student_name", "studentname"]:
-        return "full_name"
+    if h in ["register_number", "register_no", "reg_no", "regno", "student_id", "studentid", "reg_number"]:
+        return "register_number"
+    if h in ["name", "full_name", "fullname", "student_name", "studentname"]:
+        return "name"
     if h in ["email", "email_address", "mail", "student_email"]:
         return "email"
     if h in ["department", "dept", "branch", "department_name"]:
@@ -530,12 +557,12 @@ def import_students_preview():
                 if norm:
                     header_map[norm] = col_idx
 
-        required_columns = ["student_id", "full_name", "email", "department", "year", "password"]
+        required_columns = ["register_number", "name", "department", "year"]
         missing_columns = [col for col in required_columns if col not in header_map]
 
         if missing_columns:
             return jsonify({
-                "error": f"Missing required columns in Excel: {', '.join(missing_columns)}. Expected columns: student_id, full_name, email, department, year, password",
+                "error": f"Missing required columns in Excel: {', '.join(missing_columns)}. Expected columns: register_number, name, department, year",
                 "missing_columns": missing_columns,
                 "success": False
             }), 400
@@ -564,34 +591,38 @@ def import_students_preview():
                     return str(row[idx]).strip()
                 return ""
 
-            raw_id = get_val("student_id").upper()
-            raw_name = get_val("full_name")
+            raw_id = get_val("register_number").upper()
+            raw_name = get_val("name")
             raw_email = get_val("email").lower()
+            if not raw_email and raw_id:
+                raw_email = f"{raw_id.lower()}@college.edu"
             raw_dept = get_val("department")
             raw_year = get_val("year")
             raw_password = get_val("password")
+            if not raw_password:
+                raw_password = "student123"
 
             is_valid = True
             error_message = ""
 
-            # 1. Student ID Validation
+            # 1. Register Number Validation
             if not raw_id:
                 is_valid = False
-                error_message = "Student ID cannot be empty"
+                error_message = "Register Number cannot be empty"
             elif raw_id in seen_file_ids:
                 is_valid = False
-                error_message = f"Duplicate Student ID '{raw_id}' in Excel file"
+                error_message = f"Duplicate Register Number '{raw_id}' in Excel file"
             elif raw_id in existing_ids:
                 is_valid = False
-                error_message = "Student ID already exists in database"
+                error_message = "Register Number already exists in database"
             else:
                 seen_file_ids.add(raw_id)
 
-            # 2. Full Name Validation
+            # 2. Name Validation
             if is_valid:
                 if not raw_name:
                     is_valid = False
-                    error_message = "Full Name cannot be empty"
+                    error_message = "Name cannot be empty"
 
             # 3. Email Validation
             if is_valid:
@@ -653,7 +684,9 @@ def import_students_preview():
             preview_rows.append({
                 "row_number": row_idx,
                 "student_id": raw_id,
+                "register_number": raw_id,
                 "full_name": raw_name,
+                "name": raw_name,
                 "email": raw_email,
                 "department": normalized_dept,
                 "year": normalized_year,
@@ -691,17 +724,22 @@ def import_students_commit():
     results_detail = []
 
     for s in students:
-        s_id = s.get("student_id", "").strip().upper()
-        s_name = s.get("full_name", s.get("name", "")).strip()
+        s_id = s.get("register_number", s.get("student_id", "")).strip().upper()
+        s_name = s.get("name", s.get("full_name", "")).strip()
         s_email = s.get("email", "").strip().lower()
+        if not s_email and s_id:
+            s_email = f"{s_id.lower()}@college.edu"
         s_dept = s.get("department", "Computer Science & Engineering").strip()
         s_year = s.get("year", "1st Year").strip()
         s_password = s.get("password", "").strip()
+        if not s_password:
+            s_password = "student123"
 
         if not s_id or not s_name or not s_email or not s_password:
             failed_count += 1
             results_detail.append({
                 "student_id": s_id or "(Unknown)",
+                "register_number": s_id or "(Unknown)",
                 "name": s_name or "(Unknown)",
                 "status": "Failed",
                 "reason": "Missing mandatory field"
@@ -713,9 +751,10 @@ def import_students_commit():
             skipped_count += 1
             results_detail.append({
                 "student_id": s_id,
+                "register_number": s_id,
                 "name": s_name,
                 "status": "Skipped",
-                "reason": "Student ID or Email already exists"
+                "reason": "Register Number or Email already exists"
             })
             continue
 
@@ -735,6 +774,7 @@ def import_students_commit():
             imported_count += 1
             results_detail.append({
                 "student_id": s_id,
+                "register_number": s_id,
                 "name": s_name,
                 "status": "Success",
                 "reason": "Created"
@@ -743,6 +783,7 @@ def import_students_commit():
             failed_count += 1
             results_detail.append({
                 "student_id": s_id,
+                "register_number": s_id,
                 "name": s_name,
                 "status": "Failed",
                 "reason": str(e)

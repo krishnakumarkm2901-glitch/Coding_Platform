@@ -38,7 +38,6 @@ def get_contests():
     cached_contests = cache.get(cache_key)
     if cached_contests is None:
         contests_cursor = list(db.contests.find({"is_published": True}).sort("start_time", -1))
-        # Serialize ObjectIds for caching
         cached_contests = []
         for c in contests_cursor:
             c_copy = dict(c)
@@ -47,6 +46,12 @@ def get_contests():
                 c_copy["problem_ids"] = [str(pid) for pid in c_copy["problem_ids"]]
             if "mcq_ids" in c_copy:
                 c_copy["mcq_ids"] = [str(mid) for mid in c_copy["mcq_ids"]]
+            
+            # Serialize datetime objects to ISO strings for cache serialization
+            for key, val in c_copy.items():
+                if isinstance(val, datetime):
+                    c_copy[key] = val.isoformat()
+            
             cached_contests.append(c_copy)
         cache.set(cache_key, cached_contests, ttl=10)
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { 
@@ -42,6 +42,16 @@ export const PlaygroundPage = () => {
   const [runStatus, setRunStatus] = useState('');
   const [execTime, setExecTime] = useState(0.0);
   const [running, setRunning] = useState(false);
+
+  const outputPanelRef = useRef(null);
+
+  useEffect(() => {
+    if (output || error || runStatus) {
+      setTimeout(() => {
+        outputPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  }, [output, error, runStatus]);
 
   // If user is Admin, block access (although route protection should block it first)
   if (user?.role === 'ADMIN') {
@@ -179,7 +189,7 @@ export const PlaygroundPage = () => {
           </div>
 
           {/* Output console */}
-          <div className="p-5 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm min-h-[250px] flex flex-col justify-between">
+          <div className="p-5 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm min-h-[250px] flex flex-col justify-between" ref={outputPanelRef}>
             <div>
               <div className="flex items-center justify-between border-b border-[#D9E0E8] dark:border-[#30363D] pb-3 mb-3">
                 <h3 className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider flex items-center gap-1.5">

@@ -34,6 +34,11 @@ export const ManageStudents = () => {
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ total: 0, pages: 1 });
 
+  // Bulk selection and deletion states
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
+
   // Modal states
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -79,6 +84,7 @@ export const ManageStudents = () => {
   const yearsList = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
 
   useEffect(() => {
+    setSelectedIds([]);
     fetchStudents();
   }, [search, deptFilter, yearFilter, page]);
 
@@ -222,6 +228,51 @@ export const ManageStudents = () => {
     }
   };
 
+  const handleSelectAll = (e) => {
+    if (e.target.checked) {
+      const visibleIds = students.map(s => s.id);
+      setSelectedIds(prev => {
+        const newSelection = new Set([...prev, ...visibleIds]);
+        return Array.from(newSelection);
+      });
+    } else {
+      const visibleIds = students.map(s => s.id);
+      setSelectedIds(prev => prev.filter(id => !visibleIds.includes(id)));
+    }
+  };
+
+  const handleSelectRow = (id) => {
+    setSelectedIds(prev => {
+      if (prev.includes(id)) {
+        return prev.filter(item => item !== id);
+      } else {
+        return [...prev, id];
+      }
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    try {
+      setActionLoading(true);
+      setErrorMsg('');
+      const res = await api.post('/admin/students/bulk-delete', { ids: selectedIds });
+      if (res.data.success) {
+        setIsDeleteConfirmOpen(false);
+        setSelectedIds([]);
+        setSuccessMsg(res.data.message || `Successfully deleted ${selectedIds.length} students.`);
+        // Auto clear success message after 5 seconds
+        setTimeout(() => {
+          setSuccessMsg('');
+        }, 5000);
+        fetchStudents();
+      }
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to bulk delete students.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // ------------------ BULK EXCEL IMPORT HANDLERS ------------------
 
   const handleOpenImport = () => {
@@ -327,8 +378,16 @@ export const ManageStudents = () => {
           </p>
         </div>
 
-        {/* Action Buttons: Add Student & Import Students */}
+        {/* Action Buttons: Bulk Delete, Add Student & Import Students */}
         <div className="flex items-center gap-3">
+          <button
+            disabled={selectedIds.length === 0}
+            onClick={() => setIsDeleteConfirmOpen(true)}
+            className="px-4 py-2.5 rounded-2xl bg-[#EF4444] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-red-500/20 flex items-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>Delete Selected ({selectedIds.length})</span>
+          </button>
           <button
             onClick={handleOpenAdd}
             className="px-4 py-2.5 rounded-2xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-blue-500/20 flex items-center gap-2 transition"
@@ -345,6 +404,18 @@ export const ManageStudents = () => {
           </button>
         </div>
       </div>
+
+      {successMsg && (
+        <div className="p-4 rounded-2xl bg-[#22B573]/10 border border-[#22B573]/25 text-[#22B573] font-bold flex items-center justify-between gap-2.5 animate-fadeIn">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+          <button onClick={() => setSuccessMsg('')} className="text-[#22B573] hover:opacity-80">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Search & Filter Bar */}
       <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
@@ -414,6 +485,14 @@ export const ManageStudents = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-[#303442] text-white font-bold uppercase tracking-wider">
                 <tr>
+                  <th className="py-4 px-4 w-12 text-center">
+                    <input
+                      type="checkbox"
+                      checked={students.length > 0 && students.every(s => selectedIds.includes(s.id))}
+                      onChange={handleSelectAll}
+                      className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                  </th>
                   <th className="py-4 px-4">Student ID</th>
                   <th className="py-4 px-4">Full Name</th>
                   <th className="py-4 px-4">Email</th>
@@ -425,6 +504,14 @@ export const ManageStudents = () => {
               <tbody className="divide-y divide-[#D9E0E8] dark:divide-[#30363D]/60 font-sans">
                 {students.map((s) => (
                   <tr key={s.id} className="hover:bg-[#F5F7FA] dark:hover:bg-[#151A21]/60 transition">
+                    <td className="py-3.5 px-4 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(s.id)}
+                        onChange={() => handleSelectRow(s.id)}
+                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                      />
+                    </td>
                     <td className="py-3.5 px-4 font-mono font-extrabold text-[#0757B8] dark:text-[#60A5FA]">
                       {s.student_id}
                     </td>
@@ -592,8 +679,8 @@ export const ManageStudents = () => {
                     <thead className="bg-[#303442] text-white font-bold uppercase sticky top-0 z-10">
                       <tr>
                         <th className="py-3 px-3">#</th>
-                        <th className="py-3 px-3">Student ID</th>
-                        <th className="py-3 px-3">Full Name</th>
+                        <th className="py-3 px-3">Register Number</th>
+                        <th className="py-3 px-3">Name</th>
                         <th className="py-3 px-3">Email</th>
                         <th className="py-3 px-3">Department</th>
                         <th className="py-3 px-3">Year</th>
@@ -607,10 +694,10 @@ export const ManageStudents = () => {
                             {row.row_number}
                           </td>
                           <td className="py-2.5 px-3 font-mono font-bold text-[#0757B8] dark:text-[#60A5FA]">
-                            {row.student_id || '-'}
+                            {row.register_number || row.student_id || '-'}
                           </td>
                           <td className="py-2.5 px-3 font-semibold text-[#172033] dark:text-[#F8FAFC]">
-                            {row.full_name || '-'}
+                            {row.name || row.full_name || '-'}
                           </td>
                           <td className="py-2.5 px-3 text-[#667085] dark:text-[#94A3B8]">
                             {row.email || '-'}
@@ -727,7 +814,7 @@ export const ManageStudents = () => {
                   <div className="max-h-36 overflow-y-auto rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] p-2 bg-[#F5F7FA] dark:bg-[#151A21] space-y-1 font-mono text-[11px]">
                     {importResult.details.filter(d => d.status !== 'Success').map((d, idx) => (
                       <div key={idx} className="flex items-center justify-between p-1.5 rounded-lg bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D]">
-                        <span className="font-bold text-[#172033] dark:text-[#F8FAFC]">{d.student_id} ({d.name})</span>
+                        <span className="font-bold text-[#172033] dark:text-[#F8FAFC]">{d.register_number || d.student_id} ({d.name})</span>
                         <span className="text-[#EF4444] font-semibold">{d.reason}</span>
                       </div>
                     ))}
@@ -831,13 +918,12 @@ export const ManageStudents = () => {
           </div>
 
           <div>
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Initial Password *</label>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Initial Password</label>
             <input
               type="password"
-              required
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              placeholder="Min. 6 characters"
+              placeholder="Defaults to student123"
               className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
             />
           </div>
@@ -993,6 +1079,61 @@ export const ManageStudents = () => {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* ⚠️ BULK DELETE CONFIRMATION MODAL */}
+      {/* ========================================================================= */}
+      <Modal
+        isOpen={isDeleteConfirmOpen}
+        onClose={() => setIsDeleteConfirmOpen(false)}
+        title="Confirm Bulk Deletion"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4 text-xs font-sans text-left">
+          <div className="flex items-start gap-3 p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/30 rounded-2xl">
+            <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-bold text-red-700 dark:text-red-400">Warning</h4>
+              <p className="text-red-600 dark:text-red-300 mt-1">
+                You are about to permanently delete <strong>{selectedIds.length}</strong> selected students and all of their associated records. This action cannot be undone.
+              </p>
+            </div>
+          </div>
+
+          <p className="text-[#667085] dark:text-[#94A3B8] leading-relaxed">
+            Are you sure you want to proceed with the deletion?
+          </p>
+
+          <div className="pt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              disabled={actionLoading}
+              onClick={() => setIsDeleteConfirmOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] font-semibold"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={actionLoading}
+              onClick={handleBulkDelete}
+              className="px-5 py-2.5 rounded-xl bg-[#EF4444] hover:opacity-95 text-white font-bold shadow-md shadow-red-500/20 flex items-center gap-2"
+            >
+              {actionLoading ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Deleting...</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Yes, Delete {selectedIds.length} Students</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       </Modal>
 
     </div>

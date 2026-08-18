@@ -69,6 +69,16 @@ export const ContestArena = () => {
   const [customInput, setCustomInput] = useState('');
   const [activeOutputTab, setActiveOutputTab] = useState('testcases');
 
+  const outputPanelRef = useRef(null);
+
+  useEffect(() => {
+    if (runResult) {
+      setTimeout(() => {
+        outputPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  }, [runResult]);
+
   // Submit state
   const [isSubmittingContest, setIsSubmittingContest] = useState(false);
   const [submitResult, setSubmitResult] = useState(null);
@@ -952,7 +962,7 @@ export const ContestArena = () => {
               </div>
 
               {/* Bottom Output Panel */}
-              <div className="h-44 border-t border-[#D9E0E8] dark:border-[#30363D] shrink-0 bg-[#FFFFFF] dark:bg-[#151A21]">
+              <div className="h-44 border-t border-[#D9E0E8] dark:border-[#30363D] shrink-0 bg-[#FFFFFF] dark:bg-[#151A21]" ref={outputPanelRef}>
                 <OutputPanel
                   activeTab={activeOutputTab}
                   onTabChange={setActiveOutputTab}
@@ -960,6 +970,11 @@ export const ContestArena = () => {
                   isLoading={isRunning}
                   customInput={customInput}
                   onCustomInputChange={setCustomInput}
+                  sampleTestCases={currentProblem ? [{
+                    input: currentProblem.sample_input || '',
+                    expected_output: currentProblem.sample_output || '',
+                    explanation: ''
+                  }] : []}
                 />
               </div>
 

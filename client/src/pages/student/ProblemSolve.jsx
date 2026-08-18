@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../../services/api';
 import confetti from 'canvas-confetti';
@@ -35,6 +35,16 @@ export const ProblemSolve = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [runResult, setRunResult] = useState(null);
   const [submitResult, setSubmitResult] = useState(null);
+
+  const outputPanelRef = useRef(null);
+
+  useEffect(() => {
+    if (runResult || submitResult) {
+      setTimeout(() => {
+        outputPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  }, [runResult, submitResult]);
 
   useEffect(() => {
     fetchProblemDetails();
@@ -310,7 +320,7 @@ export const ProblemSolve = () => {
           </div>
 
           {/* Output & Testcase Results Panel */}
-          <div className="min-h-[220px]">
+          <div className="min-h-[220px]" ref={outputPanelRef}>
             <OutputPanel
               activeTab={activeTab}
               setActiveTab={setActiveTab}
