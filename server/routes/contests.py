@@ -430,6 +430,7 @@ def get_contest_details(contest_id):
             "termination_reason": termination_reason,
             "lock_reason": lock_reason,
             "participant_status": participant_status,
+            "attempt_number": participant.get("attempt_number", 1) if participant else 1,
             "score": participant.get("score", 0) if participant else 0,
             "problems": problems,
             "mcqs": mcqs,

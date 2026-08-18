@@ -90,22 +90,6 @@ export const ContestArena = () => {
   const [resultModalOpen, setResultModalOpen] = useState(false);
   const [calculatorOpen, setCalculatorOpen] = useState(false);
 
-  useEffect(() => {
-    fetchContestDetails(true);
-    // Polling every 5s while on overview screen for real-time status transitions
-    const overviewPoll = setInterval(() => {
-      if (mode === 'overview') {
-        fetchContestDetails(false);
-      }
-    }, 5000);
-
-    return () => {
-      clearInterval(overviewPoll);
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
-    };
-  }, [id, mode]);
-
   // Countdown timer tick effect for upcoming contests
   useEffect(() => {
     if (countdownToStart <= 0) return;
@@ -125,14 +109,16 @@ export const ContestArena = () => {
     };
   }, [countdownToStart > 0]);
 
-  const fetchContestDetails = async (showLoader = false) => {
+  const fetchContestDetails = useCallback(async (showLoader = false) => {
     try {
       if (showLoader) setLoading(true);
       setError('');
+      console.log('Fetching contest details for ID:', id);
       const res = await api.get(`/contests/${id}`);
-      if (res.data.success) {
+      if (res.data?.success && res.data?.contest) {
         const c = res.data.contest;
         setContest(c);
+        console.log('Contest loaded:', c);
 
         if (c.status === 'Upcoming' && c.time_to_start_seconds > 0) {
           setCountdownToStart(c.time_to_start_seconds);
@@ -201,8 +187,11 @@ export const ContestArena = () => {
         if (c.is_registered && c.status === 'Active' && c.remaining_seconds > 0) {
           startArena(c.remaining_seconds);
         }
+      } else {
+        setError(res.data?.error || 'The contest API returned an invalid response.');
       }
     } catch (err) {
+      console.error('Error fetching contest details:', err);
       if (err.response?.data?.is_locked) {
         isLockedRef.current = true;
         setLockReason(err.response?.data?.lock_reason || 'Exited fullscreen');
@@ -212,12 +201,36 @@ export const ContestArena = () => {
         setTerminationReason(err.response?.data?.termination_reason || 'Violation of strict contest rules');
         setMode('terminated');
       } else {
-        setError(err.response?.data?.error || 'Failed to load contest.');
+        const errMsg = err.response?.data?.error || err.message || 'Failed to load contest. Please check your internet connection and try again.';
+        console.error('Contest load error:', errMsg);
+        setError(errMsg);
       }
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) {
+      setError('No contest ID provided in URL.');
+      setLoading(false);
+      return;
+    }
+
+    fetchContestDetails(true);
+    // Poll while the overview is visible so scheduled status changes appear live.
+    const overviewPoll = setInterval(() => {
+      if (mode === 'overview') {
+        fetchContestDetails(false);
+      }
+    }, 5000);
+
+    return () => {
+      clearInterval(overviewPoll);
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    };
+  }, [id, mode, fetchContestDetails]);
 
   // ----------------- STRICT AUTO-TERMINATION HANDLER -----------------
 
@@ -604,10 +617,6 @@ export const ContestArena = () => {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  if (loading) {
-    return <PageLoader text="Connecting to Secure Contest Arena..." />;
-  }
-
   // Locked mode effect - auto-check and countdown timer
   useEffect(() => {
     if (mode !== 'locked') return;
@@ -647,6 +656,10 @@ export const ContestArena = () => {
       clearInterval(countdownTimer);
     };
   }, [mode, id]);
+
+  if (loading) {
+    return <PageLoader text="Connecting to Secure Contest Arena..." />;
+  }
 
   // =========================================================================
   // 🔒 1a. CONTEST LOCKED SCREEN (Fullscreen Exit — Awaiting Admin Restore)
