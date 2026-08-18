@@ -37,13 +37,12 @@ export const ContestArena = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Mode: 'overview' | 'arena' | 'submitted' | 'terminated' | 'locked' | 'resume_available' | 'retest_available'
+  // Mode: 'overview' | 'arena' | 'submitted' | 'terminated' | 'locked' | 'retest_available'
   const [mode, setMode] = useState('overview');
   const [terminationReason, setTerminationReason] = useState('');
   const [lockReason, setLockReason] = useState('');
   const [lockTimeRemaining, setLockTimeRemaining] = useState(0);
   const [retestInfo, setRetestInfo] = useState(null);
-  const [resumeInfo, setResumeInfo] = useState(null);
 
   // Contest countdown to start (for upcoming)
   const [countdownToStart, setCountdownToStart] = useState(0);
@@ -159,12 +158,10 @@ export const ContestArena = () => {
           return;
         }
 
-        // Admin restored this same attempt. Do not resume until the student
-        // explicitly re-enters fullscreen.
-        if (c.requires_fullscreen_resume) {
+        if (c.is_retest_available && c.retest_info) {
           isLockedRef.current = false;
-          setResumeInfo(c.resume_state || {});
-          setMode('resume_available');
+          setRetestInfo(c.retest_info);
+          setMode('retest_available');
           return;
         }
 
@@ -307,7 +304,9 @@ export const ContestArena = () => {
     }
   }, [id, timeLeft, codeSolutions, contest, selectedProblemIdx, currentLanguage, currentCode, mcqAnswers, selectedMCQIdx, activeSection]);
 
-  const handleResumeAttempt = async () => {
+  // ----------------- RETEST START HANDLER -----------------
+
+  const handleStartRetest = async () => {
     try {
       setLoading(true);
       setError('');
@@ -316,44 +315,7 @@ export const ContestArena = () => {
         throw new Error('Fullscreen is not supported by this browser.');
       }
       await document.documentElement.requestFullscreen();
-      if (!document.fullscreenElement) {
-        throw new Error('Fullscreen is required to continue the contest.');
-      }
-
-      const res = await api.post(`/contests/${id}/join`, { resume_after_restore: true });
-      const saved = res.data?.resume_state || resumeInfo || {};
-      setCodeSolutions(saved.code_solutions || codeSolutions);
-      setMcqAnswers(saved.mcq_answers || {});
-      setSelectedProblemIdx(saved.selected_problem_index || 0);
-      setSelectedMCQIdx(saved.selected_mcq_index || 0);
-      setActiveSection(saved.active_section || activeSection);
-      setCurrentLanguage(saved.current_language || currentLanguage);
-      setCurrentCode(saved.current_code || '');
-      isLockedRef.current = false;
-      isTerminatedRef.current = false;
-      startArena(res.data.remaining_seconds);
-    } catch (err) {
-      setError(err.response?.data?.error || err.message || 'Failed to resume the contest.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // ----------------- RETEST START HANDLER -----------------
-
-  const handleStartRetest = async () => {
-    try {
-      setLoading(true);
-      setError('');
-
-      // Request Fullscreen for retest
-      if (document.documentElement.requestFullscreen) {
-        try {
-          await document.documentElement.requestFullscreen();
-        } catch (fsErr) {
-          console.warn('Fullscreen request bypassed or denied:', fsErr);
-        }
-      }
+      if (!document.fullscreenElement) throw new Error('Fullscreen is required to start the retest.');
 
       // Fetch the latest contest details to get the retest participant
       const res = await api.get(`/contests/${id}`);
@@ -387,8 +349,8 @@ export const ContestArena = () => {
           isTerminatedRef.current = false;
           isLockedRef.current = false;
           
-          // Start the arena with remaining time
-          startArena(c.remaining_seconds || (c.duration_minutes * 60) || 3600);
+          const joinRes = await api.post(`/contests/${id}/join`, { start_retest: true });
+          startArena(joinRes.data.remaining_seconds || (c.duration_minutes * 60) || 3600);
         } else {
           setError('Retest is no longer available. Please refresh and try again.');
         }
@@ -675,13 +637,6 @@ export const ContestArena = () => {
           const c = res.data.contest;
           setLockTimeRemaining(c.lock_timeout_remaining_seconds || 0);
           
-          if (c.requires_fullscreen_resume) {
-            isLockedRef.current = false;
-            setContest(c);
-            setResumeInfo(c.resume_state || {});
-            setMode('resume_available');
-            return;
-          }
           if (c.is_retest_available && c.retest_info) {
             isLockedRef.current = false;
             setContest(c);
@@ -795,33 +750,6 @@ export const ContestArena = () => {
     );
   }
 
-  if (mode === 'resume_available') {
-    return (
-      <div className="fixed inset-0 z-50 bg-[#0B0F14] text-white flex items-center justify-center p-4">
-        <div className="max-w-lg w-full p-8 rounded-3xl border border-[#22B573]/40 bg-[#151A21] shadow-2xl text-center space-y-6">
-          <div className="w-16 h-16 rounded-3xl bg-[#22B573]/20 text-[#22B573] flex items-center justify-center mx-auto">
-            <CheckCircle2 className="w-8 h-8" />
-          </div>
-          <div className="space-y-2">
-            <h1 className="text-2xl font-extrabold">Access Restored</h1>
-            <p className="text-sm text-[#94A3B8]">
-              Your existing attempt and progress were preserved. Enter fullscreen to continue.
-            </p>
-          </div>
-          {error && <p className="text-xs font-semibold text-[#EF4444]">{error}</p>}
-          <button
-            onClick={handleResumeAttempt}
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-[#22B573] hover:bg-[#1D9C63] text-white font-bold text-sm disabled:opacity-50"
-          >
-            <Maximize2 className="w-4 h-4" />
-            Enter Fullscreen and Continue
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   // =========================================================================
   // � 1c. RETEST AVAILABLE SCREEN (Locked → Admin Restored)
   // =========================================================================
@@ -858,7 +786,7 @@ export const ContestArena = () => {
             <div className="pt-2 border-t border-[#30363D]">
               <div className="font-bold text-[#60A5FA] text-[11px] uppercase tracking-wider mb-1">🔒 Important</div>
               <div className="text-[#94A3B8] text-[11px] leading-relaxed">
-                Fullscreen mode is <strong>required</strong>. Exiting fullscreen will terminate this retest attempt.
+                Fullscreen mode is <strong>required</strong>. Exiting fullscreen will lock this retest and require admin approval again.
               </div>
             </div>
           </div>

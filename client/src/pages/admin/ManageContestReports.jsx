@@ -824,7 +824,7 @@ export const ManageContestReports = () => {
                             <button
                               type="button"
                               onClick={async () => {
-                                if (!window.confirm(`Restore contest access for ${cand.name}? They will be able to re-enter fullscreen and resume their attempt.`)) return;
+                                if (!window.confirm(`Approve a retest for ${cand.name}? A new shuffled question set will be created and fullscreen will be required.`)) return;
                                 try {
                                   const res = await api.post(`/admin/contests/${selectedContestId}/restore/${cand.participant_id}`);
                                   if (res.data.success) {
@@ -838,7 +838,7 @@ export const ManageContestReports = () => {
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#F59E0B]/15 hover:bg-[#F59E0B] text-[#F59E0B] hover:text-white border border-[#F59E0B]/30 text-xs font-bold transition shadow-sm"
                             >
                               <Unlock className="w-3.5 h-3.5" />
-                              <span>Restore Access</span>
+                              <span>Approve Retest</span>
                             </button>
                           )}
                           <button

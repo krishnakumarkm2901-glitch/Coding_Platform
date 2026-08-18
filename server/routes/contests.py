@@ -277,7 +277,7 @@ def get_contest_details(contest_id):
         # Check if LOCKED attempt has expired (30 minutes passed)
         if participant.get("status") == "LOCKED" and participant.get("lock_timeout_at"):
             lock_timeout = parse_to_utc_datetime(participant.get("lock_timeout_at"))
-            if lock_timeout and now > lock_timeout:
+            if lock_timeout and now >= lock_timeout:
                 # Auto-terminate: lock window expired
                 db.contest_participants.update_one(
                     {"_id": participant["_id"]},
@@ -312,6 +312,13 @@ def get_contest_details(contest_id):
         participant_status = participant.get("status", "IN_PROGRESS")
         if participant.get("submitted") and not is_terminated:
             participant_status = "SUBMITTED"
+        if participant.get("status") == "RETEST_READY":
+            is_retest_available = True
+            retest_info = {
+                "participant_id": str(participant["_id"]),
+                "attempt_number": participant.get("attempt_number", 2),
+                "status": "RETEST_READY",
+            }
     elif historical_participant:
         # No active attempt, but we have history - show why (terminated or locked)
         is_terminated = bool(historical_participant.get("auto_terminated") or historical_participant.get("status") == "AUTO_TERMINATED")
@@ -322,7 +329,7 @@ def get_contest_details(contest_id):
     
     # Check if there's a new active retest available (higher attempt number with is_active_attempt: True)
     # This applies both when we have an active attempt and when we have historical terminated attempt
-    if is_locked or is_terminated:
+    if (is_locked or is_terminated) and not is_retest_available:
         current_attempt = (participant or historical_participant).get("attempt_number", 1)
         retest_attempt = db.contest_participants.find_one({
             "contest_id": {"$in": contest_id_objs},
@@ -431,8 +438,6 @@ def get_contest_details(contest_id):
             "lock_reason": lock_reason,
             "participant_status": participant_status,
             "attempt_number": participant.get("attempt_number", 1) if participant else 1,
-            "requires_fullscreen_resume": bool(participant.get("requires_fullscreen_resume", False)) if participant else False,
-            "resume_state": participant.get("resume_state", {}) if participant else {},
             "score": participant.get("score", 0) if participant else 0,
             "problems": problems,
             "mcqs": mcqs,
@@ -458,8 +463,20 @@ def join_contest(contest_id):
     start = parse_to_utc_datetime(contest.get("start_time"))
     end = parse_to_utc_datetime(contest.get("end_time"))
 
+    request_user_id = request.current_user["_id"]
+    ready_user_ids = [str(request_user_id)]
+    if ObjectId.is_valid(request_user_id):
+        ready_user_ids.append(ObjectId(request_user_id))
+    ready_contest_ids = [contest_id, ObjectId(contest_id)]
+    ready_retest = db.contest_participants.find_one({
+        "contest_id": {"$in": ready_contest_ids},
+        "user_id": {"$in": ready_user_ids},
+        "is_active_attempt": True,
+        "status": "RETEST_READY",
+    })
+
     # Guard: Cannot join before start time
-    if start and now < start:
+    if start and now < start and not ready_retest:
         time_diff = int((start - now).total_seconds())
         return jsonify({
             "error": "Contest has not started yet. Please wait until the scheduled start time.",
@@ -469,7 +486,7 @@ def join_contest(contest_id):
         }), 403
 
     # Guard: Cannot join after end time
-    if end and now > end:
+    if end and now > end and not ready_retest:
         return jsonify({
             "error": "Contest has already ended. Joining is no longer allowed.",
             "status": "Past",
@@ -519,30 +536,26 @@ def join_contest(contest_id):
                 "success": False
             }), 403
 
-        if existing.get("requires_fullscreen_resume"):
-            if not data.get("resume_after_restore"):
+        if existing.get("status") == "RETEST_READY":
+            if not data.get("start_retest"):
                 return jsonify({
-                    "error": "Enter fullscreen to resume the restored attempt.",
-                    "requires_fullscreen_resume": True,
+                    "error": "This retest must be started from the fullscreen confirmation screen.",
+                    "is_retest_available": True,
                     "success": False,
                 }), 403
             db.contest_participants.update_one(
-                {"_id": existing["_id"], "requires_fullscreen_resume": True},
+                {"_id": existing["_id"], "status": "RETEST_READY"},
                 {
-                    "$set": {
-                        "requires_fullscreen_resume": False,
-                        "resumed_at": now,
-                        "status": "IN_PROGRESS",
-                    },
-                    "$push": {
-                        "anti_cheat_logs": {
-                            "event_type": "ATTEMPT_RESUMED",
-                            "detail": "Student resumed restored attempt in fullscreen",
-                            "timestamp": now.isoformat(),
-                        }
-                    },
+                    "$set": {"status": "IN_PROGRESS", "joined_at": now},
+                    "$push": {"anti_cheat_logs": {
+                        "event_type": "RETEST_STARTED",
+                        "detail": "Student entered fullscreen and started the approved retest",
+                        "timestamp": now.isoformat(),
+                    }},
                 },
             )
+            existing["status"] = "IN_PROGRESS"
+            existing["joined_at"] = now
 
     duration_secs = int(contest.get("duration_minutes", 60)) * 60
     remaining_seconds = duration_secs
@@ -574,11 +587,8 @@ def join_contest(contest_id):
             ]
         })
     else:
-        if existing.get("locked_remaining_seconds") is not None and data.get("resume_after_restore"):
-            remaining_seconds = max(0, int(existing.get("locked_remaining_seconds", 0)))
-        else:
-            joined_at = parse_to_utc_datetime(existing.get("joined_at"))
-        if not data.get("resume_after_restore") and joined_at:
+        joined_at = parse_to_utc_datetime(existing.get("joined_at"))
+        if joined_at:
             elapsed = (now - joined_at).total_seconds()
             remaining_seconds = max(0, int(duration_secs - elapsed))
         elif existing.get("joined_at") is None:
@@ -595,7 +605,6 @@ def join_contest(contest_id):
         "success": True, 
         "message": "Successfully entered contest",
         "remaining_seconds": remaining_seconds,
-        "resume_state": existing.get("resume_state", {}) if existing else {},
         "status": "IN_PROGRESS"
     }), 200
 
@@ -1009,7 +1018,7 @@ def get_student_contest_report(contest_id):
     participant = db.contest_participants.find_one({
         "contest_id": {"$in": contest_id_objs},
         "user_id": {"$in": user_id_objs}
-    })
+    }, sort=[("attempt_number", -1)])
     if not participant:
         return jsonify({
             "error": "No participation or submission record found for this contest.",

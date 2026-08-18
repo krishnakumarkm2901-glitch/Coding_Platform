@@ -1565,10 +1565,8 @@ def delete_contest(contest_id):
 @admin_bp.route("/contests/<contest_id>/restore/<participant_id>", methods=["POST"])
 @admin_required
 def restore_contest_access(contest_id, participant_id):
-    """
-    Restore a LOCKED attempt in place during its resolution window.
-    TERMINATED attempts continue to use the existing new-attempt retest flow.
-    """
+    """Approve a LOCKED attempt within 30 minutes and create a fresh retest.
+    AUTO_TERMINATED attempts continue to use the existing retest flow."""
     db = get_db()
     if not ObjectId.is_valid(contest_id) or not ObjectId.is_valid(participant_id):
         return jsonify({"error": "Invalid contest or participant ID", "success": False}), 400
@@ -1613,49 +1611,8 @@ def restore_contest_access(contest_id, participant_id):
                 "success": False
             }), 403
 
-        # A timely restore resumes the SAME attempt. Keep its assigned questions,
-        # answers, code, UI position, and saved remaining time intact.
-        db.contest_participants.update_one(
-            {"_id": ObjectId(participant_id), "status": "LOCKED"},
-            {
-                "$set": {
-                    "status": "IN_PROGRESS",
-                    "resolution_window_active": False,
-                    "requires_fullscreen_resume": True,
-                    "auto_terminated": False,
-                    "restored_at": now,
-                },
-                "$unset": {
-                    "terminated_at": "",
-                    "termination_reason": "",
-                },
-                "$push": {
-                    "anti_cheat_logs": {
-                        "event_type": "LOCK_RESOLVED",
-                        "detail": "Admin restored access to the existing attempt",
-                        "created_by": str(request.current_user.get("_id", "")),
-                        "timestamp": now.isoformat(),
-                    }
-                },
-            },
-        )
-
-        from services.notification_service import create_notification
-        create_notification(
-            user_id=participant.get("user_id"),
-            title="Contest Access Restored",
-            message="Your existing contest attempt was restored. Enter fullscreen to continue from your saved progress.",
-            notif_type="contest",
-        )
-        return jsonify({
-            "success": True,
-            "message": "Access restored to the existing attempt.",
-            "restored": True,
-            "same_attempt": True,
-            "attempt_number": participant.get("attempt_number", 1),
-        }), 200
-
-    # AUTO_TERMINATED attempts use the existing retest workflow below.
+    # A valid LOCKED attempt and an already TERMINATED attempt both continue
+    # through the new-attempt retest workflow below.
     # Check for existing retest for this user
     user_id = participant.get("user_id")
     current_attempt = participant.get("attempt_number", 1)
@@ -1699,12 +1656,12 @@ def restore_contest_access(contest_id, participant_id):
         "student_id": student_id,
         "student_name": participant.get("student_name"),
         "department": participant.get("department", "CSE"),
-        "joined_at": now,
+        "joined_at": None,
         "assigned_mcq_ids": new_assigned_mcq_ids,
         "attempt_number": next_attempt,
         "is_active_attempt": True,
         "original_attempt_id": ObjectId(participant_id),
-        "status": "IN_PROGRESS",
+        "status": "RETEST_READY",
         "score": 0,
         "problems_solved": 0,
         "mcqs_correct": 0,
@@ -1723,17 +1680,17 @@ def restore_contest_access(contest_id, participant_id):
     
     new_retest_result = db.contest_participants.insert_one(new_retest_doc)
 
-    # Mark OLD attempt as TERMINATED
+    # Keep the old attempt as immutable history. Approval is not termination.
     db.contest_participants.update_one(
         {"_id": ObjectId(participant_id)},
         {
             "$set": {
-                "status": "AUTO_TERMINATED",
+                "status": "RETEST_APPROVED",
                 "is_active_attempt": False,
                 "resolution_window_active": False,
-                "auto_terminated": True,
-                "terminated_at": now,
-                "termination_reason": "Resolved by admin - retest activated"
+                "auto_terminated": False,
+                "retest_approved_at": now,
+                "retest_attempt_id": new_retest_result.inserted_id,
             },
             "$push": {
                 "anti_cheat_logs": {
@@ -1768,7 +1725,7 @@ def restore_contest_access(contest_id, participant_id):
 
     return jsonify({
         "success": True, 
-        "message": "Retest activated successfully with new question set",
+        "message": "Retest approved with a new shuffled question set",
         "new_participant_id": str(new_retest_result.inserted_id),
         "attempt_number": next_attempt
     }), 200
