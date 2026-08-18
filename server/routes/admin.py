@@ -2380,9 +2380,11 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
     joined_at = participant.get("joined_at")
     submitted_at = participant.get("submitted_at")
 
-    if isinstance(joined_at, datetime):
-        end_time_calc = submitted_at if isinstance(submitted_at, datetime) else get_utc_now()
-        time_taken_sec = max(int((end_time_calc - joined_at).total_seconds()), 60)
+    joined_at_utc = parse_to_utc_datetime(joined_at)
+    submitted_at_utc = parse_to_utc_datetime(submitted_at)
+    if joined_at_utc:
+        end_time_calc = submitted_at_utc if submitted_at_utc else get_utc_now()
+        time_taken_sec = max(int((end_time_calc - joined_at_utc).total_seconds()), 60)
         time_taken_sec = min(time_taken_sec, duration_sec)
     else:
         # Default estimation based on solved count
