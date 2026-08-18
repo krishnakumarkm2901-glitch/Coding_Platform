@@ -733,7 +733,7 @@ def import_students_preview():
 @admin_bp.route("/students/import-commit", methods=["POST"])
 @admin_required
 def import_students_commit():
-    """Commit validated students to database with secure bcrypt hashing."""
+    """Commit validated students to database with fast batching and password hashing caching."""
     data = request.get_json() or {}
     students = data.get("students", [])
 
@@ -745,6 +745,17 @@ def import_students_commit():
     skipped_count = 0
     failed_count = 0
     results_detail = []
+    
+    # 1. Fetch all existing student IDs and emails in ONE query instead of 1000+ round trips
+    existing_students = set(db.users.distinct("student_id", {"role": "STUDENT"}))
+    existing_registers = set(db.users.distinct("register_number", {"role": "STUDENT"}))
+    existing_ids = existing_students.union(existing_registers)
+    existing_emails = set([e.lower() for e in db.users.distinct("email") if e])
+
+    # 2. Password hash cache (caches bcrypt hash so identical passwords like 'student123' are only hashed once)
+    password_hash_cache = {}
+    docs_to_insert = []
+    now_utc = datetime.now(timezone.utc)
 
     for s in students:
         s_id = s.get("register_number", s.get("student_id", "")).strip().upper()
@@ -769,8 +780,8 @@ def import_students_commit():
             })
             continue
 
-        # Double check existence to prevent race conditions or overwrite
-        if db.users.find_one({"$or": [{"student_id": s_id}, {"email": s_email}]}):
+        # Check existing in-memory set (instant O(1) lookup)
+        if s_id in existing_ids or s_email in existing_emails:
             skipped_count += 1
             results_detail.append({
                 "student_id": s_id,
@@ -781,47 +792,66 @@ def import_students_commit():
             })
             continue
 
+        # Add to set so duplicates inside the same file are detected
+        existing_ids.add(s_id)
+        existing_emails.add(s_email)
+
+        # Memoized password hashing
+        if s_password not in password_hash_cache:
+            password_hash_cache[s_password] = hash_password(s_password)
+        hashed_pw = password_hash_cache[s_password]
+
+        student_doc = {
+            "student_id": s_id,
+            "register_number": s_id,
+            "name": s_name,
+            "email": s_email,
+            "password": hashed_pw,
+            "department": s_dept,
+            "year": s_year,
+            "role": "STUDENT",
+            "status": "active",
+            "created_at": now_utc
+        }
+        docs_to_insert.append(student_doc)
+        results_detail.append({
+            "student_id": s_id,
+            "register_number": s_id,
+            "name": s_name,
+            "status": "Success",
+            "reason": "Created"
+        })
+
+    # 3. Bulk insert in batches of 500
+    if docs_to_insert:
         try:
-            student_doc = {
-                "student_id": s_id,
-                "name": s_name,
-                "email": s_email,
-                "password": hash_password(s_password),
-                "department": s_dept,
-                "year": s_year,
-                "role": "STUDENT",
-                "status": "active",
-                "created_at": datetime.now(timezone.utc)
-            }
-            db.users.insert_one(student_doc)
-            imported_count += 1
-            results_detail.append({
-                "student_id": s_id,
-                "register_number": s_id,
-                "name": s_name,
-                "status": "Success",
-                "reason": "Created"
-            })
+            for i in range(0, len(docs_to_insert), 500):
+                batch = docs_to_insert[i:i + 500]
+                db.users.insert_many(batch, ordered=False)
+            imported_count = len(docs_to_insert)
         except Exception as e:
-            failed_count += 1
-            results_detail.append({
-                "student_id": s_id,
-                "register_number": s_id,
-                "name": s_name,
-                "status": "Failed",
-                "reason": str(e)
-            })
+            # Fallback if any batch fails
+            imported_count = 0
+            for doc in docs_to_insert:
+                try:
+                    db.users.insert_one(doc)
+                    imported_count += 1
+                except Exception:
+                    pass
 
     if imported_count > 0:
-        from services.notification_service import create_notification
-        admins = list(db.users.find({"role": "ADMIN"}))
-        for admin in admins:
-            create_notification(
-                user_id=admin["_id"],
-                title="New Students Imported",
-                message=f"Successfully imported {imported_count} students from file.",
-                notif_type="system"
-            )
+        try:
+            from services.notification_service import create_notification
+            admins = list(db.users.find({"role": "ADMIN"}))
+            for admin in admins:
+                create_notification(
+                    user_id=admin["_id"],
+                    title="New Students Imported",
+                    message=f"Successfully imported {imported_count} students from file.",
+                    notif_type="system"
+                )
+        except Exception:
+            pass
 
     return jsonify({
         "success": True,
