@@ -1562,6 +1562,55 @@ def delete_contest(contest_id):
     db.contest_participants.delete_many({"contest_id": contest_id})
     return jsonify({"success": True, "message": "Contest deleted successfully"}), 200
 
+@admin_bp.route("/contests/<contest_id>/restore/<participant_id>", methods=["POST"])
+@admin_required
+def restore_contest_access(contest_id, participant_id):
+    """Restore a locked student's contest access so they can resume their attempt."""
+    db = get_db()
+    if not ObjectId.is_valid(contest_id) or not ObjectId.is_valid(participant_id):
+        return jsonify({"error": "Invalid contest or participant ID", "success": False}), 400
+
+    participant = db.contest_participants.find_one({"_id": ObjectId(participant_id)})
+    if not participant:
+        return jsonify({"error": "Participant not found", "success": False}), 404
+
+    if participant.get("status") != "LOCKED":
+        return jsonify({"error": "Participant is not in LOCKED state", "success": False}), 400
+
+    now = get_utc_now()
+    restore_event = {
+        "event_type": "ACCESS_RESTORED",
+        "detail": "Admin restored contest access after lock",
+        "restored_by": str(request.current_user.get("_id", "")),
+        "timestamp": now.isoformat()
+    }
+
+    db.contest_participants.update_one(
+        {"_id": ObjectId(participant_id)},
+        {
+            "$set": {
+                "status": "IN_PROGRESS",
+                "restored_at": now,
+                "locked_at": None,
+                "lock_reason": None
+            },
+            "$push": {"anti_cheat_logs": restore_event}
+        }
+    )
+
+    # Notify the student
+    from services.notification_service import create_notification
+    user_id = participant.get("user_id")
+    if user_id:
+        create_notification(
+            user_id=user_id,
+            title="Contest Access Restored",
+            message="Your contest access has been restored by the administrator. You can now re-enter the contest and continue from where you left off.",
+            notif_type="contest"
+        )
+
+    return jsonify({"success": True, "message": "Student contest access restored successfully"}), 200
+
 @admin_bp.route("/contests/<contest_id>/participants", methods=["GET"])
 @admin_required
 def get_contest_participants_admin(contest_id):
@@ -2601,7 +2650,8 @@ def get_contest_report(contest_id):
             "overall_score": metrics["overall_score"],
             "score_breakdown": metrics["score_breakdown"],
             "anti_cheat": metrics["anti_cheat"],
-            "problem_breakdowns": metrics["problem_breakdowns"]
+            "problem_breakdowns": metrics["problem_breakdowns"],
+            "is_locked": bool(p.get("status") == "LOCKED")
         })
 
     # Sort leaderboard by:

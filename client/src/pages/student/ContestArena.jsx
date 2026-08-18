@@ -37,9 +37,10 @@ export const ContestArena = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Mode: 'overview' | 'arena' | 'submitted' | 'terminated'
+  // Mode: 'overview' | 'arena' | 'submitted' | 'terminated' | 'locked'
   const [mode, setMode] = useState('overview');
   const [terminationReason, setTerminationReason] = useState('');
+  const [lockReason, setLockReason] = useState('');
 
   // Contest countdown to start (for upcoming)
   const [countdownToStart, setCountdownToStart] = useState(0);
@@ -50,6 +51,7 @@ export const ContestArena = () => {
   const countdownTimerRef = useRef(null);
   const isTerminatedRef = useRef(false);
   const isSubmittedRef = useRef(false);
+  const isLockedRef = useRef(false);
 
   // Active section inside arena: 'coding' | 'mcqs'
   const [activeSection, setActiveSection] = useState('coding');
@@ -144,6 +146,15 @@ export const ContestArena = () => {
           return;
         }
 
+        // Check if student's attempt is locked (awaiting admin restore)
+        if (c.is_locked) {
+          isLockedRef.current = true;
+          setLockReason(c.lock_reason || 'Exited fullscreen contest mode');
+          setTimeLeft(c.remaining_seconds || 0);
+          setMode('locked');
+          return;
+        }
+
         // Check if student already submitted
         if (c.has_submitted) {
           isSubmittedRef.current = true;
@@ -182,7 +193,11 @@ export const ContestArena = () => {
         }
       }
     } catch (err) {
-      if (err.response?.data?.is_terminated) {
+      if (err.response?.data?.is_locked) {
+        isLockedRef.current = true;
+        setLockReason(err.response?.data?.lock_reason || 'Exited fullscreen');
+        setMode('locked');
+      } else if (err.response?.data?.is_terminated) {
         isTerminatedRef.current = true;
         setTerminationReason(err.response?.data?.termination_reason || 'Violation of strict contest rules');
         setMode('terminated');
@@ -220,6 +235,28 @@ export const ContestArena = () => {
     }
   }, [id]);
 
+  // ----------------- LOCK HANDLER (Fullscreen Exit) -----------------
+
+  const triggerLock = useCallback(async (detail) => {
+    if (isTerminatedRef.current || isSubmittedRef.current || isLockedRef.current) return;
+    isLockedRef.current = true;
+
+    if (timerRef.current) clearInterval(timerRef.current);
+
+    setLockReason(detail);
+    setMode('locked');
+
+    try {
+      await api.post(`/contests/${id}/lock`, {
+        reason: 'EXIT_FULLSCREEN',
+        detail: detail,
+        remaining_seconds: timeLeft,
+      });
+    } catch (err) {
+      console.error('Failed to report lock to server:', err);
+    }
+  }, [id, timeLeft]);
+
   // ----------------- START STRICT ARENA -----------------
 
   const handleStartContest = async () => {
@@ -241,7 +278,11 @@ export const ContestArena = () => {
         startArena(res.data.remaining_seconds || (contest?.duration_minutes * 60) || 3600);
       }
     } catch (err) {
-      if (err.response?.data?.is_terminated) {
+      if (err.response?.data?.is_locked) {
+        isLockedRef.current = true;
+        setLockReason(err.response?.data?.lock_reason || 'Exited fullscreen');
+        setMode('locked');
+      } else if (err.response?.data?.is_terminated) {
         isTerminatedRef.current = true;
         setTerminationReason(err.response?.data?.termination_reason || 'Contest Terminated — Single attempt locked');
         setMode('terminated');
@@ -292,8 +333,8 @@ export const ContestArena = () => {
 
     // 3. Exiting Fullscreen Detection
     const handleFullscreenChange = () => {
-      if (!document.fullscreenElement && !isTerminatedRef.current && !isSubmittedRef.current) {
-        triggerTermination('EXIT_FULLSCREEN', 'Exited fullscreen contest mode');
+      if (!document.fullscreenElement && !isTerminatedRef.current && !isSubmittedRef.current && !isLockedRef.current) {
+        triggerLock('Exited fullscreen contest mode');
       }
     };
 
@@ -348,7 +389,7 @@ export const ContestArena = () => {
       document.removeEventListener('contextmenu', handleContextMenu);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [mode, triggerTermination]);
+  }, [mode, triggerTermination, triggerLock]);
 
   // ----------------- PROBLEM & CODE HANDLING -----------------
 
@@ -491,7 +532,89 @@ export const ContestArena = () => {
   }
 
   // =========================================================================
-  // 🛑 1. CONTEST TERMINATED SCREEN (Strict Mode Violation)
+  // 🔒 1a. CONTEST LOCKED SCREEN (Fullscreen Exit — Awaiting Admin Restore)
+  // =========================================================================
+  if (mode === 'locked') {
+    const handleCheckStatus = async () => {
+      try {
+        const res = await api.get(`/contests/${id}`);
+        if (res.data.success) {
+          const c = res.data.contest;
+          if (c.is_locked) {
+            // Still locked
+            return;
+          }
+          if (c.is_terminated) {
+            isTerminatedRef.current = true;
+            setTerminationReason(c.termination_reason || 'Left strict contest environment');
+            setMode('terminated');
+            return;
+          }
+          // Restored! Reset lock state and prompt re-entry
+          isLockedRef.current = false;
+          setContest(c);
+          setTimeLeft(c.remaining_seconds || 0);
+          setMode('overview');
+        }
+      } catch (err) {
+        console.error('Failed to check status:', err);
+      }
+    };
+
+    return (
+      <div className="fixed inset-0 z-50 bg-[#0B0F14] text-white flex items-center justify-center p-4">
+        <div className="max-w-lg w-full p-8 rounded-3xl border border-[#F59E0B]/40 bg-[#151A21] shadow-2xl text-center space-y-6 animate-fadeIn">
+          
+          <div className="w-16 h-16 rounded-3xl bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/40 flex items-center justify-center mx-auto shadow-lg">
+            <Lock className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="px-3 py-1 rounded-full bg-[#F59E0B]/15 text-[#F59E0B] text-[11px] font-mono font-bold uppercase border border-[#F59E0B]/30">
+              Status: LOCKED
+            </span>
+            <h1 className="text-2xl font-extrabold text-[#F8FAFC] tracking-tight">
+              Test Locked
+            </h1>
+            <p className="text-sm font-semibold text-[#F59E0B] leading-relaxed">
+              Please contact the administrator.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#0B0F14] border border-[#30363D] text-left text-xs space-y-2">
+            <div className="font-bold text-[#94A3B8] uppercase tracking-wider">Reason:</div>
+            <div className="font-mono text-[#F8FAFC] font-semibold">
+              {lockReason || 'Exited fullscreen contest mode'}
+            </div>
+            <div className="text-[11px] text-[#94A3B8]">
+              Your progress, code, answers, and remaining time have been preserved. Once the administrator restores your access, you can continue the contest from where you left off.
+            </div>
+          </div>
+
+          <div className="pt-2 flex flex-col items-center gap-3">
+            <button
+              type="button"
+              onClick={handleCheckStatus}
+              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-2xl bg-[#F59E0B] hover:bg-[#D97706] text-[#0B0F14] font-bold text-xs shadow-md transition"
+            >
+              <Lock className="w-4 h-4" />
+              <span>Check Status</span>
+            </button>
+            <Link
+              to="/contests"
+              className="text-xs font-bold text-[#667085] hover:text-[#94A3B8] transition"
+            >
+              ← Back to Contests
+            </Link>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // 🛑 1b. CONTEST TERMINATED SCREEN (Strict Mode Violation)
   // =========================================================================
   if (mode === 'terminated') {
     return (

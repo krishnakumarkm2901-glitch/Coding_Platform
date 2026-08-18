@@ -25,7 +25,9 @@ import {
   Download,
   FileText,
   Check,
-  X
+  X,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import { Modal } from '../../components/common/Modal';
 import { PageLoader } from '../../components/common/Loader';
@@ -783,13 +785,20 @@ export const ManageContestReports = () => {
 
                       {/* Anti-Cheat Status */}
                       <td className="py-3.5 px-3 text-center">
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${ac.status === 'AUTO_TERMINATED'
-                            ? 'bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30'
-                            : ac.status === 'FLAGGED'
-                              ? 'bg-[#F2B705]/15 text-[#F2B705] border border-[#F2B705]/30'
-                              : 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${cand.is_locked
+                            ? 'bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30'
+                            : ac.status === 'AUTO_TERMINATED'
+                              ? 'bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30'
+                              : ac.status === 'FLAGGED'
+                                ? 'bg-[#F2B705]/15 text-[#F2B705] border border-[#F2B705]/30'
+                                : 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
                           }`}>
-                          {ac.status === 'AUTO_TERMINATED' ? (
+                          {cand.is_locked ? (
+                            <>
+                              <Lock className="w-3 h-3" />
+                              <span>Locked</span>
+                            </>
+                          ) : ac.status === 'AUTO_TERMINATED' ? (
                             <>
                               <ShieldAlert className="w-3 h-3" />
                               <span>Terminated</span>
@@ -808,19 +817,42 @@ export const ManageContestReports = () => {
                         </span>
                       </td>
 
-                      {/* Audit Button */}
+                      {/* Audit & Restore Buttons */}
                       <td className="py-3.5 px-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedCandidate(cand);
-                            setModalTab('overall');
-                          }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#DDF2FF] dark:bg-[#142A43] hover:bg-[#0757B8] dark:hover:bg-[#0066CC] text-[#0757B8] dark:text-[#60A5FA] hover:text-white border border-[#0757B8]/20 text-xs font-bold transition shadow-sm"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>Audit</span>
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          {cand.is_locked && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!window.confirm(`Restore contest access for ${cand.name}? They will be able to re-enter fullscreen and resume their attempt.`)) return;
+                                try {
+                                  const res = await api.post(`/admin/contests/${selectedContestId}/restore/${cand.participant_id}`);
+                                  if (res.data.success) {
+                                    fetchContestReport(selectedContestId);
+                                  }
+                                } catch (err) {
+                                  console.error('Failed to restore access:', err);
+                                  alert(err.response?.data?.error || 'Failed to restore access');
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#F59E0B]/15 hover:bg-[#F59E0B] text-[#F59E0B] hover:text-white border border-[#F59E0B]/30 text-xs font-bold transition shadow-sm"
+                            >
+                              <Unlock className="w-3.5 h-3.5" />
+                              <span>Restore Access</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCandidate(cand);
+                              setModalTab('overall');
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#DDF2FF] dark:bg-[#142A43] hover:bg-[#0757B8] dark:hover:bg-[#0066CC] text-[#0757B8] dark:text-[#60A5FA] hover:text-white border border-[#0757B8]/20 text-xs font-bold transition shadow-sm"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Audit</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );

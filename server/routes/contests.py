@@ -230,12 +230,16 @@ def get_contest_details(contest_id):
     })
 
     is_terminated = False
+    is_locked = False
     termination_reason = ""
+    lock_reason = ""
     participant_status = "NOT_STARTED"
 
     if participant:
         is_terminated = bool(participant.get("auto_terminated") or participant.get("status") == "AUTO_TERMINATED")
+        is_locked = bool(participant.get("status") == "LOCKED")
         termination_reason = participant.get("termination_reason", "")
+        lock_reason = participant.get("lock_reason", "")
         participant_status = participant.get("status", "IN_PROGRESS")
         if participant.get("submitted") and not is_terminated:
             participant_status = "SUBMITTED"
@@ -243,13 +247,16 @@ def get_contest_details(contest_id):
     # Remaining time in seconds based on contest duration and student joined_at
     duration_secs = int(contest.get("duration_minutes", 60)) * 60
     remaining_seconds = duration_secs
-    if participant and participant.get("joined_at"):
+    # If locked, use the saved remaining_seconds from the lock event
+    if is_locked and participant.get("locked_remaining_seconds") is not None:
+        remaining_seconds = int(participant.get("locked_remaining_seconds"))
+    elif participant and participant.get("joined_at"):
         joined_at = parse_to_utc_datetime(participant.get("joined_at"))
         if joined_at:
             elapsed = (now - joined_at).total_seconds()
             remaining_seconds = max(0, int(duration_secs - elapsed))
     
-    if end:
+    if end and not is_locked:
         time_to_end = max(0, int((end - now).total_seconds()))
         remaining_seconds = min(remaining_seconds, time_to_end)
 
@@ -318,7 +325,9 @@ def get_contest_details(contest_id):
             "is_registered": bool(participant),
             "has_submitted": participant.get("submitted", False) if participant else False,
             "is_terminated": is_terminated,
+            "is_locked": is_locked,
             "termination_reason": termination_reason,
+            "lock_reason": lock_reason,
             "participant_status": participant_status,
             "score": participant.get("score", 0) if participant else 0,
             "problems": problems,
@@ -384,6 +393,15 @@ def join_contest(contest_id):
                 "is_terminated": True,
                 "status": "AUTO_TERMINATED",
                 "termination_reason": existing.get("termination_reason", "Violation of strict contest rules"),
+                "success": False
+            }), 403
+
+        if existing.get("status") == "LOCKED":
+            return jsonify({
+                "error": "Your contest attempt is currently locked. Please contact the administrator to restore access.",
+                "is_locked": True,
+                "status": "LOCKED",
+                "lock_reason": existing.get("lock_reason", "Exited fullscreen"),
                 "success": False
             }), 403
 
@@ -503,6 +521,67 @@ def terminate_contest(contest_id):
         "message": "Contest Terminated — You left the contest environment. Your attempt has been terminated and you cannot re-enter this contest.",
         "is_terminated": True,
         "termination_reason": detail
+    }), 200
+
+@contests_bp.route("/<contest_id>/lock", methods=["POST"])
+@student_required
+def lock_contest(contest_id):
+    """Lock a student's contest attempt (e.g. on fullscreen exit) without terminating it.
+    Preserves all progress and remaining time for admin restoration."""
+    db = get_db()
+    if not ObjectId.is_valid(contest_id):
+        return jsonify({"error": "Invalid contest ID", "success": False}), 400
+
+    user = request.current_user
+    user_id = user["_id"]
+    data = request.get_json() or {}
+    reason = data.get("reason", "EXIT_FULLSCREEN")
+    detail = data.get("detail", "Exited fullscreen contest mode")
+    remaining_seconds = int(data.get("remaining_seconds", 0))
+
+    event_record = {
+        "event_type": "CONTEST_LOCKED",
+        "detail": f"Contest Locked: {detail}",
+        "reason": reason,
+        "remaining_seconds": remaining_seconds,
+        "timestamp": get_utc_now().isoformat()
+    }
+
+    db.contest_participants.update_one(
+        {"contest_id": contest_id, "user_id": user_id},
+        {
+            "$set": {
+                "status": "LOCKED",
+                "locked_at": get_utc_now(),
+                "lock_reason": detail,
+                "locked_remaining_seconds": remaining_seconds
+            },
+            "$push": {"anti_cheat_logs": event_record}
+        },
+        upsert=True
+    )
+
+    from services.notification_service import create_notification
+    create_notification(
+        user_id=user_id,
+        title="Contest Locked",
+        message=f"Your contest attempt has been locked: {detail}. Please contact the administrator to restore access.",
+        notif_type="anti-cheat"
+    )
+    admins = list(db.users.find({"role": "ADMIN"}))
+    for admin in admins:
+        create_notification(
+            user_id=admin["_id"],
+            title="Contest Locked — Student Needs Restore",
+            message=f"Student {user.get('name')} ({user.get('student_id', '')}) has been locked from contest due to: {detail}. Use Restore Access to unlock.",
+            notif_type="anti-cheat"
+        )
+
+    return jsonify({
+        "success": True,
+        "message": "Contest attempt locked. Please contact the administrator to restore access.",
+        "is_locked": True,
+        "lock_reason": detail
     }), 200
 
 @contests_bp.route("/<contest_id>/event", methods=["POST"])
