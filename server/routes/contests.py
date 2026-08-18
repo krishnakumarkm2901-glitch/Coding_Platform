@@ -602,8 +602,20 @@ def lock_contest(contest_id):
         "timestamp": get_utc_now().isoformat()
     }
 
+    # Update only the ACTIVE attempt for this user
+    user_id_objs = [str(user_id)]
+    if ObjectId.is_valid(user_id):
+        user_id_objs.append(ObjectId(user_id))
+    contest_id_objs = [contest_id]
+    if ObjectId.is_valid(contest_id):
+        contest_id_objs.append(ObjectId(contest_id))
+
     db.contest_participants.update_one(
-        {"contest_id": contest_id, "user_id": user_id},
+        {
+            "contest_id": {"$in": contest_id_objs},
+            "user_id": {"$in": user_id_objs},
+            "is_active_attempt": True
+        },
         {
             "$set": {
                 "status": "LOCKED",
@@ -612,8 +624,7 @@ def lock_contest(contest_id):
                 "locked_remaining_seconds": remaining_seconds
             },
             "$push": {"anti_cheat_logs": event_record}
-        },
-        upsert=True
+        }
     )
 
     from services.notification_service import create_notification

@@ -1581,11 +1581,32 @@ def restore_contest_access(contest_id, participant_id):
     if not participant:
         return jsonify({"error": "Participant not found", "success": False}), 404
 
-    if participant.get("status") != "LOCKED":
-        return jsonify({"error": "Participant is not in LOCKED state. Only locked attempts can be retested.", "success": False}), 400
+    # Only allow restore for LOCKED attempts
+    current_status = participant.get("status", "")
+    if current_status != "LOCKED":
+        return jsonify({
+            "error": f"Cannot restore participant with status '{current_status}'. Only LOCKED attempts can be retested.",
+            "success": False
+        }), 400
+
+    # Check if there's already an active retest for this participant
+    user_id = participant.get("user_id")
+    current_attempt = participant.get("attempt_number", 1)
+    
+    existing_retest = db.contest_participants.find_one({
+        "contest_id": ObjectId(contest_id) if ObjectId.is_valid(contest_id) else contest_id,
+        "user_id": user_id,
+        "is_active_attempt": True,
+        "attempt_number": {"$gt": current_attempt}
+    })
+    
+    if existing_retest:
+        return jsonify({
+            "error": "A retest attempt is already active for this student. They must complete or be terminated from that attempt first.",
+            "success": False
+        }), 400
 
     now = get_utc_now()
-    user_id = participant.get("user_id")
     student_id = participant.get("student_id")
     
     # 1. Mark the original attempt as terminated (preserve for history)
@@ -1607,7 +1628,6 @@ def restore_contest_access(contest_id, participant_id):
 
     # 3. Generate new randomized questions for retest (attempt_number = current + 1)
     from routes.contests import get_or_assign_student_mcqs
-    current_attempt = participant.get("attempt_number", 1)
     next_attempt = current_attempt + 1
     
     new_assigned_mcq_ids = get_or_assign_student_mcqs(
@@ -1622,7 +1642,7 @@ def restore_contest_access(contest_id, participant_id):
 
     # 4. Create a new active attempt record
     new_retest_doc = {
-        "contest_id": contest_id,
+        "contest_id": ObjectId(contest_id) if ObjectId.is_valid(contest_id) else contest_id,
         "user_id": user_id,
         "student_id": student_id,
         "student_name": participant.get("student_name"),
@@ -1631,7 +1651,7 @@ def restore_contest_access(contest_id, participant_id):
         "assigned_mcq_ids": new_assigned_mcq_ids,
         "attempt_number": next_attempt,
         "is_active_attempt": True,
-        "original_attempt_id": str(ObjectId(participant_id)),
+        "original_attempt_id": ObjectId(participant_id),
         "status": "IN_PROGRESS",
         "score": 0,
         "problems_solved": 0,
