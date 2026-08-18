@@ -254,9 +254,11 @@ def get_contest_details(contest_id):
         "is_active_attempt": True
     })
     
-    # If no active attempt, check for the most recent one (for locked/terminated scenarios)
+    # Keep track of the historical status separately
+    historical_participant = None
     if not participant:
-        participant = db.contest_participants.find_one({
+        # Look for any previous attempt to understand why this student is not active
+        historical_participant = db.contest_participants.find_one({
             "contest_id": {"$in": contest_id_objs},
             "user_id": {"$in": user_id_objs}
         }, sort=[("attempt_number", -1)])
@@ -271,6 +273,7 @@ def get_contest_details(contest_id):
     retest_info = None
 
     if participant:
+        # We have an ACTIVE attempt - use it for current contest data
         # Check if LOCKED attempt has expired (30 minutes passed)
         if participant.get("status") == "LOCKED" and participant.get("lock_timeout_at"):
             lock_timeout = parse_to_utc_datetime(participant.get("lock_timeout_at"))
@@ -309,23 +312,31 @@ def get_contest_details(contest_id):
         participant_status = participant.get("status", "IN_PROGRESS")
         if participant.get("submitted") and not is_terminated:
             participant_status = "SUBMITTED"
-        
-        # Check if there's a new retest available (higher attempt number with IN_PROGRESS status)
-        if is_locked or is_terminated:
-            current_attempt = participant.get("attempt_number", 1)
-            retest_attempt = db.contest_participants.find_one({
-                "contest_id": {"$in": contest_id_objs},
-                "user_id": {"$in": user_id_objs},
-                "is_active_attempt": True,
-                "attempt_number": {"$gt": current_attempt}
-            })
-            if retest_attempt:
-                is_retest_available = True
-                retest_info = {
-                    "participant_id": str(retest_attempt["_id"]),
-                    "attempt_number": retest_attempt.get("attempt_number", 2),
-                    "status": retest_attempt.get("status", "IN_PROGRESS")
-                }
+    elif historical_participant:
+        # No active attempt, but we have history - show why (terminated or locked)
+        is_terminated = bool(historical_participant.get("auto_terminated") or historical_participant.get("status") == "AUTO_TERMINATED")
+        is_locked = bool(historical_participant.get("status") == "LOCKED" and not is_terminated)
+        termination_reason = historical_participant.get("termination_reason", "")
+        lock_reason = historical_participant.get("lock_reason", "")
+        participant_status = historical_participant.get("status", "NOT_STARTED")
+    
+    # Check if there's a new active retest available (higher attempt number with is_active_attempt: True)
+    # This applies both when we have an active attempt and when we have historical terminated attempt
+    if is_locked or is_terminated:
+        current_attempt = (participant or historical_participant).get("attempt_number", 1)
+        retest_attempt = db.contest_participants.find_one({
+            "contest_id": {"$in": contest_id_objs},
+            "user_id": {"$in": user_id_objs},
+            "is_active_attempt": True,
+            "attempt_number": {"$gt": current_attempt}
+        })
+        if retest_attempt:
+            is_retest_available = True
+            retest_info = {
+                "participant_id": str(retest_attempt["_id"]),
+                "attempt_number": retest_attempt.get("attempt_number", 2),
+                "status": retest_attempt.get("status", "IN_PROGRESS")
+            }
 
     # Remaining time in seconds based on contest duration and student joined_at
     duration_secs = int(contest.get("duration_minutes", 60)) * 60
@@ -369,7 +380,11 @@ def get_contest_details(contest_id):
     mcqs = []
     if user_role == "ADMIN":
         assigned_mcq_ids = [str(mid) for mid in contest.get("mcq_ids", []) if mid]
+    elif participant:
+        # Student has an active attempt - use their assigned questions
+        assigned_mcq_ids = [str(mid) for mid in participant.get("assigned_mcq_ids", []) if mid]
     else:
+        # Student has no active attempt - assign fresh questions
         assigned_mcq_ids = get_or_assign_student_mcqs(db, contest, user_id, request.current_user.get("student_id"), now)
 
     if assigned_mcq_ids:

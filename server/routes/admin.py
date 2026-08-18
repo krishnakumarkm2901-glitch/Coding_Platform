@@ -1566,9 +1566,10 @@ def delete_contest(contest_id):
 @admin_required
 def restore_contest_access(contest_id, participant_id):
     """
-    Admin action to activate a retest for a LOCKED attempt.
+    Admin action to activate a retest for a LOCKED or TERMINATED attempt.
     Creates a NEW attempt with fresh questions, excluding previously assigned questions.
-    This must happen within the 30-minute lock resolution window.
+    For LOCKED attempts: must happen within the 30-minute lock resolution window.
+    For TERMINATED attempts: can be resolved at any time.
     """
     db = get_db()
     if not ObjectId.is_valid(contest_id) or not ObjectId.is_valid(participant_id):
@@ -1582,36 +1583,37 @@ def restore_contest_access(contest_id, participant_id):
     if not participant:
         return jsonify({"error": "Participant not found", "success": False}), 404
 
-    # Verify status is LOCKED
+    # Verify status is LOCKED or TERMINATED (can resolve either)
     current_status = participant.get("status", "")
-    if current_status != "LOCKED":
+    if current_status not in ["LOCKED", "AUTO_TERMINATED"]:
         return jsonify({
-            "error": f"Cannot restore participant with status '{current_status}'. Only LOCKED attempts can be resolved.",
+            "error": f"Cannot restore participant with status '{current_status}'. Only LOCKED or TERMINATED attempts can be resolved.",
             "current_status": current_status,
             "success": False
         }), 400
 
-    # Verify lock window is still active (within 30 minutes)
+    # Verify lock window is still active (within 30 minutes) - only for LOCKED attempts
     now = get_utc_now()
-    lock_timeout = parse_to_utc_datetime(participant.get("lock_timeout_at"))
-    if lock_timeout and now > lock_timeout:
-        # Window expired - update to TERMINATED and reject
-        db.contest_participants.update_one(
-            {"_id": ObjectId(participant_id)},
-            {
-                "$set": {
-                    "status": "AUTO_TERMINATED",
-                    "resolution_window_active": False,
-                    "auto_terminated": True,
-                    "terminated_at": now,
-                    "termination_reason": "Lock resolution window (30 minutes) expired without admin action"
+    if current_status == "LOCKED":
+        lock_timeout = parse_to_utc_datetime(participant.get("lock_timeout_at"))
+        if lock_timeout and now > lock_timeout:
+            # Window expired - update to TERMINATED and reject
+            db.contest_participants.update_one(
+                {"_id": ObjectId(participant_id)},
+                {
+                    "$set": {
+                        "status": "AUTO_TERMINATED",
+                        "resolution_window_active": False,
+                        "auto_terminated": True,
+                        "terminated_at": now,
+                        "termination_reason": "Lock resolution window (30 minutes) expired without admin action"
+                    }
                 }
-            }
-        )
-        return jsonify({
-            "error": "The 30-minute lock resolution window has expired. This attempt has been auto-terminated.",
-            "success": False
-        }), 403
+            )
+            return jsonify({
+                "error": "The 30-minute lock resolution window has expired. This attempt has been auto-terminated.",
+                "success": False
+            }), 403
 
     # Check for existing retest for this user
     user_id = participant.get("user_id")
@@ -1733,17 +1735,44 @@ def restore_contest_access(contest_id, participant_id):
 @admin_bp.route("/contests/<contest_id>/participants", methods=["GET"])
 @admin_required
 def get_contest_participants_admin(contest_id):
-    """Get all participants and anti-cheat warning logs for a contest."""
+    """Get all ACTIVE participants for a contest (most recent attempt per student).
+    Query param ?show_all=true to see all attempts including historical."""
     db = get_db()
     if not ObjectId.is_valid(contest_id):
         return jsonify({"error": "Invalid contest ID", "success": False}), 400
 
-    participants_cursor = db.contest_participants.find({"contest_id": contest_id}).sort("score", -1)
+    show_all = request.args.get("show_all", "false").lower() == "true"
+    
+    if show_all:
+        # Show all attempts (including terminated/locked)
+        participants_cursor = db.contest_participants.find({"contest_id": contest_id}).sort([("student_id", 1), ("attempt_number", -1)])
+    else:
+        # Show only ACTIVE attempts (prioritize is_active_attempt: True)
+        participants_cursor = db.contest_participants.find({
+            "contest_id": contest_id,
+            "is_active_attempt": True
+        }).sort("score", -1)
+    
     participants = []
     
     for p in participants_cursor:
         is_term = bool(p.get("auto_terminated") or p.get("status") == "AUTO_TERMINATED")
-        status_val = "AUTO_TERMINATED" if is_term else ("SUBMITTED" if p.get("submitted") else "IN_PROGRESS")
+        is_locked = bool(p.get("status") == "LOCKED")
+        status_val = "AUTO_TERMINATED" if is_term else ("LOCKED" if is_locked else ("SUBMITTED" if p.get("submitted") else "IN_PROGRESS"))
+        
+        # Calculate lock timeout remaining
+        lock_timeout_remaining = 0
+        if is_locked and p.get("lock_timeout_at"):
+            from utils.time_utils import parse_to_utc_datetime, get_utc_now
+            lock_timeout_dt = parse_to_utc_datetime(p.get("lock_timeout_at"))
+            if lock_timeout_dt:
+                lock_timeout_remaining = max(0, int((lock_timeout_dt - get_utc_now()).total_seconds()))
+        
+        # Show attempt number if not first attempt (indicates retest)
+        attempt_num = p.get("attempt_number", 1)
+        status_display = status_val
+        if attempt_num > 1:
+            status_display = f"{status_val} (Attempt #{attempt_num})"
 
         participants.append({
             "id": str(p["_id"]),
@@ -1754,8 +1783,14 @@ def get_contest_participants_admin(contest_id):
             "problems_solved": p.get("problems_solved", 0),
             "mcqs_correct": p.get("mcqs_correct", 0),
             "status": status_val,
+            "status_display": status_display,
+            "attempt_number": attempt_num,
+            "is_active_attempt": p.get("is_active_attempt", False),
             "auto_terminated": is_term,
+            "is_locked": is_locked,
             "termination_reason": p.get("termination_reason", ""),
+            "lock_reason": p.get("lock_reason", ""),
+            "lock_timeout_remaining_seconds": lock_timeout_remaining,
             "submitted": p.get("submitted", False),
             "submitted_at": p.get("submitted_at").isoformat() if isinstance(p.get("submitted_at"), datetime) else str(p.get("submitted_at")),
             "terminated_at": p.get("terminated_at").isoformat() if isinstance(p.get("terminated_at"), datetime) else str(p.get("terminated_at")),
