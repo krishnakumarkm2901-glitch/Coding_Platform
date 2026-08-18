@@ -513,6 +513,8 @@ export const ManageContests = () => {
     allow_calculator: false,
   });
 
+  const [checkedMcqIds, setCheckedMcqIds] = useState([]);
+
   useEffect(() => {
     fetchInitialData();
     // Lightweight polling every 6 seconds for live status updates
@@ -573,6 +575,7 @@ export const ManageContests = () => {
       mcq_ids: [],
       allow_calculator: false,
     });
+    setCheckedMcqIds([]);
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -611,6 +614,7 @@ export const ManageContests = () => {
       mcq_ids: mcqIds,
       allow_calculator: Boolean(contest.allow_calculator || contest.allowCalculator),
     });
+    setCheckedMcqIds([]);
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -639,6 +643,30 @@ export const ManageContests = () => {
           : [...prev.mcq_ids, idStr],
       };
     });
+  };
+
+  const handleDeleteSingleMCQ = (mId) => {
+    const idStr = String(mId);
+    const confirmDelete = window.confirm("Are you sure you want to remove this question from this contest?");
+    if (confirmDelete) {
+      setFormData((prev) => ({
+        ...prev,
+        mcq_ids: prev.mcq_ids.filter((id) => id !== idStr)
+      }));
+      setCheckedMcqIds((prev) => prev.filter((id) => id !== idStr));
+    }
+  };
+
+  const handleDeleteSelectedMCQs = () => {
+    if (checkedMcqIds.length === 0) return;
+    const confirmDelete = window.confirm(`Are you sure you want to remove the ${checkedMcqIds.length} selected questions from this contest?`);
+    if (confirmDelete) {
+      setFormData((prev) => ({
+        ...prev,
+        mcq_ids: prev.mcq_ids.filter((id) => !checkedMcqIds.includes(id))
+      }));
+      setCheckedMcqIds([]);
+    }
   };
 
   const handleTogglePublish = async (contest) => {
@@ -1146,6 +1174,47 @@ export const ManageContests = () => {
                 <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
               </div>
 
+              {formData.mcq_ids.length > 0 && (
+                <div className="flex items-center justify-between px-3.5 py-2 mb-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs">
+                  <label className="flex items-center gap-2 cursor-pointer select-none font-bold text-[#667085] dark:text-[#94A3B8]">
+                    <input
+                      type="checkbox"
+                      checked={
+                        filteredMCQs.filter(m => formData.mcq_ids.includes(String(m.id || m._id))).length > 0 &&
+                        filteredMCQs
+                          .filter(m => formData.mcq_ids.includes(String(m.id || m._id)))
+                          .every(m => checkedMcqIds.includes(String(m.id || m._id)))
+                      }
+                      onChange={(e) => {
+                        const eligibleIds = filteredMCQs
+                          .filter(m => formData.mcq_ids.includes(String(m.id || m._id)))
+                          .map(m => String(m.id || m._id));
+                        if (e.target.checked) {
+                          setCheckedMcqIds(prev => Array.from(new Set([...prev, ...eligibleIds])));
+                        } else {
+                          setCheckedMcqIds(prev => prev.filter(id => !eligibleIds.includes(id)));
+                        }
+                      }}
+                      className="rounded text-purple-600 focus:ring-purple-600 dark:bg-[#20252C] dark:border-[#30363D]"
+                    />
+                    <span>Select All ({filteredMCQs.filter(m => formData.mcq_ids.includes(String(m.id || m._id))).length} in Contest)</span>
+                  </label>
+
+                  {checkedMcqIds.length > 0 && (
+                    <div className="flex items-center gap-2 animate-fadeIn">
+                      <span className="font-bold text-purple-600 dark:text-purple-400">{checkedMcqIds.length} Selected</span>
+                      <button
+                        type="button"
+                        onClick={handleDeleteSelectedMCQs}
+                        className="px-2.5 py-1 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold text-[10px] transition shadow-sm"
+                      >
+                        Delete Selected
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl">
                 {filteredMCQs.map((m) => {
                   const mIdStr = String(m.id || m._id);
@@ -1162,11 +1231,43 @@ export const ManageContests = () => {
                           : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
                       }`}
                     >
-                      <div className="truncate pr-2">
-                        <div className="truncate font-semibold">{m.question}</div>
-                        <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
+                      <div className="flex items-center gap-2 truncate pr-2">
+                        {isSelected && (
+                          <input
+                            type="checkbox"
+                            checked={checkedMcqIds.includes(mIdStr)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setCheckedMcqIds(prev => [...prev, mIdStr]);
+                              } else {
+                                setCheckedMcqIds(prev => prev.filter(id => id !== mIdStr));
+                              }
+                            }}
+                            className="w-3.5 h-3.5 rounded text-purple-600 focus:ring-purple-600 dark:bg-[#151A21] dark:border-[#30363D] shrink-0"
+                          />
+                        )}
+                        <div className="truncate">
+                          <div className="truncate font-semibold">{m.question}</div>
+                          <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
+                        </div>
                       </div>
-                      {isSelected && <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0" />}
+                      {isSelected && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            title="Remove Question from Contest"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteSingleMCQ(mIdStr);
+                            }}
+                            className="p-1 rounded-lg text-red-500 hover:bg-red-500/10 transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                          <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                        </div>
+                      )}
                     </button>
                   );
                 })}
