@@ -510,6 +510,7 @@ export const ManageContests = () => {
     is_published: true,
     problem_ids: [],
     mcq_ids: [],
+    allow_calculator: false,
   });
 
   useEffect(() => {
@@ -570,6 +571,7 @@ export const ManageContests = () => {
       is_published: true,
       problem_ids: [],
       mcq_ids: [],
+      allow_calculator: false,
     });
     setErrorMsg('');
     setIsModalOpen(true);
@@ -607,6 +609,7 @@ export const ManageContests = () => {
       is_published: Boolean(contest.is_published),
       problem_ids: probIds,
       mcq_ids: mcqIds,
+      allow_calculator: Boolean(contest.allow_calculator || contest.allowCalculator),
     });
     setErrorMsg('');
     setIsModalOpen(true);
@@ -1178,10 +1181,26 @@ export const ManageContests = () => {
                 type="checkbox"
                 checked={formData.is_published}
                 onChange={(e) => setFormData({ ...formData, is_published: e.target.checked })}
-                className="rounded"
+                className="rounded text-[#0757B8] focus:ring-[#0757B8] dark:bg-[#20252C] dark:border-[#30363D]"
               />
               <span className="font-bold">Publish contest to students immediately</span>
             </label>
+          </div>
+
+          {/* Allow Calculator Option */}
+          <div className="pt-2 border-t border-[#D9E0E8] dark:border-[#30363D]">
+            <label className="flex items-center gap-2 cursor-pointer text-[#172033] dark:text-[#F8FAFC]">
+              <input
+                type="checkbox"
+                checked={formData.allow_calculator}
+                onChange={(e) => setFormData({ ...formData, allow_calculator: e.target.checked })}
+                className="rounded text-[#0757B8] focus:ring-[#0757B8] dark:bg-[#20252C] dark:border-[#30363D]"
+              />
+              <span className="font-bold">Allow Calculator (ON / OFF)</span>
+            </label>
+            <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] ml-6 mt-0.5">
+              When enabled, a scientific calculator button is shown to students during the contest.
+            </p>
           </div>
 
           <div className="pt-4 flex items-center justify-end gap-2">

@@ -323,7 +323,9 @@ def get_contest_details(contest_id):
             "score": participant.get("score", 0) if participant else 0,
             "problems": problems,
             "mcqs": mcqs,
-            "mcqs_per_student": contest.get("mcqs_per_student", 20)
+            "mcqs_per_student": contest.get("mcqs_per_student", 20),
+            "allow_calculator": bool(contest.get("allow_calculator", False)),
+            "allowCalculator": bool(contest.get("allow_calculator", False))
         }
     }), 200
 

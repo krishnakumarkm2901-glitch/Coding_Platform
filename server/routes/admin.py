@@ -1406,6 +1406,8 @@ def list_admin_contests():
             "problems_count": len(prob_ids),
             "mcqs_count": len(mcq_ids),
             "mcqs_per_student": c.get("mcqs_per_student", 20),
+            "allow_calculator": bool(c.get("allow_calculator", False)),
+            "allowCalculator": bool(c.get("allow_calculator", False)),
             "total_points": c.get("total_points", len(mcq_ids) * 10 + len(prob_ids) * 50),
             "is_published": c.get("is_published", False),
             "participants_count": participants_count
@@ -1467,6 +1469,7 @@ def create_contest():
         "mcq_ids": mcq_ids,
         "mcqIds": mcq_ids,
         "mcqs_per_student": int(data.get("mcqs_per_student") or 20),
+        "allow_calculator": bool(data.get("allow_calculator") or data.get("allowCalculator") or False),
         "total_points": total_points,
         "is_published": data.get("is_published", False),
         "created_at": now
@@ -1537,6 +1540,10 @@ def update_contest(contest_id):
         parsed_end = parse_to_utc_datetime(data["end_time"])
         if parsed_end:
             update_data["end_time"] = parsed_end
+
+    if "allow_calculator" in data or "allowCalculator" in data:
+        update_data["allow_calculator"] = bool(data.get("allow_calculator") or data.get("allowCalculator") or False)
+        update_data["allowCalculator"] = bool(data.get("allow_calculator") or data.get("allowCalculator") or False)
 
     update_data["updated_at"] = get_utc_now()
 

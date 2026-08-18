@@ -803,15 +803,17 @@ export const ContestArena = () => {
 
         {/* Right: Calculator, Timer & Submit Button */}
         <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            onClick={() => setCalculatorOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F5F7FA] dark:bg-[#0B0F14] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[#D9E0E8] dark:border-[#30363D] text-[#0757B8] dark:text-[#60A5FA] font-bold text-xs shadow-sm transition"
-            title="Open Contest Scientific Calculator"
-          >
-            <Calculator className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Calculator</span>
-          </button>
+          {Boolean(contest?.allow_calculator || contest?.allowCalculator) && (
+            <button
+              type="button"
+              onClick={() => setCalculatorOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F5F7FA] dark:bg-[#0B0F14] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[#D9E0E8] dark:border-[#30363D] text-[#0757B8] dark:text-[#60A5FA] font-bold text-xs shadow-sm transition"
+              title="Open Contest Scientific Calculator"
+            >
+              <Calculator className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Calculator</span>
+            </button>
+          )}
 
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F5F7FA] dark:bg-[#0B0F14] border border-[#D9E0E8] dark:border-[#30363D] font-mono font-bold text-xs text-[#0757B8] dark:text-[#60A5FA]">
             <Clock className="w-3.5 h-3.5" />
@@ -1097,10 +1099,12 @@ export const ContestArena = () => {
       </div>
 
       {/* Internal Contest Scientific Calculator */}
-      <ScientificCalculator
-        isOpen={calculatorOpen}
-        onClose={() => setCalculatorOpen(false)}
-      />
+      {Boolean(contest?.allow_calculator || contest?.allowCalculator) && (
+        <ScientificCalculator
+          isOpen={calculatorOpen}
+          onClose={() => setCalculatorOpen(false)}
+        />
+      )}
     </div>
   );
 };
