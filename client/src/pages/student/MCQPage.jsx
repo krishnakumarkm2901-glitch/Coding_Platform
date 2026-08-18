@@ -164,18 +164,20 @@ export const MCQPage = () => {
               </p>
             </div>
 
-            <div className="flex items-center gap-4">
-              <div className="text-center px-4 py-2 bg-[#22B573]/10 border border-[#22B573]/25 rounded-xl">
-                <div className="text-lg font-bold text-[#22B573]">{quizResults.correct_count}</div>
-                <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-semibold">Correct</div>
-              </div>
-              <div className="text-center px-4 py-2 bg-[#EF4444]/10 border border-[#EF4444]/25 rounded-xl">
-                <div className="text-lg font-bold text-[#EF4444]">{quizResults.wrong_count}</div>
-                <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-semibold">Wrong</div>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+              <div className="flex items-center gap-3">
+                <div className="text-center px-4 py-2 bg-[#22B573]/10 border border-[#22B573]/25 rounded-xl min-w-[72px]">
+                  <div className="text-lg font-bold text-[#22B573]">{quizResults.correct_count}</div>
+                  <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-semibold">Correct</div>
+                </div>
+                <div className="text-center px-4 py-2 bg-[#EF4444]/10 border border-[#EF4444]/25 rounded-xl min-w-[72px]">
+                  <div className="text-lg font-bold text-[#EF4444]">{quizResults.wrong_count}</div>
+                  <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-semibold">Wrong</div>
+                </div>
               </div>
               <button
                 onClick={handleRetake}
-                className="px-4 py-2.5 rounded-xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-blue-500/20 flex items-center gap-2 transition"
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition"
               >
                 <RotateCcw className="w-4 h-4" />
                 Retake Quiz
@@ -301,7 +303,7 @@ export const MCQPage = () => {
 
           {/* Submit Quiz Action Button */}
           {!quizSubmitted && (
-            <div className="sticky bottom-4 z-20 p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-2xl flex items-center justify-between">
+            <div className="sticky bottom-4 z-20 p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="text-xs font-semibold text-[#172033] dark:text-[#F8FAFC]">
                 <span>{answeredCount} of {mcqs.length} answered</span>
                 {answeredCount < mcqs.length && (
@@ -311,7 +313,7 @@ export const MCQPage = () => {
               <button
                 onClick={handleSubmitQuiz}
                 disabled={submitting || answeredCount === 0}
-                className="px-6 py-2.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center gap-2 transition disabled:opacity-50"
+                className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-emerald-500/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
               >
                 <span>{submitting ? 'Evaluating...' : 'Submit Assessment'}</span>
                 <ArrowRight className="w-4 h-4" />

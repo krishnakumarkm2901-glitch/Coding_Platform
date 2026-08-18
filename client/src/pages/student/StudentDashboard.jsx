@@ -72,17 +72,17 @@ export const StudentDashboard = () => {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             <Link
               to="/problems"
-              className="px-5 py-2.5 rounded-2xl bg-white dark:bg-[#0066CC] hover:bg-slate-100 dark:hover:opacity-95 text-[#0757B8] dark:text-white font-bold text-xs shadow-md flex items-center gap-2 transition"
+              className="px-5 py-2.5 rounded-2xl bg-white dark:bg-[#0066CC] hover:bg-slate-100 dark:hover:opacity-95 text-[#0757B8] dark:text-white font-bold text-xs shadow-md flex items-center justify-center gap-2 transition"
             >
               <Play className="w-4 h-4 fill-current" />
               <span>Practice Problems</span>
             </Link>
             <Link
               to="/contests"
-              className="px-4 py-2.5 rounded-2xl bg-white/15 dark:bg-[#20252C] hover:bg-white/25 dark:hover:bg-[#142A43] text-white text-xs font-semibold border border-white/20 dark:border-[#30363D] transition"
+              className="px-4 py-2.5 rounded-2xl bg-white/15 dark:bg-[#20252C] hover:bg-white/25 dark:hover:bg-[#142A43] text-white text-xs font-semibold border border-white/20 dark:border-[#30363D] transition text-center"
             >
               View Contests
             </Link>

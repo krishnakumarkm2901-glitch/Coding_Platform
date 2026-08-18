@@ -69,10 +69,10 @@ export const ContestList = () => {
       </div>
 
       {/* Contest Category Tabs */}
-      <div className="flex items-center gap-2 border-b border-[#D9E0E8] dark:border-[#30363D] pb-2">
+      <div className="flex overflow-x-auto gap-2 border-b border-[#D9E0E8] dark:border-[#30363D] pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           onClick={() => setTab('active')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition whitespace-nowrap flex-shrink-0 ${
             tab === 'active'
               ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30 shadow-sm'
               : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] hover:bg-[#F5F7FA] dark:hover:bg-[#20252C]'
@@ -84,7 +84,7 @@ export const ContestList = () => {
 
         <button
           onClick={() => setTab('upcoming')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition whitespace-nowrap flex-shrink-0 ${
             tab === 'upcoming'
               ? 'bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20 dark:border-[#0066CC]/40 shadow-sm'
               : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] hover:bg-[#F5F7FA] dark:hover:bg-[#20252C]'
@@ -96,7 +96,7 @@ export const ContestList = () => {
 
         <button
           onClick={() => setTab('past')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold transition whitespace-nowrap flex-shrink-0 ${
             tab === 'past'
               ? 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30 shadow-sm'
               : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] hover:bg-[#F5F7FA] dark:hover:bg-[#20252C]'

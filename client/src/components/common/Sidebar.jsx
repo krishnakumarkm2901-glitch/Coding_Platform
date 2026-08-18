@@ -66,8 +66,8 @@ export const Sidebar = ({ isOpen, onClose }) => {
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-50 w-64 border-r border-[#E2E8F0] dark:border-[#1E293B] bg-[#FFFFFF] dark:bg-[#0F172A] flex flex-col justify-between transition-all duration-300 ease-in-out lg:translate-x-0 ${
-          isOpen ? 'translate-x-0' : '-translate-x-full'
+        className={`fixed top-0 bottom-0 left-0 z-50 w-[85vw] max-w-[18rem] border-r border-[#E2E8F0] dark:border-[#1E293B] bg-[#FFFFFF] dark:bg-[#0F172A] flex flex-col justify-between transition-all duration-300 ease-in-out lg:w-64 ${
+          isOpen ? 'translate-x-0' : 'max-lg:-translate-x-full lg:translate-x-0'
         }`}
       >
         {/* Top Header Logo */}

@@ -46,9 +46,9 @@ export const StudentLogin = () => {
         <ThemeToggle />
       </div>
 
-      <div className="w-full max-w-md relative z-10">
+      <div className="w-full max-w-md relative z-10 px-2 sm:px-0">
         {/* Logo & Header */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-6 sm:mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-white dark:bg-[#151A21] p-1.5 border border-[#D9E0E8] dark:border-[#30363D] shadow-lg shadow-blue-500/10 mb-4 overflow-hidden">
             <img src="/circa-logo.jpeg" alt="CIRCA Logo" className="w-full h-full object-contain" />
           </div>
@@ -57,7 +57,7 @@ export const StudentLogin = () => {
         </div>
 
         {/* Login Card */}
-        <div className="p-8 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-xl relative">
+        <div className="p-5 sm:p-8 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-xl relative">
           {error && (
             <div className="mb-6 p-3.5 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/25 flex items-start gap-3 text-[#EF4444] text-xs font-bold">
               <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
