@@ -81,7 +81,9 @@ export const ManageStudents = () => {
     'Cyber Security',
     'Food Technology',
     'Agriculture Engineering',
-    'Aeronautical Engineering'
+    'Aeronautical Engineering',
+    'Computer & Communication Engineering',
+    'Artificial Intelligence & Machine Learning'
   ];
 
   const yearsList = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
