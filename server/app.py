@@ -53,34 +53,6 @@ def create_app():
             "version": "1.0.0"
         })
 
-    # ---- TEMPORARY: One-time admin setup (REMOVE after use) ----
-    @app.route("/api/setup-admin", methods=["GET"])
-    def setup_admin():
-        from models.db import get_db
-        from utils.security import hash_password
-        from datetime import datetime, timezone
-        db = get_db()
-        result = db.users.update_one(
-            {"email": "nitplacements@nehrucolleges.com"},
-            {"$set": {
-                "name": "Platform Administrator",
-                "email": "nitplacements@nehrucolleges.com",
-                "username": "nitplacements",
-                "password": hash_password("circa@1234"),
-                "role": "ADMIN",
-                "status": "active",
-                "updated_at": datetime.now(timezone.utc),
-            },
-            "$setOnInsert": {
-                "created_at": datetime.now(timezone.utc),
-            }},
-            upsert=True
-        )
-        if result.upserted_id:
-            return jsonify({"success": True, "message": "Admin user CREATED successfully!"})
-        else:
-            return jsonify({"success": True, "message": "Admin user UPDATED successfully!"})
-    # ---- END TEMPORARY ----
 
     @app.route("/api/health")
     def health_check():

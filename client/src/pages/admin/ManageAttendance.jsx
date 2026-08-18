@@ -49,7 +49,10 @@ const DEPARTMENTS = [
   'Electrical & Electronics Engineering',
   'Mechanical Engineering',
   'Civil Engineering',
-  'Cyber Security'
+  'Cyber Security',
+  'Food Technology',
+  'Agriculture Engineering',
+  'Aeronautical Engineering'
 ];
 
 const COLLEGE_YEARS = ['All', '1st Year', '2nd Year', '3rd Year', '4th Year'];
