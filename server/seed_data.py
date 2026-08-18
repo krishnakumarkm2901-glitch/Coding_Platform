@@ -31,15 +31,15 @@ def seed_database():
     print("--- 1. Seeding Admin Account ---")
     admin_doc = {
         "name": "Platform Administrator",
-        "email": "admin@college.edu",
-        "username": "admin",
-        "password": hash_password("admin123"),
+        "email": "nitplacements@nehrucolleges.com",
+        "username": "nitplacements",
+        "password": hash_password("circa@1234"),
         "role": "ADMIN",
         "status": "active",
         "created_at": datetime.now(timezone.utc)
     }
     db.users.insert_one(admin_doc)
-    print("Admin created: admin@college.edu / admin123")
+    print("Admin created: nitplacements@nehrucolleges.com / circa@1234")
 
     print("--- 2. Seeding 10 Student Accounts ---")
     students_data = [

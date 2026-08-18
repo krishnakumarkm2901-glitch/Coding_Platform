@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { ThemeToggle } from '../../components/common/ThemeToggle';
-import { ShieldCheck, Lock, Mail, ArrowRight, AlertCircle, Sparkles, User } from 'lucide-react';
+import { ShieldCheck, Lock, Mail, ArrowRight, AlertCircle, User } from 'lucide-react';
 
 export const AdminLogin = () => {
   const [identifier, setIdentifier] = useState('');
@@ -31,10 +31,7 @@ export const AdminLogin = () => {
     }
   };
 
-  const handleDemoAdmin = () => {
-    setIdentifier('admin@college.edu');
-    setPassword('admin123');
-  };
+
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-[#F5F7FA] dark:bg-[#0B0F14] text-[#172033] dark:text-[#F8FAFC] relative overflow-hidden transition-colors">
@@ -75,7 +72,7 @@ export const AdminLogin = () => {
                   required
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="admin@college.edu"
+                  placeholder="nitplacements@nehrucolleges.com"
                   className="w-full pl-10 pr-4 py-3 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] placeholder-[#8491A5] text-xs font-semibold focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC] transition"
                 />
               </div>
@@ -116,17 +113,7 @@ export const AdminLogin = () => {
             </button>
           </form>
 
-          {/* Quick Demo Fill */}
-          <div className="mt-6 pt-6 border-t border-[#D9E0E8] dark:border-[#30363D]">
-            <button
-              type="button"
-              onClick={handleDemoAdmin}
-              className="w-full py-2.5 px-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] text-xs font-bold text-[#172033] dark:text-[#F8FAFC] border border-[#D9E0E8] dark:border-[#30363D] hover:border-[#0757B8] dark:hover:border-[#0066CC] flex items-center justify-center gap-2 transition"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />
-              <span>Fill Admin Demo (admin@college.edu / admin123)</span>
-            </button>
-          </div>
+
         </div>
 
         {/* Student Portal Link */}

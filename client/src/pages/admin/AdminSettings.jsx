@@ -22,7 +22,7 @@ export const AdminSettings = () => {
 
   // Platform preferences state
   const [platformName, setPlatformName] = useState('NIT_Campus_Coder');
-  const [supportEmail, setSupportEmail] = useState('admin@college.edu');
+  const [supportEmail, setSupportEmail] = useState('nitplacements@nehrucolleges.com');
   const [strictMode, setStrictMode] = useState(true);
   const [prefMsg, setPrefMsg] = useState('');
 
