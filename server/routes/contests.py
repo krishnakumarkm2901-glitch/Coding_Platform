@@ -47,10 +47,9 @@ def get_contests():
             if "mcq_ids" in c_copy:
                 c_copy["mcq_ids"] = [str(mid) for mid in c_copy["mcq_ids"]]
             
-            # Serialize datetime objects to ISO strings for cache serialization
             for key, val in c_copy.items():
                 if isinstance(val, datetime):
-                    c_copy[key] = val.isoformat()
+                    c_copy[key] = format_utc_iso(val)
             
             cached_contests.append(c_copy)
         cache.set(cache_key, cached_contests, ttl=10)
