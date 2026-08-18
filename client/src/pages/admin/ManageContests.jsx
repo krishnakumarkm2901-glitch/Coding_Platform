@@ -20,11 +20,90 @@ import {
   PlusCircle,
   FileSpreadsheet,
   Upload,
-  Download
+  Download,
+  Share2,
+  Copy
 } from 'lucide-react';
 import { Modal } from '../../components/common/Modal';
 import { PageLoader } from '../../components/common/Loader';
 import { formatISTDateTime as formatDateTime, toISTDateTimeInput } from '../../utils/date';
+
+const formatAnnouncementDate = (dateStr) => {
+  if (!dateStr) return 'N/A';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  
+  const day = d.getDate();
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[d.getMonth()];
+  const year = String(d.getFullYear()).slice(-2);
+  
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  
+  let suffix = 'th';
+  if (day === 1 || day === 21 || day === 31) suffix = 'st';
+  else if (day === 2 || day === 22) suffix = 'nd';
+  else if (day === 3 || day === 23) suffix = 'rd';
+  
+  return `${day}${suffix} ${month}'${year} ${hours}:${minutes} ${ampm}`;
+};
+
+const generateAnnouncementText = (contest, role) => {
+  if (!contest) return '';
+  const contestName = contest.title || '';
+  
+  const startDate = new Date(contest.start_time);
+  const today = new Date();
+  const isToday = startDate.getDate() === today.getDate() &&
+                  startDate.getMonth() === today.getMonth() &&
+                  startDate.getFullYear() === today.getFullYear();
+                  
+  const timeContext = isToday ? 'today' : `on ${formatAnnouncementDate(contest.start_time)}`;
+  
+  const formattedStart = formatAnnouncementDate(contest.start_time);
+  const formattedEnd = formatAnnouncementDate(contest.end_time);
+  
+  const durationMin = contest.duration_minutes || 60;
+  let durationStr = `${durationMin} mins`;
+  if (durationMin >= 1440) {
+    const days = Math.round(durationMin / 1440);
+    durationStr = `${days} day${days > 1 ? 's' : ''} (${durationMin} mins)`;
+  } else if (durationMin >= 60) {
+    const hours = Math.floor(durationMin / 60);
+    const mins = durationMin % 60;
+    durationStr = `${hours} hour${hours > 1 ? 's' : ''}${mins > 0 ? ` ${mins} mins` : ''} (${durationMin} mins)`;
+  }
+
+  const probCount = contest.problem_ids?.length ?? contest.problems_count ?? 0;
+  const mcqCount = contest.mcq_ids?.length ?? contest.mcqs_count ?? 0;
+  const totalQuestions = probCount + mcqCount;
+  
+  const contestUrl = `${window.location.origin}/contests/${contest.id}`;
+
+  return `📢 ${contestName}
+Dear Students,
+
+We are excited to inform you about the ${contestName} happening ${timeContext}.
+
+📅 Date: ${formattedStart} - ${formattedEnd}
+⏰ Duration: ${durationStr}
+❓ Total Questions: ${totalQuestions}
+
+About the Contest:
+${contest.description || 'No description provided.'}
+
+This assessment is designed for the ${role || 'Software Engineer'} role and evaluates the fundamental concepts commonly tested in placement interviews.
+
+🔗 Contest Link: ${contestUrl}
+
+All interested students are encouraged to participate and make the most of this opportunity.
+
+Wishing you all the best! 🚀`;
+};
 
 export const ManageContests = () => {
   const [contests, setContests] = useState([]);
@@ -49,6 +128,59 @@ export const ManageContests = () => {
   const [participantsLoading, setParticipantsLoading] = useState(false);
 
   const [successMsg, setSuccessMsg] = useState('');
+
+  // Sharing announcement states
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [sharingContest, setSharingContest] = useState(null);
+  const [sharingRole, setSharingRole] = useState('Software Development Engineer (SDE)');
+  const [sharingMessage, setSharingMessage] = useState('');
+  const [shareSuccess, setShareSuccess] = useState(false);
+
+  const handleOpenShareModal = (contest) => {
+    setSharingContest(contest);
+    const roleDefault = 'Software Development Engineer (SDE)';
+    setSharingRole(roleDefault);
+    const msg = generateAnnouncementText(contest, roleDefault);
+    setSharingMessage(msg);
+    setShareSuccess(false);
+    setIsShareModalOpen(true);
+  };
+
+  const handleRoleChange = (e) => {
+    const newRole = e.target.value;
+    setSharingRole(newRole);
+    if (sharingContest) {
+      setSharingMessage(generateAnnouncementText(sharingContest, newRole));
+    }
+  };
+
+  const handleCopyAnnouncement = async () => {
+    try {
+      await navigator.clipboard.writeText(sharingMessage);
+      setShareSuccess(true);
+      setTimeout(() => setShareSuccess(false), 3000);
+    } catch (err) {
+      console.error('Failed to copy text:', err);
+    }
+  };
+
+  const handleWhatsAppShare = () => {
+    const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(sharingMessage)}`;
+    window.open(url, '_blank');
+  };
+
+  const handleSystemShare = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: sharingContest?.title || 'Contest Announcement',
+          text: sharingMessage
+        });
+      } catch (err) {
+        console.error('System share cancelled or failed:', err);
+      }
+    }
+  };
 
   // Excel MCQ Import States
   const [isImportMCQModalOpen, setIsImportMCQModalOpen] = useState(false);
@@ -734,6 +866,13 @@ export const ManageContests = () => {
 
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => handleOpenShareModal(c)}
+                      className="p-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#EEF6FF] dark:hover:bg-[#0B1E36] text-[#667085] dark:text-[#94A3B8] hover:text-[#0757B8] dark:hover:text-[#60A5FA] transition"
+                      title="Share Contest Link"
+                    >
+                      <Share2 className="w-4 h-4" />
+                    </button>
+                    <button
                       onClick={() => handleOpenEdit(c)}
                       className="p-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#667085] dark:text-[#94A3B8] hover:text-[#0757B8] dark:hover:text-[#60A5FA] transition"
                       title="Edit Contest"
@@ -1107,6 +1246,88 @@ export const ManageContests = () => {
             </table>
           </div>
         )}
+      </Modal>
+
+      {/* SHARE ANNOUNCEMENT MODAL */}
+      <Modal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        title="Share Contest Announcement"
+        maxWidth="max-w-xl"
+      >
+        <div className="space-y-4 text-xs">
+          <div>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">
+              Target Role / Level
+            </label>
+            <input
+              type="text"
+              value={sharingRole}
+              onChange={handleRoleChange}
+              placeholder="e.g. Software Development Engineer (SDE)"
+              className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">
+              Announcement Message
+            </label>
+            <textarea
+              rows="12"
+              value={sharingMessage}
+              onChange={(e) => setSharingMessage(e.target.value)}
+              className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono whitespace-pre-wrap focus:outline-none"
+            />
+          </div>
+
+          {shareSuccess && (
+            <div className="p-2.5 rounded-xl bg-[#22B573]/15 border border-[#22B573]/30 text-[#22B573] font-bold text-center animate-fadeIn">
+              Message copied to clipboard successfully! 🚀
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-[#D9E0E8] dark:border-[#30363D]">
+            <button
+              type="button"
+              onClick={() => setIsShareModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] font-semibold transition"
+            >
+              Close
+            </button>
+            
+            <button
+              type="button"
+              onClick={handleCopyAnnouncement}
+              className="px-4 py-2 rounded-xl bg-[#0757B8] hover:bg-[#064A9E] text-white font-bold flex items-center gap-1.5 shadow-sm transition"
+            >
+              <Copy className="w-4 h-4" />
+              <span>Copy Message</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleWhatsAppShare}
+              className="px-4 py-2 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold flex items-center gap-1.5 shadow-sm transition"
+            >
+              <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.513 2.262 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.724-1.455L0 24zm6.59-4.846c1.6.95 3.188 1.449 4.825 1.451 5.436 0 9.86-4.37 9.864-9.799.002-2.63-1.023-5.101-2.885-6.97-1.863-1.868-4.343-2.898-6.977-2.9-5.439 0-9.861 4.37-9.866 9.8-.001 1.762.479 3.483 1.393 5.018l-.999 3.648 3.745-.982zm12.5-5.321c-.328-.163-1.94-.949-2.24-1.058-.298-.11-.517-.163-.733.163-.217.327-.84.11-.733.163.298-.11.517-.163.733-.163-.217.327-.84 1.058-1.028 1.277-.188.217-.377.245-.705.082-1.157-.502-1.958-1.037-2.735-1.9-.208-.245-.208-.245.082-.49.208-.188.406-.406.634-.634.188-.188.245-.327.327-.517.082-.19.04-.378-.02-.517-.06-.137-.517-1.22-.705-1.687-.188-.454-.377-.393-.517-.393H9.98c-.188 0-.486.082-.733.327-.245.245-.949.928-.949 2.261 0 1.332.97 2.616 1.104 2.78 1.104 1.451 2.378 2.628 3.642 3.178.694.301 1.25.393 1.722.327.525-.078 1.94-.783 2.217-1.547.278-.764.278-1.42.196-1.546-.082-.128-.278-.208-.605-.371z"/>
+              </svg>
+              <span>Share on WhatsApp</span>
+            </button>
+
+            {navigator.share && (
+              <button
+                type="button"
+                onClick={handleSystemShare}
+                className="px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold flex items-center gap-1.5 shadow-sm transition"
+              >
+                <Share2 className="w-4 h-4" />
+                <span>Device Share</span>
+              </button>
+            )}
+          </div>
+        </div>
       </Modal>
 
       {/* MANUAL CREATE CODING PROBLEM MODAL */}
