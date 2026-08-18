@@ -37,10 +37,11 @@ export const ContestArena = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Mode: 'overview' | 'arena' | 'submitted' | 'terminated' | 'locked'
+  // Mode: 'overview' | 'arena' | 'submitted' | 'terminated' | 'locked' | 'retest_available'
   const [mode, setMode] = useState('overview');
   const [terminationReason, setTerminationReason] = useState('');
   const [lockReason, setLockReason] = useState('');
+  const [retestInfo, setRetestInfo] = useState(null);
 
   // Contest countdown to start (for upcoming)
   const [countdownToStart, setCountdownToStart] = useState(0);
@@ -151,7 +152,14 @@ export const ContestArena = () => {
           isLockedRef.current = true;
           setLockReason(c.lock_reason || 'Exited fullscreen contest mode');
           setTimeLeft(c.remaining_seconds || 0);
-          setMode('locked');
+          
+          // Check if a retest has been activated
+          if (c.is_retest_available && c.retest_info) {
+            setRetestInfo(c.retest_info);
+            setMode('retest_available');
+          } else {
+            setMode('locked');
+          }
           return;
         }
 
@@ -257,6 +265,67 @@ export const ContestArena = () => {
     }
   }, [id, timeLeft]);
 
+  // ----------------- RETEST START HANDLER -----------------
+
+  const handleStartRetest = async () => {
+    try {
+      setLoading(true);
+      setError('');
+
+      // Request Fullscreen for retest
+      if (document.documentElement.requestFullscreen) {
+        try {
+          await document.documentElement.requestFullscreen();
+        } catch (fsErr) {
+          console.warn('Fullscreen request bypassed or denied:', fsErr);
+        }
+      }
+
+      // Fetch the latest contest details to get the retest participant
+      const res = await api.get(`/contests/${id}`);
+      if (res.data.success) {
+        const c = res.data.contest;
+        setContest(c);
+        
+        // Verify retest is available
+        if (c.is_retest_available && c.retest_info) {
+          // Initialize retest with fresh questions
+          const initSolutions = {};
+          c.problems?.forEach((p) => {
+            initSolutions[p.id] = {
+              python: p.starter_code?.python || '# Write your Python solution here\n',
+              cpp: p.starter_code?.cpp || '// Write your C++ solution here\n',
+              c: p.starter_code?.c || '// Write your C solution here\n',
+              java: p.starter_code?.java || '// Write your Java solution here\n',
+              javascript: p.starter_code?.javascript || '// Write your JavaScript solution here\n',
+            };
+          });
+          setCodeSolutions(initSolutions);
+          setMcqAnswers({});
+          setSelectedProblemIdx(0);
+          setSelectedMCQIdx(0);
+          
+          if (c.problems && c.problems.length > 0) {
+            setCurrentCode(initSolutions[c.problems[0].id]?.python || '');
+          }
+
+          // Reset attempt refs for new retest
+          isTerminatedRef.current = false;
+          isLockedRef.current = false;
+          
+          // Start the arena with remaining time
+          startArena(c.remaining_seconds || (c.duration_minutes * 60) || 3600);
+        } else {
+          setError('Retest is no longer available. Please refresh and try again.');
+        }
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to start retest.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ----------------- START STRICT ARENA -----------------
 
   const handleStartContest = async () => {
@@ -334,7 +403,13 @@ export const ContestArena = () => {
     // 3. Exiting Fullscreen Detection
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement && !isTerminatedRef.current && !isSubmittedRef.current && !isLockedRef.current) {
-        triggerLock('Exited fullscreen contest mode');
+        // If this is a retest (attempt > 1), terminate it. Otherwise just lock it.
+        const isRetest = contest?.attempt_number > 1;
+        if (isRetest) {
+          triggerTermination('EXIT_FULLSCREEN_RETEST', 'Exited fullscreen during retest attempt. Retest terminated.');
+        } else {
+          triggerLock('Exited fullscreen contest mode');
+        }
       }
     };
 
@@ -614,7 +689,70 @@ export const ContestArena = () => {
   }
 
   // =========================================================================
-  // 🛑 1b. CONTEST TERMINATED SCREEN (Strict Mode Violation)
+  // � 1c. RETEST AVAILABLE SCREEN (Locked → Admin Restored)
+  // =========================================================================
+  if (mode === 'retest_available') {
+    return (
+      <div className="fixed inset-0 z-50 bg-[#0B0F14] text-white flex items-center justify-center p-4">
+        <div className="max-w-lg w-full p-8 rounded-3xl border border-[#60A5FA]/40 bg-[#151A21] shadow-2xl text-center space-y-6 animate-fadeIn">
+          
+          <div className="w-16 h-16 rounded-3xl bg-[#60A5FA]/20 text-[#60A5FA] border border-[#60A5FA]/40 flex items-center justify-center mx-auto shadow-lg">
+            <Sparkles className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="px-3 py-1 rounded-full bg-[#60A5FA]/15 text-[#60A5FA] text-[11px] font-mono font-bold uppercase border border-[#60A5FA]/30">
+              Retest Activated
+            </span>
+            <h1 className="text-2xl font-extrabold text-[#F8FAFC] tracking-tight">
+              Your Retest is Ready
+            </h1>
+            <p className="text-sm font-semibold text-[#94A3B8] leading-relaxed">
+              The administrator has activated a retest for you. A new set of questions has been prepared.
+            </p>
+          </div>
+
+          {/* Retest Details Box */}
+          <div className="p-4 rounded-2xl bg-[#0B0F14] border border-[#30363D] text-left text-xs space-y-3">
+            <div>
+              <div className="font-bold text-[#94A3B8] uppercase tracking-wider text-[10px] mb-1">Retest Info</div>
+              <div className="font-mono text-[#F8FAFC] font-semibold">Attempt #{retestInfo?.attempt_number || 2}</div>
+              <div className="text-[11px] text-[#667085] mt-1">
+                You will receive a fresh set of questions excluding those from your first attempt.
+              </div>
+            </div>
+            <div className="pt-2 border-t border-[#30363D]">
+              <div className="font-bold text-[#60A5FA] text-[11px] uppercase tracking-wider mb-1">🔒 Important</div>
+              <div className="text-[#94A3B8] text-[11px] leading-relaxed">
+                Fullscreen mode is <strong>required</strong>. Exiting fullscreen will terminate this retest attempt.
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => setMode('locked')}
+              className="flex-1 px-4 py-2.5 rounded-2xl bg-[#30363D] hover:bg-[#3D444D] text-[#F8FAFC] font-bold text-xs shadow-md transition"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleStartRetest}
+              disabled={loading}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl bg-[#60A5FA] hover:bg-[#4A9AE3] text-white font-bold text-xs shadow-md transition disabled:opacity-50"
+            >
+              <Maximize2 className="w-4 h-4" />
+              <span>Start Retest</span>
+            </button>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // �🛑 1b. CONTEST TERMINATED SCREEN (Strict Mode Violation)
   // =========================================================================
   if (mode === 'terminated') {
     return (

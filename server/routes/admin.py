@@ -1565,51 +1565,108 @@ def delete_contest(contest_id):
 @admin_bp.route("/contests/<contest_id>/restore/<participant_id>", methods=["POST"])
 @admin_required
 def restore_contest_access(contest_id, participant_id):
-    """Restore a locked student's contest access so they can resume their attempt."""
+    """
+    Activate a retest for a locked student's contest.
+    Creates a NEW attempt with fresh questions, excluding previously assigned questions.
+    """
     db = get_db()
     if not ObjectId.is_valid(contest_id) or not ObjectId.is_valid(participant_id):
         return jsonify({"error": "Invalid contest or participant ID", "success": False}), 400
+
+    contest = db.contests.find_one({"_id": ObjectId(contest_id)})
+    if not contest:
+        return jsonify({"error": "Contest not found", "success": False}), 404
 
     participant = db.contest_participants.find_one({"_id": ObjectId(participant_id)})
     if not participant:
         return jsonify({"error": "Participant not found", "success": False}), 404
 
     if participant.get("status") != "LOCKED":
-        return jsonify({"error": "Participant is not in LOCKED state", "success": False}), 400
+        return jsonify({"error": "Participant is not in LOCKED state. Only locked attempts can be retested.", "success": False}), 400
 
     now = get_utc_now()
-    restore_event = {
-        "event_type": "ACCESS_RESTORED",
-        "detail": "Admin restored contest access after lock",
-        "restored_by": str(request.current_user.get("_id", "")),
-        "timestamp": now.isoformat()
-    }
-
+    user_id = participant.get("user_id")
+    student_id = participant.get("student_id")
+    
+    # 1. Mark the original attempt as terminated (preserve for history)
     db.contest_participants.update_one(
         {"_id": ObjectId(participant_id)},
         {
             "$set": {
-                "status": "IN_PROGRESS",
-                "restored_at": now,
-                "locked_at": None,
-                "lock_reason": None
-            },
-            "$push": {"anti_cheat_logs": restore_event}
+                "is_active_attempt": False,
+                "auto_terminated": True,
+                "terminated_at": now,
+                "termination_reason": "Student exited fullscreen - Attempt terminated for retest",
+                "status": "AUTO_TERMINATED"
+            }
         }
     )
 
-    # Notify the student
+    # 2. Get previous attempt's assigned questions for exclusion
+    previous_assigned_ids = participant.get("assigned_mcq_ids", [])
+
+    # 3. Generate new randomized questions for retest (attempt_number = current + 1)
+    from routes.contests import get_or_assign_student_mcqs
+    current_attempt = participant.get("attempt_number", 1)
+    next_attempt = current_attempt + 1
+    
+    new_assigned_mcq_ids = get_or_assign_student_mcqs(
+        db, 
+        contest, 
+        user_id, 
+        student_id,
+        now=now,
+        attempt_number=next_attempt,
+        exclude_previous_ids=previous_assigned_ids
+    )
+
+    # 4. Create a new active attempt record
+    new_retest_doc = {
+        "contest_id": contest_id,
+        "user_id": user_id,
+        "student_id": student_id,
+        "student_name": participant.get("student_name"),
+        "department": participant.get("department", "CSE"),
+        "joined_at": now,
+        "assigned_mcq_ids": new_assigned_mcq_ids,
+        "attempt_number": next_attempt,
+        "is_active_attempt": True,
+        "original_attempt_id": str(ObjectId(participant_id)),
+        "status": "IN_PROGRESS",
+        "score": 0,
+        "problems_solved": 0,
+        "mcqs_correct": 0,
+        "submitted": False,
+        "auto_terminated": False,
+        "anti_cheat_logs": [
+            {
+                "event_type": "RETEST_CREATED",
+                "detail": "Admin activated retest with new question set",
+                "created_by": str(request.current_user.get("_id", "")),
+                "original_attempt_id": str(ObjectId(participant_id)),
+                "timestamp": now.isoformat()
+            }
+        ]
+    }
+    
+    new_retest_result = db.contest_participants.insert_one(new_retest_doc)
+
+    # 5. Notify the student
     from services.notification_service import create_notification
-    user_id = participant.get("user_id")
     if user_id:
         create_notification(
             user_id=user_id,
-            title="Contest Access Restored",
-            message="Your contest access has been restored by the administrator. You can now re-enter the contest and continue from where you left off.",
+            title="Retest Activated",
+            message=f"Your retest for this contest has been activated. A new set of questions has been prepared. Please enter fullscreen before starting.",
             notif_type="contest"
         )
 
-    return jsonify({"success": True, "message": "Student contest access restored successfully"}), 200
+    return jsonify({
+        "success": True, 
+        "message": "Retest activated successfully with new question set",
+        "new_participant_id": str(new_retest_result.inserted_id),
+        "attempt_number": next_attempt
+    }), 200
 
 @admin_bp.route("/contests/<contest_id>/participants", methods=["GET"])
 @admin_required

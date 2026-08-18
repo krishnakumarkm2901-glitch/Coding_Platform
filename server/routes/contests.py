@@ -105,15 +105,18 @@ def get_contests():
 
 import random
 
-def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None):
+def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None, attempt_number=1, exclude_previous_ids=None):
     """
     Fetch or generate a fixed, randomized subset of MCQs for a student.
     - If pool is 40 questions, selects 20 questions (or contest.mcqs_per_student).
     - Shuffles the selected questions into a random order.
     - Persists the assigned question IDs so the exact same 20 questions and order remain fixed.
+    - For retests: excludes questions from previous attempts (if exclude_previous_ids provided)
     """
     if now is None:
         now = get_utc_now()
+    if exclude_previous_ids is None:
+        exclude_previous_ids = []
 
     contest_id_str = str(contest.get("_id") or contest.get("id"))
     all_mcq_ids = [str(mid) for mid in contest.get("mcq_ids", []) if mid]
@@ -128,43 +131,58 @@ def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None):
     if ObjectId.is_valid(contest_id_str):
         contest_id_objs.append(ObjectId(contest_id_str))
 
-    # 1. Check if student already has assigned MCQs in contest_assigned_questions
-    assigned_doc = db.contest_assigned_questions.find_one({
-        "contest_id": {"$in": contest_id_objs},
-        "user_id": {"$in": user_id_objs}
-    })
-    if assigned_doc and assigned_doc.get("question_ids"):
-        return assigned_doc["question_ids"]
+    # For retest: check if we're creating a new attempt (attempt_number > 1)
+    if attempt_number > 1:
+        # Always create new questions for retests, don't use cache
+        pass
+    else:
+        # 1. Check if student already has assigned MCQs in contest_assigned_questions (original attempt)
+        assigned_doc = db.contest_assigned_questions.find_one({
+            "contest_id": {"$in": contest_id_objs},
+            "user_id": {"$in": user_id_objs},
+            "attempt_number": {"$exists": False}  # Legacy/original attempt
+        })
+        if assigned_doc and assigned_doc.get("question_ids"):
+            return assigned_doc["question_ids"]
 
-    # Also check existing contest_participants doc
-    participant = db.contest_participants.find_one({
-        "contest_id": {"$in": contest_id_objs},
-        "user_id": {"$in": user_id_objs}
-    })
-    if participant and participant.get("assigned_mcq_ids"):
-        return participant["assigned_mcq_ids"]
+        # Also check existing contest_participants doc
+        participant = db.contest_participants.find_one({
+            "contest_id": {"$in": contest_id_objs},
+            "user_id": {"$in": user_id_objs},
+            "is_active_attempt": True
+        })
+        if participant and participant.get("assigned_mcq_ids"):
+            return participant["assigned_mcq_ids"]
 
     # 2. Determine target count (default 20, or min(20, total) if pool is smaller, or custom mcqs_per_student)
     target_count = int(contest.get("mcqs_per_student") or 20)
     if target_count <= 0 or target_count > len(all_mcq_ids):
         target_count = min(20, len(all_mcq_ids)) if len(all_mcq_ids) >= 20 else len(all_mcq_ids)
 
-    # 3. Randomly select target_count questions from the pool
-    if len(all_mcq_ids) > target_count:
-        selected_ids = random.sample(all_mcq_ids, target_count)
+    # Filter out previously assigned questions (for retests)
+    available_ids = [qid for qid in all_mcq_ids if qid not in exclude_previous_ids]
+    
+    # 3. Randomly select target_count questions from available pool
+    if len(available_ids) >= target_count:
+        selected_ids = random.sample(available_ids, target_count)
+    elif len(available_ids) > 0:
+        # Use whatever is available if not enough unused questions
+        selected_ids = list(available_ids)
     else:
-        selected_ids = list(all_mcq_ids)
+        # Fallback: if no unused questions, use all (shouldn't happen in normal flow)
+        selected_ids = random.sample(all_mcq_ids, min(target_count, len(all_mcq_ids)))
 
     # 4. Shuffle the selected subset so question #1 is randomized across candidates
     random.shuffle(selected_ids)
 
-    # 5. Persist
+    # 5. Persist with attempt number tracking
     try:
         db.contest_assigned_questions.insert_one({
             "contest_id": contest_id_str,
             "user_id": str(user_id),
             "student_id": student_id,
             "question_ids": selected_ids,
+            "attempt_number": attempt_number,
             "assigned_at": now
         })
     except Exception:
@@ -173,16 +191,22 @@ def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None):
     # Read back to ensure we always return the stored winning sequence
     stored = db.contest_assigned_questions.find_one({
         "contest_id": {"$in": contest_id_objs},
-        "user_id": {"$in": user_id_objs}
+        "user_id": {"$in": user_id_objs},
+        "attempt_number": attempt_number
     })
     final_ids = stored.get("question_ids", selected_ids) if stored else selected_ids
 
     # Update participant if exists
-    if participant:
-        db.contest_participants.update_one(
-            {"_id": participant["_id"]},
-            {"$set": {"assigned_mcq_ids": final_ids}}
-        )
+    if attempt_number == 1:
+        participant = db.contest_participants.find_one({
+            "contest_id": {"$in": contest_id_objs},
+            "user_id": {"$in": user_id_objs}
+        })
+        if participant:
+            db.contest_participants.update_one(
+                {"_id": participant["_id"]},
+                {"$set": {"assigned_mcq_ids": final_ids}}
+            )
 
     return final_ids
 
@@ -226,14 +250,24 @@ def get_contest_details(contest_id):
 
     participant = db.contest_participants.find_one({
         "contest_id": {"$in": contest_id_objs},
-        "user_id": {"$in": user_id_objs}
+        "user_id": {"$in": user_id_objs},
+        "is_active_attempt": True
     })
+    
+    # If no active attempt, check for the most recent one (for locked/terminated scenarios)
+    if not participant:
+        participant = db.contest_participants.find_one({
+            "contest_id": {"$in": contest_id_objs},
+            "user_id": {"$in": user_id_objs}
+        }, sort=[("attempt_number", -1)])
 
     is_terminated = False
     is_locked = False
+    is_retest_available = False
     termination_reason = ""
     lock_reason = ""
     participant_status = "NOT_STARTED"
+    retest_info = None
 
     if participant:
         is_terminated = bool(participant.get("auto_terminated") or participant.get("status") == "AUTO_TERMINATED")
@@ -243,6 +277,23 @@ def get_contest_details(contest_id):
         participant_status = participant.get("status", "IN_PROGRESS")
         if participant.get("submitted") and not is_terminated:
             participant_status = "SUBMITTED"
+        
+        # Check if there's a new retest available (higher attempt number with IN_PROGRESS status)
+        if is_locked or is_terminated:
+            current_attempt = participant.get("attempt_number", 1)
+            retest_attempt = db.contest_participants.find_one({
+                "contest_id": {"$in": contest_id_objs},
+                "user_id": {"$in": user_id_objs},
+                "is_active_attempt": True,
+                "attempt_number": {"$gt": current_attempt}
+            })
+            if retest_attempt:
+                is_retest_available = True
+                retest_info = {
+                    "participant_id": str(retest_attempt["_id"]),
+                    "attempt_number": retest_attempt.get("attempt_number", 2),
+                    "status": retest_attempt.get("status", "IN_PROGRESS")
+                }
 
     # Remaining time in seconds based on contest duration and student joined_at
     duration_secs = int(contest.get("duration_minutes", 60)) * 60
@@ -326,6 +377,8 @@ def get_contest_details(contest_id):
             "has_submitted": participant.get("submitted", False) if participant else False,
             "is_terminated": is_terminated,
             "is_locked": is_locked,
+            "is_retest_available": is_retest_available,
+            "retest_info": retest_info,
             "termination_reason": termination_reason,
             "lock_reason": lock_reason,
             "participant_status": participant_status,
@@ -426,6 +479,8 @@ def join_contest(contest_id):
             "department": user.get("department", "CSE"),
             "joined_at": now,
             "assigned_mcq_ids": assigned_mcq_ids,
+            "attempt_number": 1,
+            "is_active_attempt": True,
             "status": "IN_PROGRESS",
             "score": 0,
             "problems_solved": 0,
