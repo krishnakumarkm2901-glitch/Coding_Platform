@@ -129,25 +129,23 @@ export const ManageAttendance = () => {
   const handleExportExcel = async () => {
     try {
       setExporting(true);
-      const token = localStorage.getItem('token');
-      const params = new URLSearchParams({
+      const params = {
         type: activeTab,
-        department: deptFilter !== 'All' ? deptFilter : '',
-        year: yearFilter !== 'All' ? yearFilter : '',
+        department: deptFilter !== 'All' ? deptFilter : undefined,
+        year: yearFilter !== 'All' ? yearFilter : undefined,
         month: String(monthFilter),
         calendar_year: String(calendarYearFilter),
-        search: search.trim()
+        search: search.trim() || undefined
+      };
+
+      const response = await api.get('/admin/attendance/export', {
+        params,
+        responseType: 'blob'
       });
 
-      const response = await fetch(`/api/admin/attendance/export?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+      const blob = new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
-
-      if (!response.ok) throw new Error('Export request failed');
-
-      const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
