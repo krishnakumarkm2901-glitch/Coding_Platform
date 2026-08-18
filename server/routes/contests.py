@@ -826,10 +826,14 @@ def get_student_contest_report(contest_id):
     # Calculate time taken
     joined_at = participant.get("joined_at")
     submitted_at = participant.get("submitted_at")
-    if isinstance(joined_at, datetime) and isinstance(submitted_at, datetime):
-        time_taken_sec = max(int((submitted_at - joined_at).total_seconds()), 60)
+    duration_min = contest.get("duration_minutes", 60)
+    duration_sec = duration_min * 60
+    if isinstance(joined_at, datetime):
+        end_time_calc = submitted_at if isinstance(submitted_at, datetime) else get_utc_now()
+        time_taken_sec = max(int((end_time_calc - joined_at).total_seconds()), 60)
+        time_taken_sec = min(time_taken_sec, duration_sec)
     else:
-        time_taken_sec = 600
+        time_taken_sec = min(duration_sec, 600)
     mins = time_taken_sec // 60
     secs = time_taken_sec % 60
     time_taken_formatted = f"{mins}m {secs:02d}s"
