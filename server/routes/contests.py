@@ -431,6 +431,8 @@ def get_contest_details(contest_id):
             "lock_reason": lock_reason,
             "participant_status": participant_status,
             "attempt_number": participant.get("attempt_number", 1) if participant else 1,
+            "requires_fullscreen_resume": bool(participant.get("requires_fullscreen_resume", False)) if participant else False,
+            "resume_state": participant.get("resume_state", {}) if participant else {},
             "score": participant.get("score", 0) if participant else 0,
             "problems": problems,
             "mcqs": mcqs,
@@ -476,6 +478,7 @@ def join_contest(contest_id):
 
     user = request.current_user
     user_id = user["_id"]
+    data = request.get_json(silent=True) or {}
 
     user_id_objs = [str(user_id)]
     if ObjectId.is_valid(user_id):
@@ -486,8 +489,9 @@ def join_contest(contest_id):
 
     existing = db.contest_participants.find_one({
         "contest_id": {"$in": contest_id_objs},
-        "user_id": {"$in": user_id_objs}
-    })
+        "user_id": {"$in": user_id_objs},
+        "is_active_attempt": True,
+    }, sort=[("attempt_number", -1)])
     if existing:
         if existing.get("auto_terminated") or existing.get("status") == "AUTO_TERMINATED":
             return jsonify({
@@ -514,6 +518,31 @@ def join_contest(contest_id):
                 "status": "SUBMITTED",
                 "success": False
             }), 403
+
+        if existing.get("requires_fullscreen_resume"):
+            if not data.get("resume_after_restore"):
+                return jsonify({
+                    "error": "Enter fullscreen to resume the restored attempt.",
+                    "requires_fullscreen_resume": True,
+                    "success": False,
+                }), 403
+            db.contest_participants.update_one(
+                {"_id": existing["_id"], "requires_fullscreen_resume": True},
+                {
+                    "$set": {
+                        "requires_fullscreen_resume": False,
+                        "resumed_at": now,
+                        "status": "IN_PROGRESS",
+                    },
+                    "$push": {
+                        "anti_cheat_logs": {
+                            "event_type": "ATTEMPT_RESUMED",
+                            "detail": "Student resumed restored attempt in fullscreen",
+                            "timestamp": now.isoformat(),
+                        }
+                    },
+                },
+            )
 
     duration_secs = int(contest.get("duration_minutes", 60)) * 60
     remaining_seconds = duration_secs
@@ -545,11 +574,14 @@ def join_contest(contest_id):
             ]
         })
     else:
-        joined_at = parse_to_utc_datetime(existing.get("joined_at"))
-        if joined_at:
+        if existing.get("locked_remaining_seconds") is not None and data.get("resume_after_restore"):
+            remaining_seconds = max(0, int(existing.get("locked_remaining_seconds", 0)))
+        else:
+            joined_at = parse_to_utc_datetime(existing.get("joined_at"))
+        if not data.get("resume_after_restore") and joined_at:
             elapsed = (now - joined_at).total_seconds()
             remaining_seconds = max(0, int(duration_secs - elapsed))
-        else:
+        elif existing.get("joined_at") is None:
             db.contest_participants.update_one(
                 {"_id": existing["_id"]},
                 {"$set": {"joined_at": now, "assigned_mcq_ids": assigned_mcq_ids}}
@@ -563,6 +595,7 @@ def join_contest(contest_id):
         "success": True, 
         "message": "Successfully entered contest",
         "remaining_seconds": remaining_seconds,
+        "resume_state": existing.get("resume_state", {}) if existing else {},
         "status": "IN_PROGRESS"
     }), 200
 
@@ -657,7 +690,7 @@ def lock_contest(contest_id):
     data = request.get_json() or {}
     reason = data.get("reason", "EXIT_FULLSCREEN")
     detail = data.get("detail", "Exited fullscreen contest mode")
-    remaining_seconds = int(data.get("remaining_seconds", 0))
+    resume_state = data.get("resume_state", {})
 
     now = get_utc_now()
     lock_timeout = now + timedelta(seconds=1800)  # 30 minutes from now
@@ -678,12 +711,33 @@ def lock_contest(contest_id):
     if ObjectId.is_valid(contest_id):
         contest_id_objs.append(ObjectId(contest_id))
 
-    db.contest_participants.update_one(
-        {
-            "contest_id": {"$in": contest_id_objs},
-            "user_id": {"$in": user_id_objs},
-            "is_active_attempt": True
-        },
+    active_filter = {
+        "contest_id": {"$in": contest_id_objs},
+        "user_id": {"$in": user_id_objs},
+        "is_active_attempt": True,
+        "submitted": {"$ne": True},
+        "status": {"$in": ["IN_PROGRESS", "ACTIVE"]},
+    }
+    participant = db.contest_participants.find_one(active_filter, sort=[("attempt_number", -1)])
+    if not participant:
+        return jsonify({"error": "No active contest attempt could be locked.", "success": False}), 409
+
+    # Calculate remaining contest time on the server. A resumed attempt counts
+    # down from its saved lock snapshot, not from the original join time.
+    contest = db.contests.find_one({"_id": ObjectId(contest_id)})
+    duration_seconds = int((contest or {}).get("duration_minutes", 60)) * 60
+    base_remaining = int(participant.get("locked_remaining_seconds", duration_seconds))
+    timer_started_at = parse_to_utc_datetime(participant.get("resumed_at") or participant.get("joined_at"))
+    if participant.get("resumed_at") is None:
+        base_remaining = duration_seconds
+    elapsed = max(0, int((now - timer_started_at).total_seconds())) if timer_started_at else 0
+    remaining_seconds = max(0, base_remaining - elapsed)
+    contest_end = parse_to_utc_datetime((contest or {}).get("end_time"))
+    if contest_end:
+        remaining_seconds = min(remaining_seconds, max(0, int((contest_end - now).total_seconds())))
+
+    result = db.contest_participants.update_one(
+        {"_id": participant["_id"], "status": {"$in": ["IN_PROGRESS", "ACTIVE"]}},
         {
             "$set": {
                 "status": "LOCKED",
@@ -691,11 +745,16 @@ def lock_contest(contest_id):
                 "lock_timeout_at": lock_timeout,
                 "resolution_window_active": True,
                 "lock_reason": detail,
-                "locked_remaining_seconds": remaining_seconds
+                "locked_remaining_seconds": max(0, remaining_seconds),
+                "resume_state": resume_state,
+                "requires_fullscreen_resume": False,
             },
             "$push": {"anti_cheat_logs": event_record}
         }
     )
+
+    if result.modified_count != 1:
+        return jsonify({"error": "No active contest attempt could be locked.", "success": False}), 409
 
     from services.notification_service import create_notification
     create_notification(
@@ -803,8 +862,15 @@ def submit_contest(contest_id):
 
     participant = db.contest_participants.find_one({
         "contest_id": {"$in": contest_id_objs},
-        "user_id": {"$in": user_id_objs}
-    })
+        "user_id": {"$in": user_id_objs},
+        "is_active_attempt": True,
+    }, sort=[("attempt_number", -1)])
+    if not participant:
+        return jsonify({"error": "Active contest attempt not found", "success": False}), 404
+    if participant.get("status") == "LOCKED":
+        return jsonify({"error": "Locked attempts cannot be submitted.", "is_locked": True, "success": False}), 423
+    if participant.get("auto_terminated") or participant.get("status") == "AUTO_TERMINATED":
+        return jsonify({"error": "Terminated attempts cannot be submitted.", "is_terminated": True, "success": False}), 403
     assigned_mcq_ids = participant.get("assigned_mcq_ids") if participant else get_or_assign_student_mcqs(db, contest, user_id, user.get("student_id"), now)
     
     if mcq_answers:
@@ -871,7 +937,7 @@ def submit_contest(contest_id):
 
     # Update participant record with full pre-aggregated metrics
     db.contest_participants.update_one(
-        {"contest_id": contest_id, "user_id": user_id},
+        {"_id": participant["_id"], "status": {"$in": ["IN_PROGRESS", "ACTIVE"]}},
         {
             "$set": {
                 "score": total_score,
@@ -885,7 +951,11 @@ def submit_contest(contest_id):
                 "code_solutions": code_solutions,
                 "coding_results": coding_results,
                 "submitted": True,
-                "submitted_at": get_utc_now()
+                "submitted_at": get_utc_now(),
+                "status": "SUBMITTED",
+                "auto_terminated": False,
+                "resolution_window_active": False,
+                "requires_fullscreen_resume": False,
             }
         },
         upsert=True

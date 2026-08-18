@@ -37,12 +37,13 @@ export const ContestArena = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Mode: 'overview' | 'arena' | 'submitted' | 'terminated' | 'locked' | 'retest_available'
+  // Mode: 'overview' | 'arena' | 'submitted' | 'terminated' | 'locked' | 'resume_available' | 'retest_available'
   const [mode, setMode] = useState('overview');
   const [terminationReason, setTerminationReason] = useState('');
   const [lockReason, setLockReason] = useState('');
   const [lockTimeRemaining, setLockTimeRemaining] = useState(0);
   const [retestInfo, setRetestInfo] = useState(null);
+  const [resumeInfo, setResumeInfo] = useState(null);
 
   // Contest countdown to start (for upcoming)
   const [countdownToStart, setCountdownToStart] = useState(0);
@@ -155,6 +156,15 @@ export const ContestArena = () => {
         if (c.has_submitted) {
           isSubmittedRef.current = true;
           setMode('submitted');
+          return;
+        }
+
+        // Admin restored this same attempt. Do not resume until the student
+        // explicitly re-enters fullscreen.
+        if (c.requires_fullscreen_resume) {
+          isLockedRef.current = false;
+          setResumeInfo(c.resume_state || {});
+          setMode('resume_available');
           return;
         }
 
@@ -274,11 +284,60 @@ export const ContestArena = () => {
         reason: 'EXIT_FULLSCREEN',
         detail: detail,
         remaining_seconds: timeLeft,
+        resume_state: {
+          code_solutions: {
+            ...codeSolutions,
+            ...(contest?.problems?.[selectedProblemIdx] ? {
+              [contest.problems[selectedProblemIdx].id]: {
+                ...(codeSolutions[contest.problems[selectedProblemIdx].id] || {}),
+                [currentLanguage]: currentCode,
+              },
+            } : {}),
+          },
+          mcq_answers: mcqAnswers,
+          selected_problem_index: selectedProblemIdx,
+          selected_mcq_index: selectedMCQIdx,
+          active_section: activeSection,
+          current_language: currentLanguage,
+          current_code: currentCode,
+        },
       });
     } catch (err) {
       console.error('Failed to report lock to server:', err);
     }
-  }, [id, timeLeft]);
+  }, [id, timeLeft, codeSolutions, contest, selectedProblemIdx, currentLanguage, currentCode, mcqAnswers, selectedMCQIdx, activeSection]);
+
+  const handleResumeAttempt = async () => {
+    try {
+      setLoading(true);
+      setError('');
+
+      if (!document.documentElement.requestFullscreen) {
+        throw new Error('Fullscreen is not supported by this browser.');
+      }
+      await document.documentElement.requestFullscreen();
+      if (!document.fullscreenElement) {
+        throw new Error('Fullscreen is required to continue the contest.');
+      }
+
+      const res = await api.post(`/contests/${id}/join`, { resume_after_restore: true });
+      const saved = res.data?.resume_state || resumeInfo || {};
+      setCodeSolutions(saved.code_solutions || codeSolutions);
+      setMcqAnswers(saved.mcq_answers || {});
+      setSelectedProblemIdx(saved.selected_problem_index || 0);
+      setSelectedMCQIdx(saved.selected_mcq_index || 0);
+      setActiveSection(saved.active_section || activeSection);
+      setCurrentLanguage(saved.current_language || currentLanguage);
+      setCurrentCode(saved.current_code || '');
+      isLockedRef.current = false;
+      isTerminatedRef.current = false;
+      startArena(res.data.remaining_seconds);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Failed to resume the contest.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // ----------------- RETEST START HANDLER -----------------
 
@@ -418,13 +477,7 @@ export const ContestArena = () => {
     // 3. Exiting Fullscreen Detection
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement && !isTerminatedRef.current && !isSubmittedRef.current && !isLockedRef.current) {
-        // If this is a retest (attempt > 1), terminate it. Otherwise just lock it.
-        const isRetest = contest?.attempt_number > 1;
-        if (isRetest) {
-          triggerTermination('EXIT_FULLSCREEN_RETEST', 'Exited fullscreen during retest attempt. Retest terminated.');
-        } else {
-          triggerLock('Exited fullscreen contest mode');
-        }
+        triggerLock('Exited fullscreen contest mode');
       }
     };
 
@@ -586,16 +639,10 @@ export const ContestArena = () => {
       });
 
       if (res.data.success) {
-        setSubmitResult(res.data.result);
-        setMode('submitted');
-        setResultModalOpen(true);
-        confetti({
-          particleCount: 150,
-          spread: 80,
-          origin: { y: 0.6 }
-        });
+        navigate(`/contests/${id}/result`, { replace: true });
       }
     } catch (err) {
+      isSubmittedRef.current = false;
       setError(err.response?.data?.error || 'Failed to submit contest solutions.');
     } finally {
       setIsSubmittingContest(false);
@@ -628,6 +675,13 @@ export const ContestArena = () => {
           const c = res.data.contest;
           setLockTimeRemaining(c.lock_timeout_remaining_seconds || 0);
           
+          if (c.requires_fullscreen_resume) {
+            isLockedRef.current = false;
+            setContest(c);
+            setResumeInfo(c.resume_state || {});
+            setMode('resume_available');
+            return;
+          }
           if (c.is_retest_available && c.retest_info) {
             isLockedRef.current = false;
             setContest(c);
@@ -736,6 +790,33 @@ export const ContestArena = () => {
             </Link>
           </div>
 
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === 'resume_available') {
+    return (
+      <div className="fixed inset-0 z-50 bg-[#0B0F14] text-white flex items-center justify-center p-4">
+        <div className="max-w-lg w-full p-8 rounded-3xl border border-[#22B573]/40 bg-[#151A21] shadow-2xl text-center space-y-6">
+          <div className="w-16 h-16 rounded-3xl bg-[#22B573]/20 text-[#22B573] flex items-center justify-center mx-auto">
+            <CheckCircle2 className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-extrabold">Access Restored</h1>
+            <p className="text-sm text-[#94A3B8]">
+              Your existing attempt and progress were preserved. Enter fullscreen to continue.
+            </p>
+          </div>
+          {error && <p className="text-xs font-semibold text-[#EF4444]">{error}</p>}
+          <button
+            onClick={handleResumeAttempt}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-[#22B573] hover:bg-[#1D9C63] text-white font-bold text-sm disabled:opacity-50"
+          >
+            <Maximize2 className="w-4 h-4" />
+            Enter Fullscreen and Continue
+          </button>
         </div>
       </div>
     );

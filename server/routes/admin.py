@@ -1566,10 +1566,8 @@ def delete_contest(contest_id):
 @admin_required
 def restore_contest_access(contest_id, participant_id):
     """
-    Admin action to activate a retest for a LOCKED or TERMINATED attempt.
-    Creates a NEW attempt with fresh questions, excluding previously assigned questions.
-    For LOCKED attempts: must happen within the 30-minute lock resolution window.
-    For TERMINATED attempts: can be resolved at any time.
+    Restore a LOCKED attempt in place during its resolution window.
+    TERMINATED attempts continue to use the existing new-attempt retest flow.
     """
     db = get_db()
     if not ObjectId.is_valid(contest_id) or not ObjectId.is_valid(participant_id):
@@ -1596,7 +1594,7 @@ def restore_contest_access(contest_id, participant_id):
     now = get_utc_now()
     if current_status == "LOCKED":
         lock_timeout = parse_to_utc_datetime(participant.get("lock_timeout_at"))
-        if lock_timeout and now > lock_timeout:
+        if not lock_timeout or now >= lock_timeout:
             # Window expired - update to TERMINATED and reject
             db.contest_participants.update_one(
                 {"_id": ObjectId(participant_id)},
@@ -1615,6 +1613,49 @@ def restore_contest_access(contest_id, participant_id):
                 "success": False
             }), 403
 
+        # A timely restore resumes the SAME attempt. Keep its assigned questions,
+        # answers, code, UI position, and saved remaining time intact.
+        db.contest_participants.update_one(
+            {"_id": ObjectId(participant_id), "status": "LOCKED"},
+            {
+                "$set": {
+                    "status": "IN_PROGRESS",
+                    "resolution_window_active": False,
+                    "requires_fullscreen_resume": True,
+                    "auto_terminated": False,
+                    "restored_at": now,
+                },
+                "$unset": {
+                    "terminated_at": "",
+                    "termination_reason": "",
+                },
+                "$push": {
+                    "anti_cheat_logs": {
+                        "event_type": "LOCK_RESOLVED",
+                        "detail": "Admin restored access to the existing attempt",
+                        "created_by": str(request.current_user.get("_id", "")),
+                        "timestamp": now.isoformat(),
+                    }
+                },
+            },
+        )
+
+        from services.notification_service import create_notification
+        create_notification(
+            user_id=participant.get("user_id"),
+            title="Contest Access Restored",
+            message="Your existing contest attempt was restored. Enter fullscreen to continue from your saved progress.",
+            notif_type="contest",
+        )
+        return jsonify({
+            "success": True,
+            "message": "Access restored to the existing attempt.",
+            "restored": True,
+            "same_attempt": True,
+            "attempt_number": participant.get("attempt_number", 1),
+        }), 200
+
+    # AUTO_TERMINATED attempts use the existing retest workflow below.
     # Check for existing retest for this user
     user_id = participant.get("user_id")
     current_attempt = participant.get("attempt_number", 1)
@@ -1756,6 +1797,23 @@ def get_contest_participants_admin(contest_id):
     participants = []
     
     for p in participants_cursor:
+        # Enforce the lock deadline on the server whenever admin status is read.
+        if p.get("status") == "LOCKED":
+            lock_timeout = parse_to_utc_datetime(p.get("lock_timeout_at"))
+            if not lock_timeout or get_utc_now() >= lock_timeout:
+                terminated_at = get_utc_now()
+                db.contest_participants.update_one(
+                    {"_id": p["_id"], "status": "LOCKED"},
+                    {"$set": {
+                        "status": "AUTO_TERMINATED",
+                        "auto_terminated": True,
+                        "resolution_window_active": False,
+                        "terminated_at": terminated_at,
+                        "termination_reason": "Lock resolution window (30 minutes) expired without admin action",
+                    }},
+                )
+                p["status"] = "AUTO_TERMINATED"
+                p["auto_terminated"] = True
         is_term = bool(p.get("auto_terminated") or p.get("status") == "AUTO_TERMINATED")
         is_locked = bool(p.get("status") == "LOCKED")
         status_val = "AUTO_TERMINATED" if is_term else ("LOCKED" if is_locked else ("SUBMITTED" if p.get("submitted") else "IN_PROGRESS"))
@@ -2739,6 +2797,23 @@ def get_contest_report(contest_id):
             p_doc = db.problems.find_one({"id": pid})
             if p_doc:
                 problems.append(p_doc)
+
+    # Materialize expired lock windows before building report statuses.
+    now = get_utc_now()
+    db.contest_participants.update_many(
+        {
+            "contest_id": contest_id,
+            "status": "LOCKED",
+            "lock_timeout_at": {"$lte": now},
+        },
+        {"$set": {
+            "status": "AUTO_TERMINATED",
+            "auto_terminated": True,
+            "resolution_window_active": False,
+            "terminated_at": now,
+            "termination_reason": "Lock resolution window (30 minutes) expired without admin action",
+        }},
+    )
 
     # Fetch participants
     participants = list(db.contest_participants.find({"contest_id": contest_id}))
