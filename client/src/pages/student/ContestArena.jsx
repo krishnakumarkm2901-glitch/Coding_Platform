@@ -41,6 +41,7 @@ export const ContestArena = () => {
   const [mode, setMode] = useState('overview');
   const [terminationReason, setTerminationReason] = useState('');
   const [lockReason, setLockReason] = useState('');
+  const [lockTimeRemaining, setLockTimeRemaining] = useState(0);
   const [retestInfo, setRetestInfo] = useState(null);
 
   // Contest countdown to start (for upcoming)
@@ -151,6 +152,7 @@ export const ContestArena = () => {
         if (c.is_locked) {
           isLockedRef.current = true;
           setLockReason(c.lock_reason || 'Exited fullscreen contest mode');
+          setLockTimeRemaining(c.lock_timeout_remaining_seconds || 0);
           setTimeLeft(c.remaining_seconds || 0);
           
           // Check if a retest has been activated
@@ -610,30 +612,54 @@ export const ContestArena = () => {
   // 🔒 1a. CONTEST LOCKED SCREEN (Fullscreen Exit — Awaiting Admin Restore)
   // =========================================================================
   if (mode === 'locked') {
-    const handleCheckStatus = async () => {
-      try {
-        const res = await api.get(`/contests/${id}`);
-        if (res.data.success) {
-          const c = res.data.contest;
-          if (c.is_locked) {
-            // Still locked
-            return;
+    // Auto-check status periodically
+    useEffect(() => {
+      const checkStatusInterval = setInterval(async () => {
+        try {
+          const res = await api.get(`/contests/${id}`);
+          if (res.data.success) {
+            const c = res.data.contest;
+            setLockTimeRemaining(c.lock_timeout_remaining_seconds || 0);
+            
+            if (c.is_retest_available && c.retest_info) {
+              // Retest is now available!
+              isLockedRef.current = false;
+              setContest(c);
+              setRetestInfo(c.retest_info);
+              setMode('retest_available');
+              return;
+            }
+            if (c.is_terminated) {
+              // Lock expired and auto-terminated
+              isTerminatedRef.current = true;
+              setTerminationReason(c.termination_reason || 'Lock resolution window expired without admin action');
+              setMode('terminated');
+              return;
+            }
           }
-          if (c.is_terminated) {
-            isTerminatedRef.current = true;
-            setTerminationReason(c.termination_reason || 'Left strict contest environment');
-            setMode('terminated');
-            return;
-          }
-          // Restored! Reset lock state and prompt re-entry
-          isLockedRef.current = false;
-          setContest(c);
-          setTimeLeft(c.remaining_seconds || 0);
-          setMode('overview');
+        } catch (err) {
+          console.error('Failed to check status:', err);
         }
-      } catch (err) {
-        console.error('Failed to check status:', err);
-      }
+      }, 5000); // Check every 5 seconds
+
+      return () => clearInterval(checkStatusInterval);
+    }, [id]);
+
+    // Local countdown timer
+    useEffect(() => {
+      if (lockTimeRemaining <= 0) return;
+      
+      const timer = setInterval(() => {
+        setLockTimeRemaining(prev => Math.max(0, prev - 1));
+      }, 1000);
+
+      return () => clearInterval(timer);
+    }, [lockTimeRemaining]);
+
+    const formatTime = (seconds) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
     return (
@@ -656,6 +682,29 @@ export const ContestArena = () => {
             </p>
           </div>
 
+          {/* Resolution Window Timer */}
+          <div className="p-4 rounded-2xl bg-[#0B0F14] border border-[#3B82F6]/50 text-center space-y-3">
+            <div className="text-xs uppercase tracking-widest text-[#3B82F6] font-bold">
+              Resolution Window
+            </div>
+            <div className="text-4xl font-mono font-bold text-[#F8FAFC] tabular-nums">
+              {formatTime(lockTimeRemaining)}
+            </div>
+            <div className="text-[11px] text-[#94A3B8]">
+              Admin has up to 30 minutes to restore your access
+            </div>
+            {lockTimeRemaining < 300 && lockTimeRemaining > 0 && (
+              <div className="text-[11px] text-[#EF4444] font-semibold">
+                ⚠️ Window expiring soon - attempt will auto-terminate if not resolved
+              </div>
+            )}
+            {lockTimeRemaining === 0 && (
+              <div className="text-[11px] text-[#EF4444] font-semibold">
+                Resolution window expired - attempt auto-terminated
+              </div>
+            )}
+          </div>
+
           <div className="p-4 rounded-2xl bg-[#0B0F14] border border-[#30363D] text-left text-xs space-y-2">
             <div className="font-bold text-[#94A3B8] uppercase tracking-wider">Reason:</div>
             <div className="font-mono text-[#F8FAFC] font-semibold">
@@ -667,14 +716,9 @@ export const ContestArena = () => {
           </div>
 
           <div className="pt-2 flex flex-col items-center gap-3">
-            <button
-              type="button"
-              onClick={handleCheckStatus}
-              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-2xl bg-[#F59E0B] hover:bg-[#D97706] text-[#0B0F14] font-bold text-xs shadow-md transition"
-            >
-              <Lock className="w-4 h-4" />
-              <span>Check Status</span>
-            </button>
+            <p className="text-[11px] text-[#94A3B8]">
+              Checking for admin restore every 5 seconds...
+            </p>
             <Link
               to="/contests"
               className="text-xs font-bold text-[#667085] hover:text-[#94A3B8] transition"

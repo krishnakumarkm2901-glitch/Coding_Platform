@@ -266,12 +266,44 @@ def get_contest_details(contest_id):
     is_retest_available = False
     termination_reason = ""
     lock_reason = ""
+    lock_timeout_remaining_seconds = 0
     participant_status = "NOT_STARTED"
     retest_info = None
 
     if participant:
+        # Check if LOCKED attempt has expired (30 minutes passed)
+        if participant.get("status") == "LOCKED" and participant.get("lock_timeout_at"):
+            lock_timeout = parse_to_utc_datetime(participant.get("lock_timeout_at"))
+            if lock_timeout and now > lock_timeout:
+                # Auto-terminate: lock window expired
+                db.contest_participants.update_one(
+                    {"_id": participant["_id"]},
+                    {
+                        "$set": {
+                            "status": "AUTO_TERMINATED",
+                            "resolution_window_active": False,
+                            "auto_terminated": True,
+                            "terminated_at": now,
+                            "termination_reason": "Lock resolution window (30 minutes) expired without admin action"
+                        },
+                        "$push": {
+                            "anti_cheat_logs": {
+                                "event_type": "LOCK_EXPIRED",
+                                "detail": "30-minute lock resolution window expired. Attempt auto-terminated.",
+                                "timestamp": now.isoformat()
+                            }
+                        }
+                    }
+                )
+                # Reload participant after update
+                participant = db.contest_participants.find_one({"_id": participant["_id"]})
+            else:
+                # Lock is still valid, calculate remaining time
+                if lock_timeout:
+                    lock_timeout_remaining_seconds = max(0, int((lock_timeout - now).total_seconds()))
+        
         is_terminated = bool(participant.get("auto_terminated") or participant.get("status") == "AUTO_TERMINATED")
-        is_locked = bool(participant.get("status") == "LOCKED")
+        is_locked = bool(participant.get("status") == "LOCKED" and not is_terminated)
         termination_reason = participant.get("termination_reason", "")
         lock_reason = participant.get("lock_reason", "")
         participant_status = participant.get("status", "IN_PROGRESS")
@@ -379,6 +411,7 @@ def get_contest_details(contest_id):
             "is_locked": is_locked,
             "is_retest_available": is_retest_available,
             "retest_info": retest_info,
+            "lock_timeout_remaining_seconds": lock_timeout_remaining_seconds,
             "termination_reason": termination_reason,
             "lock_reason": lock_reason,
             "participant_status": participant_status,
@@ -520,7 +553,8 @@ def join_contest(contest_id):
 @contests_bp.route("/<contest_id>/terminate", methods=["POST"])
 @student_required
 def terminate_contest(contest_id):
-    """Immediately terminate a student's contest attempt due to anti-cheat/strict mode violation."""
+    """Terminate a student's ACTIVE retest attempt due to anti-cheat violation (e.g., fullscreen exit).
+    Only applies to retest attempts (attempt_number > 1)."""
     db = get_db()
     if not ObjectId.is_valid(contest_id):
         return jsonify({"error": "Invalid contest ID", "success": False}), 400
@@ -529,36 +563,50 @@ def terminate_contest(contest_id):
     user_id = user["_id"]
     data = request.get_json() or {}
     reason = data.get("reason", "SECURITY_VIOLATION")
-    detail = data.get("detail", "Left strict contest environment")
+    detail = data.get("detail", "Retest terminated due to rule violation")
+    is_retest = data.get("is_retest", False)
 
+    now = get_utc_now()
     event_record = {
         "event_type": "TERMINATION_VIOLATION",
-        "detail": f"Contest Terminated: {detail}",
+        "detail": f"Attempt Terminated: {detail}",
         "reason": reason,
-        "timestamp": get_utc_now().isoformat()
+        "is_retest": is_retest,
+        "timestamp": now.isoformat()
     }
 
+    # Target only the ACTIVE attempt
+    user_id_objs = [str(user_id)]
+    if ObjectId.is_valid(user_id):
+        user_id_objs.append(ObjectId(user_id))
+    contest_id_objs = [contest_id]
+    if ObjectId.is_valid(contest_id):
+        contest_id_objs.append(ObjectId(contest_id))
+
     db.contest_participants.update_one(
-        {"contest_id": contest_id, "user_id": user_id},
+        {
+            "contest_id": {"$in": contest_id_objs},
+            "user_id": {"$in": user_id_objs},
+            "is_active_attempt": True
+        },
         {
             "$set": {
                 "status": "AUTO_TERMINATED",
                 "submitted": True,
                 "auto_terminated": True,
-                "terminated_at": get_utc_now(),
+                "terminated_at": now,
                 "termination_reason": detail
             },
             "$push": {"anti_cheat_logs": event_record}
-        },
-        upsert=True
+        }
     )
 
     from services.notification_service import create_notification
     # Student Notification
     create_notification(
         user_id=user_id,
-        title="Contest Terminated",
-        message=f"Your contest attempt was terminated due to a contest rule violation: {detail}",
+        title="Attempt Terminated",
+        message=f"Your contest attempt was terminated: {detail}",
         notif_type="anti-cheat"
     )
     # Admin Notifications
@@ -582,7 +630,8 @@ def terminate_contest(contest_id):
 @student_required
 def lock_contest(contest_id):
     """Lock a student's contest attempt (e.g. on fullscreen exit) without terminating it.
-    Preserves all progress and remaining time for admin restoration."""
+    Starts a 30-minute resolution window for admin to restore/activate retest.
+    After 30 minutes, auto-terminates."""
     db = get_db()
     if not ObjectId.is_valid(contest_id):
         return jsonify({"error": "Invalid contest ID", "success": False}), 400
@@ -594,12 +643,15 @@ def lock_contest(contest_id):
     detail = data.get("detail", "Exited fullscreen contest mode")
     remaining_seconds = int(data.get("remaining_seconds", 0))
 
+    now = get_utc_now()
+    lock_timeout = now + timedelta(seconds=1800)  # 30 minutes from now
+
     event_record = {
         "event_type": "CONTEST_LOCKED",
         "detail": f"Contest Locked: {detail}",
         "reason": reason,
         "remaining_seconds": remaining_seconds,
-        "timestamp": get_utc_now().isoformat()
+        "timestamp": now.isoformat()
     }
 
     # Update only the ACTIVE attempt for this user
@@ -619,7 +671,9 @@ def lock_contest(contest_id):
         {
             "$set": {
                 "status": "LOCKED",
-                "locked_at": get_utc_now(),
+                "locked_at": now,
+                "lock_timeout_at": lock_timeout,
+                "resolution_window_active": True,
                 "lock_reason": detail,
                 "locked_remaining_seconds": remaining_seconds
             },
@@ -647,7 +701,8 @@ def lock_contest(contest_id):
         "success": True,
         "message": "Contest attempt locked. Please contact the administrator to restore access.",
         "is_locked": True,
-        "lock_reason": detail
+        "lock_reason": detail,
+        "lock_timeout_minutes": 30
     }), 200
 
 @contests_bp.route("/<contest_id>/event", methods=["POST"])

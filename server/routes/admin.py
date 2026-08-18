@@ -1566,8 +1566,9 @@ def delete_contest(contest_id):
 @admin_required
 def restore_contest_access(contest_id, participant_id):
     """
-    Activate a retest for a locked student's contest.
+    Admin action to activate a retest for a LOCKED attempt.
     Creates a NEW attempt with fresh questions, excluding previously assigned questions.
+    This must happen within the 30-minute lock resolution window.
     """
     db = get_db()
     if not ObjectId.is_valid(contest_id) or not ObjectId.is_valid(participant_id):
@@ -1581,15 +1582,38 @@ def restore_contest_access(contest_id, participant_id):
     if not participant:
         return jsonify({"error": "Participant not found", "success": False}), 404
 
-    # Only allow restore for LOCKED attempts
+    # Verify status is LOCKED
     current_status = participant.get("status", "")
     if current_status != "LOCKED":
         return jsonify({
-            "error": f"Cannot restore participant with status '{current_status}'. Only LOCKED attempts can be retested.",
+            "error": f"Cannot restore participant with status '{current_status}'. Only LOCKED attempts can be resolved.",
+            "current_status": current_status,
             "success": False
         }), 400
 
-    # Check if there's already an active retest for this participant
+    # Verify lock window is still active (within 30 minutes)
+    now = get_utc_now()
+    lock_timeout = parse_to_utc_datetime(participant.get("lock_timeout_at"))
+    if lock_timeout and now > lock_timeout:
+        # Window expired - update to TERMINATED and reject
+        db.contest_participants.update_one(
+            {"_id": ObjectId(participant_id)},
+            {
+                "$set": {
+                    "status": "AUTO_TERMINATED",
+                    "resolution_window_active": False,
+                    "auto_terminated": True,
+                    "terminated_at": now,
+                    "termination_reason": "Lock resolution window (30 minutes) expired without admin action"
+                }
+            }
+        )
+        return jsonify({
+            "error": "The 30-minute lock resolution window has expired. This attempt has been auto-terminated.",
+            "success": False
+        }), 403
+
+    # Check for existing retest for this user
     user_id = participant.get("user_id")
     current_attempt = participant.get("attempt_number", 1)
     
@@ -1602,34 +1626,19 @@ def restore_contest_access(contest_id, participant_id):
     
     if existing_retest:
         return jsonify({
-            "error": "A retest attempt is already active for this student. They must complete or be terminated from that attempt first.",
+            "error": "A retest is already active for this student.",
+            "retest_attempt_number": existing_retest.get("attempt_number"),
             "success": False
-        }), 400
+        }), 409
 
-    now = get_utc_now()
-    student_id = participant.get("student_id")
+    # ===== CREATE NEW RETEST ATTEMPT =====
     
-    # 1. Mark the original attempt as terminated (preserve for history)
-    db.contest_participants.update_one(
-        {"_id": ObjectId(participant_id)},
-        {
-            "$set": {
-                "is_active_attempt": False,
-                "auto_terminated": True,
-                "terminated_at": now,
-                "termination_reason": "Student exited fullscreen - Attempt terminated for retest",
-                "status": "AUTO_TERMINATED"
-            }
-        }
-    )
-
-    # 2. Get previous attempt's assigned questions for exclusion
+    student_id = participant.get("student_id")
     previous_assigned_ids = participant.get("assigned_mcq_ids", [])
-
-    # 3. Generate new randomized questions for retest (attempt_number = current + 1)
-    from routes.contests import get_or_assign_student_mcqs
     next_attempt = current_attempt + 1
     
+    # Generate new randomized questions for retest
+    from routes.contests import get_or_assign_student_mcqs
     new_assigned_mcq_ids = get_or_assign_student_mcqs(
         db, 
         contest, 
@@ -1640,7 +1649,7 @@ def restore_contest_access(contest_id, participant_id):
         exclude_previous_ids=previous_assigned_ids
     )
 
-    # 4. Create a new active attempt record
+    # Create new active retest attempt
     new_retest_doc = {
         "contest_id": ObjectId(contest_id) if ObjectId.is_valid(contest_id) else contest_id,
         "user_id": user_id,
@@ -1660,7 +1669,7 @@ def restore_contest_access(contest_id, participant_id):
         "auto_terminated": False,
         "anti_cheat_logs": [
             {
-                "event_type": "RETEST_CREATED",
+                "event_type": "RETEST_ACTIVATED",
                 "detail": "Admin activated retest with new question set",
                 "created_by": str(request.current_user.get("_id", "")),
                 "original_attempt_id": str(ObjectId(participant_id)),
@@ -1671,15 +1680,48 @@ def restore_contest_access(contest_id, participant_id):
     
     new_retest_result = db.contest_participants.insert_one(new_retest_doc)
 
-    # 5. Notify the student
+    # Mark OLD attempt as TERMINATED
+    db.contest_participants.update_one(
+        {"_id": ObjectId(participant_id)},
+        {
+            "$set": {
+                "status": "AUTO_TERMINATED",
+                "is_active_attempt": False,
+                "resolution_window_active": False,
+                "auto_terminated": True,
+                "terminated_at": now,
+                "termination_reason": "Resolved by admin - retest activated"
+            },
+            "$push": {
+                "anti_cheat_logs": {
+                    "event_type": "RETEST_APPROVED",
+                    "detail": "Admin approved retest for this locked attempt",
+                    "created_by": str(request.current_user.get("_id", "")),
+                    "timestamp": now.isoformat()
+                }
+            }
+        }
+    )
+
+    # Notify student of retest activation
     from services.notification_service import create_notification
-    if user_id:
-        create_notification(
-            user_id=user_id,
-            title="Retest Activated",
-            message=f"Your retest for this contest has been activated. A new set of questions has been prepared. Please enter fullscreen before starting.",
-            notif_type="contest"
-        )
+    create_notification(
+        user_id=user_id,
+        title="Retest Activated ✓",
+        message=f"Admin has activated your retest with a new set of questions. Enter fullscreen and start the retest to continue.",
+        notif_type="contest"
+    )
+    
+    # Notify admins
+    admins = list(db.users.find({"role": "ADMIN"}))
+    for admin in admins:
+        if admin["_id"] != request.current_user.get("_id"):
+            create_notification(
+                user_id=admin["_id"],
+                title="Retest Activated",
+                message=f"Admin {request.current_user.get('name')} activated retest for student {participant.get('student_name')}.",
+                notif_type="contest"
+            )
 
     return jsonify({
         "success": True, 
