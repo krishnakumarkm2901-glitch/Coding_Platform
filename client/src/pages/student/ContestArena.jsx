@@ -608,54 +608,50 @@ export const ContestArena = () => {
     return <PageLoader text="Connecting to Secure Contest Arena..." />;
   }
 
+  // Locked mode effect - auto-check and countdown timer
+  useEffect(() => {
+    if (mode !== 'locked') return;
+
+    const checkStatusInterval = setInterval(async () => {
+      try {
+        const res = await api.get(`/contests/${id}`);
+        if (res.data.success) {
+          const c = res.data.contest;
+          setLockTimeRemaining(c.lock_timeout_remaining_seconds || 0);
+          
+          if (c.is_retest_available && c.retest_info) {
+            isLockedRef.current = false;
+            setContest(c);
+            setRetestInfo(c.retest_info);
+            setMode('retest_available');
+            return;
+          }
+          if (c.is_terminated) {
+            isTerminatedRef.current = true;
+            setTerminationReason(c.termination_reason || 'Lock resolution window expired without admin action');
+            setMode('terminated');
+            return;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to check status:', err);
+      }
+    }, 5000);
+
+    const countdownTimer = setInterval(() => {
+      setLockTimeRemaining(prev => Math.max(0, prev - 1));
+    }, 1000);
+
+    return () => {
+      clearInterval(checkStatusInterval);
+      clearInterval(countdownTimer);
+    };
+  }, [mode, id]);
+
   // =========================================================================
   // 🔒 1a. CONTEST LOCKED SCREEN (Fullscreen Exit — Awaiting Admin Restore)
   // =========================================================================
   if (mode === 'locked') {
-    // Auto-check status periodically
-    useEffect(() => {
-      const checkStatusInterval = setInterval(async () => {
-        try {
-          const res = await api.get(`/contests/${id}`);
-          if (res.data.success) {
-            const c = res.data.contest;
-            setLockTimeRemaining(c.lock_timeout_remaining_seconds || 0);
-            
-            if (c.is_retest_available && c.retest_info) {
-              // Retest is now available!
-              isLockedRef.current = false;
-              setContest(c);
-              setRetestInfo(c.retest_info);
-              setMode('retest_available');
-              return;
-            }
-            if (c.is_terminated) {
-              // Lock expired and auto-terminated
-              isTerminatedRef.current = true;
-              setTerminationReason(c.termination_reason || 'Lock resolution window expired without admin action');
-              setMode('terminated');
-              return;
-            }
-          }
-        } catch (err) {
-          console.error('Failed to check status:', err);
-        }
-      }, 5000); // Check every 5 seconds
-
-      return () => clearInterval(checkStatusInterval);
-    }, [id]);
-
-    // Local countdown timer
-    useEffect(() => {
-      if (lockTimeRemaining <= 0) return;
-      
-      const timer = setInterval(() => {
-        setLockTimeRemaining(prev => Math.max(0, prev - 1));
-      }, 1000);
-
-      return () => clearInterval(timer);
-    }, [lockTimeRemaining]);
-
     const formatTime = (seconds) => {
       const mins = Math.floor(seconds / 60);
       const secs = seconds % 60;
