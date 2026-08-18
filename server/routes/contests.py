@@ -304,7 +304,8 @@ def get_contest_details(contest_id):
             "participant_status": participant_status,
             "score": participant.get("score", 0) if participant else 0,
             "problems": problems,
-            "mcqs": mcqs
+            "mcqs": mcqs,
+            "mcqs_per_student": contest.get("mcqs_per_student", 20)
         }
     }), 200
 

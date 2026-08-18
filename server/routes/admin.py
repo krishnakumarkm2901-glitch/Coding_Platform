@@ -1405,6 +1405,7 @@ def list_admin_contests():
             "mcqIds": mcq_ids,
             "problems_count": len(prob_ids),
             "mcqs_count": len(mcq_ids),
+            "mcqs_per_student": c.get("mcqs_per_student", 20),
             "total_points": c.get("total_points", len(mcq_ids) * 10 + len(prob_ids) * 50),
             "is_published": c.get("is_published", False),
             "participants_count": participants_count
@@ -1465,6 +1466,7 @@ def create_contest():
         "codingProblemIds": prob_ids,
         "mcq_ids": mcq_ids,
         "mcqIds": mcq_ids,
+        "mcqs_per_student": int(data.get("mcqs_per_student") or 20),
         "total_points": total_points,
         "is_published": data.get("is_published", False),
         "created_at": now
@@ -1503,9 +1505,12 @@ def update_contest(contest_id):
     data = request.get_json() or {}
     update_data = {}
 
-    for field in ["title", "description", "duration_minutes", "total_points", "is_published"]:
+    for field in ["title", "description", "duration_minutes", "total_points", "is_published", "mcqs_per_student"]:
         if field in data:
-            update_data[field] = data[field]
+            if field == "mcqs_per_student":
+                update_data[field] = int(data[field]) if data[field] is not None else 20
+            else:
+                update_data[field] = data[field]
 
     if "contestType" in data or "contest_type" in data:
         c_type = str(data.get("contestType") or data.get("contest_type") or "").strip().upper()

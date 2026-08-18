@@ -504,6 +504,7 @@ export const ManageContests = () => {
     title: '',
     description: '',
     duration_minutes: 60,
+    mcqs_per_student: 20,
     start_time: '',
     end_time: '',
     is_published: true,
@@ -563,6 +564,7 @@ export const ManageContests = () => {
       title: '',
       description: '',
       duration_minutes: 60,
+      mcqs_per_student: 20,
       start_time: toISTDateTimeInput(now),
       end_time: toISTDateTimeInput(future),
       is_published: true,
@@ -599,6 +601,7 @@ export const ManageContests = () => {
       title: contest.title || '',
       description: contest.description || '',
       duration_minutes: contest.duration_minutes || 60,
+      mcqs_per_student: contest.mcqs_per_student || 20,
       start_time: toISTDateTimeInput(contest.start_time),
       end_time: toISTDateTimeInput(contest.end_time),
       is_published: Boolean(contest.is_published),
@@ -834,7 +837,7 @@ export const ManageContests = () => {
                     </div>
                     <div>
                       <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">MCQs</div>
-                      <div className="font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">{mcqCount} MCQs</div>
+                      <div className="font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">{mcqCount} MCQs & {c.mcqs_per_student || 20} Questions/Student</div>
                     </div>
                     <div>
                       <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Duration</div>
@@ -939,15 +942,26 @@ export const ManageContests = () => {
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Duration (Minutes)</label>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Duration (Mins)</label>
               <input
                 type="number"
                 min="10"
                 max="600"
                 value={formData.duration_minutes}
                 onChange={(e) => setFormData({ ...formData, duration_minutes: Number(e.target.value) })}
+                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              />
+            </div>
+            <div>
+              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide text-[10px] leading-tight">MCQs / Student</label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={formData.mcqs_per_student || 20}
+                onChange={(e) => setFormData({ ...formData, mcqs_per_student: Number(e.target.value) })}
                 className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
               />
             </div>

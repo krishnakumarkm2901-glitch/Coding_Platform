@@ -62,6 +62,7 @@ export const ContestArena = () => {
 
   // MCQ state: { mcq_id: selected_option }
   const [mcqAnswers, setMcqAnswers] = useState({});
+  const [selectedMCQIdx, setSelectedMCQIdx] = useState(0);
 
   // Runner state
   const [isRunning, setIsRunning] = useState(false);
@@ -996,39 +997,100 @@ export const ContestArena = () => {
               </p>
             </div>
 
-            <div className="space-y-4">
-              {contest.mcqs?.map((m, idx) => (
-                <div key={m.id} className="p-5 rounded-2xl bg-[#FFFFFF] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-3">
-                  <div className="flex items-center justify-between text-xs font-bold">
-                    <span className="text-purple-600 dark:text-purple-400">Question {idx + 1}</span>
-                    <span className="font-mono text-[#667085] dark:text-[#94A3B8]">{m.topic}</span>
-                  </div>
+            {/* MCQ Question Navigation Grid */}
+            {contest.mcqs && contest.mcqs.length > 0 && (
+              <div className="flex flex-wrap gap-2 p-4 rounded-2xl bg-[#FFFFFF] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] justify-center">
+                {contest.mcqs.map((m, idx) => {
+                  const isAnswered = mcqAnswers[m.id] !== undefined && mcqAnswers[m.id] !== '';
+                  const isActive = selectedMCQIdx === idx;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setSelectedMCQIdx(idx)}
+                      className={`w-9 h-9 rounded-xl font-bold font-mono text-xs flex items-center justify-center transition shadow-sm ${
+                        isActive
+                          ? 'bg-purple-600 text-white border-purple-600'
+                          : isAnswered
+                          ? 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30'
+                          : 'bg-[#F5F7FA] dark:bg-[#0B0F14] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] hover:border-purple-400'
+                      }`}
+                    >
+                      {idx + 1}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
-                  <p className="text-xs font-bold text-[#172033] dark:text-[#F8FAFC]">
-                    {m.question}
-                  </p>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                    {m.options?.map((opt, optIdx) => {
-                      const isSelected = mcqAnswers[m.id] === opt;
-                      return (
-                        <button
-                          key={optIdx}
-                          onClick={() => setMcqAnswers({ ...mcqAnswers, [m.id]: opt })}
-                          className={`p-3 rounded-xl border text-left text-xs font-semibold transition ${
-                            isSelected
-                              ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
-                              : 'bg-[#F5F7FA] dark:bg-[#0B0F14] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] hover:border-purple-400'
-                          }`}
-                        >
-                          {opt}
-                        </button>
-                      );
-                    })}
-                  </div>
+            {/* MCQ Question Attempt Area */}
+            {contest.mcqs && contest.mcqs.length > 0 && selectedMCQIdx >= 0 && selectedMCQIdx < contest.mcqs.length && (
+              <div className="p-6 rounded-2xl bg-[#FFFFFF] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-4">
+                <div className="flex items-center justify-between text-xs font-bold">
+                  <span className="text-purple-600 dark:text-purple-400">
+                    Question {selectedMCQIdx + 1} of {contest.mcqs.length}
+                  </span>
+                  <span className="font-mono text-[#667085] dark:text-[#94A3B8]">
+                    {contest.mcqs[selectedMCQIdx].topic}
+                  </span>
                 </div>
-              ))}
-            </div>
+
+                <p className="text-sm font-bold text-[#172033] dark:text-[#F8FAFC] leading-relaxed">
+                  {contest.mcqs[selectedMCQIdx].question}
+                </p>
+
+                <div className="grid grid-cols-1 gap-2.5 pt-2">
+                  {contest.mcqs[selectedMCQIdx].options?.map((opt, optIdx) => {
+                    const isSelected = mcqAnswers[contest.mcqs[selectedMCQIdx].id] === opt;
+                    return (
+                      <button
+                        key={optIdx}
+                        type="button"
+                        onClick={() =>
+                          setMcqAnswers({
+                            ...mcqAnswers,
+                            [contest.mcqs[selectedMCQIdx].id]: opt,
+                          })
+                        }
+                        className={`p-3.5 rounded-xl border text-left text-xs font-semibold transition flex items-center justify-between ${
+                          isSelected
+                            ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                            : 'bg-[#F5F7FA] dark:bg-[#0B0F14] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] hover:border-purple-400'
+                        }`}
+                      >
+                        <span>{opt}</span>
+                        {isSelected && (
+                          <span className="font-extrabold text-[10px] bg-white text-purple-600 px-2 py-0.5 rounded-md">
+                            Selected
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Prev / Next Buttons */}
+                <div className="flex items-center justify-between pt-4 border-t border-[#D9E0E8] dark:border-[#30363D]">
+                  <button
+                    type="button"
+                    disabled={selectedMCQIdx === 0}
+                    onClick={() => setSelectedMCQIdx(prev => prev - 1)}
+                    className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#0B0F14] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] font-bold text-xs transition hover:bg-slate-200 dark:hover:bg-slate-800 disabled:opacity-40"
+                  >
+                    Previous Question
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={selectedMCQIdx === contest.mcqs.length - 1}
+                    onClick={() => setSelectedMCQIdx(prev => prev + 1)}
+                    className="px-4 py-2 rounded-xl bg-purple-600 text-white font-bold text-xs transition hover:bg-purple-700 disabled:opacity-40"
+                  >
+                    Next Question
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
