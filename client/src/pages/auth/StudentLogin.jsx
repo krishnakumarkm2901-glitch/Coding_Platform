@@ -68,7 +68,7 @@ export const StudentLogin = () => {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider mb-1.5">
-                Student ID / Register Number
+                Register Number
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#667085] dark:text-[#94A3B8]">
