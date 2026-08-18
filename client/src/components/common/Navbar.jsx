@@ -66,7 +66,7 @@ export const Navbar = ({ onToggleSidebar }) => {
 
             <Link to={isAdmin ? "/admin/dashboard" : "/dashboard"} className="flex lg:hidden items-center gap-2.5 group">
               <div className="w-9 h-9 rounded-xl bg-white dark:bg-[#20252C] p-1 border border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-center shadow-md shadow-blue-500/10 group-hover:scale-105 transition-transform overflow-hidden shrink-0">
-                <img src="/nit-logo.jpg" alt="NIT Logo" className="w-full h-full object-contain" />
+                <img src="/circa-logo.jpeg" alt="CIRCA Logo" className="w-full h-full object-contain" />
               </div>
               <div>
                 <span className="text-lg font-bold tracking-tight text-[#172033] dark:text-[#F8FAFC]">

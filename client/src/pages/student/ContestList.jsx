@@ -173,7 +173,7 @@ export const ContestList = () => {
                     <div className="text-[#667085] dark:text-[#94A3B8] text-[10px] uppercase font-bold">MCQs</div>
                     <div className="font-bold text-[#172033] dark:text-[#F8FAFC] font-mono flex items-center gap-1 mt-0.5">
                       <HelpCircle className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
-                      {c.mcqs_count} Questions
+                      {c.mcqs_per_student || 20} Questions
                     </div>
                   </div>
                   <div>

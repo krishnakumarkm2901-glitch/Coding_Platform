@@ -74,7 +74,7 @@ export const Sidebar = ({ isOpen, onClose }) => {
         <div className="h-16 px-6 border-b border-[#E2E8F0] dark:border-[#1E293B] flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-white dark:bg-[#1E293B] p-1 border border-[#E2E8F0] dark:border-[#334155] flex items-center justify-center shadow-md overflow-hidden shrink-0">
-              <img src="/nit-logo.jpg" alt="NIT Logo" className="w-full h-full object-contain" />
+              <img src="/circa-logo.jpeg" alt="CIRCA Logo" className="w-full h-full object-contain" />
             </div>
             <span className="text-sm font-bold tracking-tight text-[#172033] dark:text-[#F8FAFC]">
               NIT_<span className="text-[#0757B8] dark:text-[#60A5FA]">Campus_Coder</span>

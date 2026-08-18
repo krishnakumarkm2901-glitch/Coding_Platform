@@ -90,6 +90,7 @@ def get_contests():
             "contestType": c_type,
             "problems_count": len(c.get("problem_ids", [])),
             "mcqs_count": len(c.get("mcq_ids", [])),
+            "mcqs_per_student": c.get("mcqs_per_student", 20),
             "total_points": c.get("total_points", 100),
             "status": status,
             "participants_count": participants_count,

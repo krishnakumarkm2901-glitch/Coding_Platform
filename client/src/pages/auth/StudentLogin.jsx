@@ -50,7 +50,7 @@ export const StudentLogin = () => {
         {/* Logo & Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-white dark:bg-[#151A21] p-1.5 border border-[#D9E0E8] dark:border-[#30363D] shadow-lg shadow-blue-500/10 mb-4 overflow-hidden">
-            <img src="/nit-logo.jpg" alt="NIT Logo" className="w-full h-full object-contain" />
+            <img src="/circa-logo.jpeg" alt="CIRCA Logo" className="w-full h-full object-contain" />
           </div>
           <h1 className="text-2xl font-extrabold text-[#172033] dark:text-[#F8FAFC] tracking-tight">NIT_Campus_Coder</h1>
           <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1.5 font-semibold">Sign in to your Student Portal</p>
