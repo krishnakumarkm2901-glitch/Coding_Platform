@@ -170,7 +170,7 @@ export const StudentContestResult = () => {
               {overall.time_taken}
             </div>
             <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] mt-0.5">
-              Completed
+              {overall.is_terminated ? 'Terminated' : 'Completed'}
             </div>
           </div>
 

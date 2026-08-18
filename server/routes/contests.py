@@ -831,8 +831,14 @@ def get_student_contest_report(contest_id):
     duration_sec = duration_min * 60
     joined_at_utc = parse_to_utc_datetime(joined_at)
     submitted_at_utc = parse_to_utc_datetime(submitted_at)
+    terminated_at_utc = parse_to_utc_datetime(participant.get("terminated_at"))
     if joined_at_utc:
-        end_time_calc = submitted_at_utc if submitted_at_utc else get_utc_now()
+        if submitted_at_utc:
+            end_time_calc = submitted_at_utc
+        elif terminated_at_utc:
+            end_time_calc = terminated_at_utc
+        else:
+            end_time_calc = get_utc_now()
         time_taken_sec = max(int((end_time_calc - joined_at_utc).total_seconds()), 60)
         time_taken_sec = min(time_taken_sec, duration_sec)
     else:
