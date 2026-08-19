@@ -697,13 +697,23 @@ export const ManageContestReports = () => {
 
                       {/* Candidate */}
                       <td className="py-3.5 px-3">
-                        <div className="font-bold text-[#172033] dark:text-[#F8FAFC]">
+                        <div className="font-bold text-[#172033] dark:text-[#F8FAFC] flex items-center gap-1.5">
                           {cand.name}
+                          {cand.is_retest && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/30 text-[9px] font-bold uppercase">
+                              Retest #{cand.attempt_number}
+                            </span>
+                          )}
                         </div>
                         <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono mt-0.5">
                           <span className="font-bold text-[#0757B8] dark:text-[#60A5FA]">{cand.student_id}</span>
                           <span> • </span>
                           <span>{cand.department}</span>
+                          {cand.original_score && (
+                            <span className="ml-1.5 text-[9px] text-[#F59E0B]">
+                              (Original: {cand.original_score.score} pts — {cand.original_score.status})
+                            </span>
+                          )}
                         </div>
                       </td>
 

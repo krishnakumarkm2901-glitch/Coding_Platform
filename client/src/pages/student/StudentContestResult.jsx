@@ -78,7 +78,7 @@ export const StudentContestResult = () => {
     );
   }
 
-  const { contest, student, overall, mcq, coding, anti_cheat } = report;
+  const { contest, student, overall, mcq, coding, anti_cheat, original_attempt } = report;
 
   return (
     <div className="space-y-6 animate-fadeIn pb-12 max-w-5xl mx-auto">
@@ -100,10 +100,15 @@ export const StudentContestResult = () => {
       <div className="p-6 sm:p-8 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] shadow-sm space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 mb-1.5">
+            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
               <span className="px-3 py-0.5 rounded-full text-xs font-extrabold uppercase bg-[#0757B8]/15 text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/30">
                 Official Result
               </span>
+              {overall.is_retest && (
+                <span className="px-3 py-0.5 rounded-full text-xs font-extrabold uppercase bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/30">
+                  Retest Attempt #{overall.attempt_number}
+                </span>
+              )}
               <span className="text-xs font-mono text-[#667085] dark:text-[#94A3B8]">
                 {contest.duration_minutes} Mins
               </span>
@@ -188,6 +193,20 @@ export const StudentContestResult = () => {
             </div>
           </div>
         </div>
+
+        {/* Original Attempt Info (for retest students) */}
+        {overall.is_retest && original_attempt && (
+          <div className="p-3.5 rounded-2xl bg-[#F59E0B]/5 border border-[#F59E0B]/20">
+            <div className="text-[10px] font-bold uppercase text-[#F59E0B] tracking-wider mb-1">Original Attempt (Locked)</div>
+            <div className="flex items-center gap-4 text-xs">
+              <span className="font-mono font-bold text-[#172033] dark:text-[#F8FAFC]">Score: {original_attempt.score}</span>
+              <span className="text-[#667085] dark:text-[#94A3B8]">MCQ: {original_attempt.mcq_score} • Coding: {original_attempt.coding_score}</span>
+              <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30">
+                {original_attempt.status}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 3 STUDENT RESULT VIEW TABS */}

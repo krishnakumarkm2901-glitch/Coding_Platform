@@ -22,7 +22,9 @@ import {
   Upload,
   Download,
   Share2,
-  Copy
+  Copy,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import { Modal } from '../../components/common/Modal';
 import { PageLoader } from '../../components/common/Loader';
@@ -1328,7 +1330,7 @@ export const ManageContests = () => {
         isOpen={isParticipantsModalOpen}
         onClose={() => setIsParticipantsModalOpen(false)}
         title={`Contest Audit & Anti-Cheat: ${selectedContestTitle}`}
-        maxWidth="max-w-4xl"
+        maxWidth="max-w-5xl"
       >
         {participantsLoading ? (
           <PageLoader text="Loading contestant logs and security records..." />
@@ -1342,48 +1344,154 @@ export const ManageContests = () => {
               <thead className="bg-[#303442] text-white font-bold uppercase">
                 <tr>
                   <th className="py-3.5 px-3">Student</th>
-                  <th className="py-3.5 px-3">Department</th>
+                  <th className="py-3.5 px-3">Dept</th>
+                  <th className="py-3.5 px-3 text-center">Attempt</th>
                   <th className="py-3.5 px-3 text-center">Score</th>
                   <th className="py-3.5 px-3 text-center">Status</th>
-                  <th className="py-3.5 px-3 text-right">Anti-Cheat Flags</th>
+                  <th className="py-3.5 px-3 text-center">Flags</th>
+                  <th className="py-3.5 px-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#D9E0E8] dark:divide-[#30363D]/60 font-sans">
                 {selectedContestParticipants.map((p) => {
                   const logs = p.anti_cheat_logs || [];
+                  const isLocked = p.is_locked || p.status === 'LOCKED';
+                  const isTerm = p.auto_terminated || p.status === 'AUTO_TERMINATED';
+                  const isRetestReady = p.is_retest_ready || p.status === 'RETEST_READY';
+                  const isRetestApproved = p.is_retest_approved || p.status === 'RETEST_APPROVED';
+                  const attemptNum = p.attempt_number || 1;
+
                   return (
                     <tr key={p.id} className="hover:bg-[#F5F7FA] dark:hover:bg-[#151A21]/50">
+                      {/* Student Info */}
                       <td className="py-3.5 px-3 font-bold text-[#172033] dark:text-[#F8FAFC]">
-                        {p.student_name} <span className="text-[#0757B8] dark:text-[#60A5FA] font-mono text-[11px]">({p.student_id})</span>
+                        {p.student_name}
+                        <span className="text-[#0757B8] dark:text-[#60A5FA] font-mono text-[11px] ml-1">({p.student_id})</span>
                       </td>
+
+                      {/* Department */}
                       <td className="py-3.5 px-3 text-[#667085] dark:text-[#94A3B8]">{p.department}</td>
+
+                      {/* Attempt Number */}
+                      <td className="py-3.5 px-3 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          attemptNum > 1
+                            ? 'bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/30'
+                            : 'bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] border border-[#D9E0E8] dark:border-[#30363D]'
+                        }`}>
+                          {attemptNum > 1 ? `Retest #${attemptNum}` : '#1'}
+                        </span>
+                      </td>
+
+                      {/* Score */}
                       <td className="py-3.5 px-3 text-center font-mono font-extrabold text-[#0757B8] dark:text-[#60A5FA] text-sm">
                         {p.score}
                       </td>
+
+                      {/* Status with full state display */}
                       <td className="py-3.5 px-3 text-center">
-                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                          p.auto_terminated || p.status === 'AUTO_TERMINATED'
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                          isTerm
                             ? 'bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30'
-                            : p.submitted 
-                              ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30' 
-                              : 'bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20'
+                            : isLocked
+                              ? 'bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30'
+                              : isRetestReady
+                                ? 'bg-[#60A5FA]/15 text-[#60A5FA] border border-[#60A5FA]/30'
+                                : isRetestApproved
+                                  ? 'bg-[#14B8A6]/15 text-[#14B8A6] border border-[#14B8A6]/30'
+                                  : p.submitted
+                                    ? 'bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30'
+                                    : 'bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#0757B8]/20'
                         }`}>
-                          {p.auto_terminated || p.status === 'AUTO_TERMINATED' ? 'Auto-Terminated' : p.submitted ? 'Submitted' : 'In-Progress'}
+                          {isTerm ? (
+                            <><ShieldAlert className="w-3 h-3" /> Terminated</>
+                          ) : isLocked ? (
+                            <><Lock className="w-3 h-3" /> Locked</>
+                          ) : isRetestReady ? (
+                            <><Sparkles className="w-3 h-3" /> Retest Ready</>
+                          ) : isRetestApproved ? (
+                            <><CheckCircle2 className="w-3 h-3" /> Approved</>
+                          ) : p.submitted ? (
+                            <><CheckCircle2 className="w-3 h-3" /> Submitted</>
+                          ) : (
+                            'In-Progress'
+                          )}
                         </span>
-                        {p.termination_reason && (
+
+                        {/* Lock timeout countdown */}
+                        {isLocked && p.lock_timeout_remaining_seconds > 0 && (
+                          <div className="text-[10px] text-[#F59E0B] font-semibold mt-1">
+                            ⏱ {Math.floor(p.lock_timeout_remaining_seconds / 60)}m {p.lock_timeout_remaining_seconds % 60}s remaining
+                          </div>
+                        )}
+                        {isLocked && p.lock_timeout_remaining_seconds === 0 && (
+                          <div className="text-[10px] text-[#EF4444] font-semibold mt-1">Window expired</div>
+                        )}
+
+                        {/* Reason details */}
+                        {p.termination_reason && isTerm && (
                           <div className="text-[10px] text-[#EF4444] font-semibold mt-1">
                             {p.termination_reason}
                           </div>
                         )}
+                        {p.lock_reason && isLocked && (
+                          <div className="text-[10px] text-[#F59E0B] font-semibold mt-1">
+                            {p.lock_reason}
+                          </div>
+                        )}
                       </td>
-                      <td className="py-3.5 px-3 text-right">
-                        {p.auto_terminated || logs.length > 0 ? (
+
+                      {/* Anti-Cheat Flags */}
+                      <td className="py-3.5 px-3 text-center">
+                        {isTerm || logs.length > 0 ? (
                           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] font-bold">
                             <ShieldAlert className="w-3.5 h-3.5 text-[#EF4444]" />
-                            <span>{logs.length || 1} Violation Flags</span>
+                            <span>{logs.length || 1} Flags</span>
                           </div>
                         ) : (
-                          <span className="text-[#22B573] text-[11px] font-bold">Clean (0 Flags)</span>
+                          <span className="text-[#22B573] text-[11px] font-bold">Clean</span>
+                        )}
+                      </td>
+
+                      {/* Actions: Accept Retest button for LOCKED participants */}
+                      <td className="py-3.5 px-3 text-right">
+                        {isLocked && p.lock_timeout_remaining_seconds > 0 && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!window.confirm(`Accept retest for ${p.student_name}? A new shuffled question set will be created.`)) return;
+                              try {
+                                const contestId = selectedContestParticipants[0]?.id ? 
+                                  (selectedContestParticipants.find(pp => pp.id)?.id || '') : '';
+                                // Find the contest ID from the participant's context
+                                const cId = (() => {
+                                  // Use the currently selected contest title to find the contest
+                                  const matchingContest = contests.find(c => c.title === selectedContestTitle);
+                                  return matchingContest?.id || '';
+                                })();
+                                if (!cId) {
+                                  alert('Could not determine contest ID');
+                                  return;
+                                }
+                                const res = await api.post(`/admin/contests/${cId}/restore/${p.id}`);
+                                if (res.data.success) {
+                                  alert(`✅ Retest approved for ${p.student_name}. Attempt #${res.data.attempt_number} created.`);
+                                  // Refresh participants
+                                  const refreshRes = await api.get(`/admin/contests/${cId}/participants`);
+                                  if (refreshRes.data.success) {
+                                    setSelectedContestParticipants(refreshRes.data.participants || []);
+                                  }
+                                }
+                              } catch (err) {
+                                console.error('Failed to accept retest:', err);
+                                alert(err.response?.data?.error || 'Failed to accept retest');
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#F59E0B]/15 hover:bg-[#F59E0B] text-[#F59E0B] hover:text-white border border-[#F59E0B]/30 text-xs font-bold transition shadow-sm"
+                          >
+                            <Unlock className="w-3.5 h-3.5" />
+                            <span>Accept Retest</span>
+                          </button>
                         )}
                       </td>
                     </tr>

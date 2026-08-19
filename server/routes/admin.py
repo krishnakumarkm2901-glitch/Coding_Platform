@@ -1773,7 +1773,21 @@ def get_contest_participants_admin(contest_id):
                 p["auto_terminated"] = True
         is_term = bool(p.get("auto_terminated") or p.get("status") == "AUTO_TERMINATED")
         is_locked = bool(p.get("status") == "LOCKED")
-        status_val = "AUTO_TERMINATED" if is_term else ("LOCKED" if is_locked else ("SUBMITTED" if p.get("submitted") else "IN_PROGRESS"))
+        is_retest_ready = bool(p.get("status") == "RETEST_READY")
+        is_retest_approved = bool(p.get("status") == "RETEST_APPROVED")
+
+        if is_term:
+            status_val = "AUTO_TERMINATED"
+        elif is_locked:
+            status_val = "LOCKED"
+        elif is_retest_ready:
+            status_val = "RETEST_READY"
+        elif is_retest_approved:
+            status_val = "RETEST_APPROVED"
+        elif p.get("submitted"):
+            status_val = "SUBMITTED"
+        else:
+            status_val = "IN_PROGRESS"
         
         # Calculate lock timeout remaining
         lock_timeout_remaining = 0
@@ -1787,7 +1801,7 @@ def get_contest_participants_admin(contest_id):
         attempt_num = p.get("attempt_number", 1)
         status_display = status_val
         if attempt_num > 1:
-            status_display = f"{status_val} (Attempt #{attempt_num})"
+            status_display = f"{status_val} (Retest #{attempt_num})"
 
         participants.append({
             "id": str(p["_id"]),
@@ -1795,6 +1809,8 @@ def get_contest_participants_admin(contest_id):
             "student_name": p.get("student_name"),
             "department": p.get("department", "CSE"),
             "score": p.get("score", 0),
+            "mcq_score": float(p.get("mcq_score", 0)),
+            "coding_score": float(p.get("coding_score", 0)),
             "problems_solved": p.get("problems_solved", 0),
             "mcqs_correct": p.get("mcqs_correct", 0),
             "status": status_val,
@@ -1803,6 +1819,8 @@ def get_contest_participants_admin(contest_id):
             "is_active_attempt": p.get("is_active_attempt", False),
             "auto_terminated": is_term,
             "is_locked": is_locked,
+            "is_retest_ready": is_retest_ready,
+            "is_retest_approved": is_retest_approved,
             "termination_reason": p.get("termination_reason", ""),
             "lock_reason": p.get("lock_reason", ""),
             "lock_timeout_remaining_seconds": lock_timeout_remaining,
@@ -2772,9 +2790,46 @@ def get_contest_report(contest_id):
         }},
     )
 
-    # Fetch participants
-    participants = list(db.contest_participants.find({"contest_id": contest_id}))
+    # Fetch participants — all attempts
+    all_participants = list(db.contest_participants.find({"contest_id": contest_id}))
     
+    # Deduplicate: keep best/latest attempt per student for the leaderboard
+    # Priority: submitted retest > submitted original > active > locked/terminated
+    student_best = {}
+    for p in all_participants:
+        uid_key = str(p.get("user_id", p.get("student_id", "")))
+        if not uid_key:
+            continue
+        existing = student_best.get(uid_key)
+        if existing is None:
+            student_best[uid_key] = p
+        else:
+            # Prefer submitted over non-submitted
+            p_submitted = bool(p.get("submitted"))
+            e_submitted = bool(existing.get("submitted"))
+            if p_submitted and not e_submitted:
+                student_best[uid_key] = p
+            elif p_submitted == e_submitted:
+                # Prefer higher attempt number (latest)
+                if p.get("attempt_number", 1) > existing.get("attempt_number", 1):
+                    student_best[uid_key] = p
+                elif p.get("score", 0) > existing.get("score", 0):
+                    student_best[uid_key] = p
+
+    # Build a lookup of original attempt scores for retest students
+    original_scores = {}
+    for p in all_participants:
+        uid_key = str(p.get("user_id", p.get("student_id", "")))
+        if p.get("attempt_number", 1) == 1:
+            original_scores[uid_key] = {
+                "score": p.get("score", 0),
+                "mcq_score": float(p.get("mcq_score", 0)),
+                "coding_score": float(p.get("coding_score", 0)),
+                "status": p.get("status", "")
+            }
+
+    participants = list(student_best.values())
+
     # Fetch all submissions for this contest
     submissions = list(db.submissions.find({}))
 
@@ -2811,6 +2866,10 @@ def get_contest_report(contest_id):
         cand_subs = [s for s in submissions if s.get("student_id") == student_id_val or str(s.get("user_id")) == str(u_id)]
         metrics = calculate_candidate_contest_metrics(contest, problems, p, cand_subs)
 
+        attempt_num = p.get("attempt_number", 1)
+        uid_key = str(u_id or s_id or "")
+        orig_info = original_scores.get(uid_key) if attempt_num > 1 else None
+
         leaderboard.append({
             "participant_id": str(p["_id"]),
             "user_id": str(u_id or ""),
@@ -2837,7 +2896,10 @@ def get_contest_report(contest_id):
             "score_breakdown": metrics["score_breakdown"],
             "anti_cheat": metrics["anti_cheat"],
             "problem_breakdowns": metrics["problem_breakdowns"],
-            "is_locked": bool(p.get("status") == "LOCKED")
+            "is_locked": bool(p.get("status") == "LOCKED"),
+            "attempt_number": attempt_num,
+            "is_retest": attempt_num > 1,
+            "original_score": orig_info
         })
 
     # Sort leaderboard by:

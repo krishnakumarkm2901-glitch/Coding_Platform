@@ -945,8 +945,10 @@ def submit_contest(contest_id):
     cache.delete(f"contest:{contest_id}:leaderboard")
 
     # Update participant record with full pre-aggregated metrics
+    # Accept IN_PROGRESS, ACTIVE, and RETEST_READY (race between join and submit)
+    # No upsert — participant must already exist
     db.contest_participants.update_one(
-        {"_id": participant["_id"], "status": {"$in": ["IN_PROGRESS", "ACTIVE"]}},
+        {"_id": participant["_id"], "status": {"$in": ["IN_PROGRESS", "ACTIVE", "RETEST_READY"]}},
         {
             "$set": {
                 "score": total_score,
@@ -966,8 +968,7 @@ def submit_contest(contest_id):
                 "resolution_window_active": False,
                 "requires_fullscreen_resume": False,
             }
-        },
-        upsert=True
+        }
     )
 
     return jsonify({
@@ -1015,10 +1016,17 @@ def get_student_contest_report(contest_id):
     if ObjectId.is_valid(contest_id):
         contest_id_objs.append(ObjectId(contest_id))
 
+    # Prefer latest submitted attempt; fall back to highest attempt_number
     participant = db.contest_participants.find_one({
         "contest_id": {"$in": contest_id_objs},
-        "user_id": {"$in": user_id_objs}
+        "user_id": {"$in": user_id_objs},
+        "submitted": True
     }, sort=[("attempt_number", -1)])
+    if not participant:
+        participant = db.contest_participants.find_one({
+            "contest_id": {"$in": contest_id_objs},
+            "user_id": {"$in": user_id_objs}
+        }, sort=[("attempt_number", -1)])
     if not participant:
         return jsonify({
             "error": "No participation or submission record found for this contest.",
@@ -1144,6 +1152,22 @@ def get_student_contest_report(contest_id):
 
     auto_terminated = bool(participant.get("auto_terminated") or participant.get("status") == "AUTO_TERMINATED")
 
+    # Retest metadata
+    attempt_number = participant.get("attempt_number", 1)
+    is_retest = attempt_number > 1
+    original_attempt_info = None
+    if is_retest and participant.get("original_attempt_id"):
+        orig = db.contest_participants.find_one({"_id": participant["original_attempt_id"]})
+        if orig:
+            original_attempt_info = {
+                "attempt_number": orig.get("attempt_number", 1),
+                "score": orig.get("score", 0),
+                "mcq_score": float(orig.get("mcq_score", 0)),
+                "coding_score": float(orig.get("coding_score", 0)),
+                "status": orig.get("status", "LOCKED"),
+                "locked_at": format_utc_iso(parse_to_utc_datetime(orig.get("locked_at"))) if orig.get("locked_at") else None
+            }
+
     return jsonify({
         "success": True,
         "contest": {
@@ -1170,7 +1194,9 @@ def get_student_contest_report(contest_id):
             "time_taken": time_taken_formatted,
             "time_taken_seconds": time_taken_sec,
             "status": "COMPLETED" if not auto_terminated else "AUTO_TERMINATED",
-            "submitted_at": format_utc_iso(submitted_at) if submitted_at else None
+            "submitted_at": format_utc_iso(submitted_at) if submitted_at else None,
+            "attempt_number": attempt_number,
+            "is_retest": is_retest
         },
         "mcq": {
             "mcq_score": mcq_score,
@@ -1193,12 +1219,14 @@ def get_student_contest_report(contest_id):
             "auto_terminated": auto_terminated,
             "termination_reason": participant.get("termination_reason", ""),
             "flags_count": len(participant.get("anti_cheat_logs", []))
-        }
+        },
+        "original_attempt": original_attempt_info
     }), 200
 
 @contests_bp.route("/<contest_id>/leaderboard", methods=["GET"])
 def get_contest_leaderboard(contest_id):
-    """Retrieve contest leaderboard sorted by score and submission time with caching."""
+    """Retrieve contest leaderboard sorted by score and submission time with caching.
+    Deduplicates per student: shows only the latest/best attempt per student."""
     db = get_db()
     if not ObjectId.is_valid(contest_id):
         return jsonify({"error": "Invalid contest ID", "success": False}), 400
@@ -1212,14 +1240,42 @@ def get_contest_leaderboard(contest_id):
             "total_participants": len(cached_leaderboard)
         }), 200
 
+    # Fetch ALL attempts, then deduplicate per student
     participants_cursor = db.contest_participants.find({"contest_id": contest_id}).sort([
+        ("attempt_number", -1),
         ("score", -1),
         ("submitted_at", 1)
     ])
 
+    # Keep only the best attempt per student:
+    # Priority: submitted retest > submitted original > active retest > active original
+    seen_students = {}
+    for p in participants_cursor:
+        sid = str(p.get("user_id", p.get("student_id", "")))
+        if not sid:
+            continue
+        existing = seen_students.get(sid)
+        if existing is None:
+            seen_students[sid] = p
+        else:
+            # Prefer submitted over non-submitted
+            p_submitted = bool(p.get("submitted"))
+            e_submitted = bool(existing.get("submitted"))
+            if p_submitted and not e_submitted:
+                seen_students[sid] = p
+            elif p_submitted == e_submitted and p.get("score", 0) > existing.get("score", 0):
+                seen_students[sid] = p
+
+    # Sort by score desc, then submission time asc
+    best_attempts = sorted(
+        seen_students.values(),
+        key=lambda x: (-x.get("score", 0), x.get("submitted_at") or datetime.max.replace(tzinfo=timezone.utc))
+    )
+
     leaderboard = []
     rank = 1
-    for p in participants_cursor:
+    for p in best_attempts:
+        attempt_num = p.get("attempt_number", 1)
         leaderboard.append({
             "rank": rank,
             "student_name": p.get("student_name", "Student"),
@@ -1229,7 +1285,9 @@ def get_contest_leaderboard(contest_id):
             "problems_solved": p.get("problems_solved", 0),
             "mcqs_correct": p.get("mcqs_correct", 0),
             "submitted": p.get("submitted", False),
-            "tab_switches": len(p.get("anti_cheat_logs", []))
+            "tab_switches": len(p.get("anti_cheat_logs", [])),
+            "attempt_number": attempt_num,
+            "is_retest": attempt_num > 1
         })
         rank += 1
 
