@@ -98,6 +98,24 @@ export const ManageContestReports = () => {
     }
   }, [selectedContestId, deptFilter, yearFilter]);
 
+  useEffect(() => {
+    if (!selectedContestId) return undefined;
+
+    const refreshReport = () => fetchContestReport(selectedContestId);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshReport();
+    };
+    const refreshTimer = window.setInterval(refreshReport, 15000);
+
+    window.addEventListener('focus', refreshReport);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', refreshReport);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [selectedContestId]);
+
   const fetchContestsList = async () => {
     try {
       setLoading(true);
@@ -735,7 +753,7 @@ export const ManageContestReports = () => {
                             </span>
                           </td>
                           <td className="py-3.5 px-3 text-center font-mono font-bold text-[#60A5FA]">
-                            {cand.retest_score ? cand.retest_score.score : '—'}
+                            {cand.retest_marks ?? '—'}
                           </td>
                           <td className="py-3.5 px-3 text-center font-mono text-[#667085] dark:text-[#94A3B8]">
                             {cand.solved_count} / {cand.total_contest_problems}
@@ -761,7 +779,7 @@ export const ManageContestReports = () => {
                             </span>
                           </td>
                           <td className="py-3.5 px-3 text-center font-mono font-bold text-[#60A5FA]">
-                            {cand.retest_score ? cand.retest_score.mcq_score : '—'}
+                            {cand.retest_score?.mcq_score ?? '—'}
                           </td>
                           <td className="py-3.5 px-3 text-center font-mono font-bold text-[#22B573]">
                             {cand.mcq_percentage || 0}%
@@ -787,7 +805,7 @@ export const ManageContestReports = () => {
                             </span>
                           </td>
                           <td className="py-3.5 px-3 text-center font-mono font-bold text-[#60A5FA]">
-                            {cand.retest_score ? cand.retest_score.coding_score : '—'}
+                            {cand.retest_score?.coding_score ?? '—'}
                           </td>
                           <td className="py-3.5 px-3 text-center font-mono text-[11px] text-[#667085] dark:text-[#94A3B8]">
                             {cand.time_taken}

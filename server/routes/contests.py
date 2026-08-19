@@ -974,6 +974,9 @@ def submit_contest(contest_id):
     return jsonify({
         "success": True,
         "message": "Contest submitted successfully",
+        "is_retest": participant.get("attempt_number", 1) > 1,
+        "retest_score": total_score if participant.get("attempt_number", 1) > 1 else None,
+        "retest_marks": total_score if participant.get("attempt_number", 1) > 1 else None,
         "score": total_score,
         "mcq_score": mcq_score,
         "coding_score": coding_score,

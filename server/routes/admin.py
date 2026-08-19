@@ -2801,13 +2801,14 @@ def get_contest_report(contest_id):
     )
 
     # Fetch participants — all attempts
-    all_participants = list(db.contest_participants.find({"contest_id": contest_id}))
+    contest_id_values = [contest_id, ObjectId(contest_id)]
+    all_participants = list(db.contest_participants.find({"contest_id": {"$in": contest_id_values}}))
     
     # Deduplicate: keep best/latest attempt per student for the leaderboard
     # Priority: submitted retest > submitted original > active > locked/terminated
     student_best = {}
     for p in all_participants:
-        uid_key = str(p.get("user_id", p.get("student_id", "")))
+        uid_key = str(p.get("student_id") or p.get("user_id", ""))
         if not uid_key:
             continue
         existing = student_best.get(uid_key)
@@ -2838,7 +2839,7 @@ def get_contest_report(contest_id):
                 "coding_score": float(p.get("coding_score", 0)),
                 "status": p.get("status", "")
             }
-        elif uid_key not in retest_scores or p.get("attempt_number", 1) > retest_scores[uid_key].get("attempt_number", 1):
+        elif p.get("submitted") and (uid_key not in retest_scores or p.get("attempt_number", 1) > retest_scores[uid_key].get("attempt_number", 1)):
             retest_scores[uid_key] = {
                 "score": p.get("score", 0),
                 "mcq_score": float(p.get("mcq_score", 0)),
@@ -2886,15 +2887,15 @@ def get_contest_report(contest_id):
         metrics = calculate_candidate_contest_metrics(contest, problems, p, cand_subs)
 
         attempt_num = p.get("attempt_number", 1)
-        uid_key = str(u_id or s_id or "")
+        uid_key = str(s_id or u_id or "")
         orig_info = original_scores.get(uid_key) if attempt_num > 1 else None
-        retest_info = retest_scores.get(uid_key) if attempt_num == 1 else {
+        retest_info = retest_scores.get(uid_key) if attempt_num == 1 else ({
             "score": metrics["overall_score"],
             "mcq_score": metrics["mcq_score"],
             "coding_score": metrics["coding_score"],
             "attempt_number": attempt_num,
             "status": p.get("status", "")
-        }
+        } if p.get("submitted") else None)
 
         leaderboard.append({
             "participant_id": str(p["_id"]),
@@ -2927,7 +2928,8 @@ def get_contest_report(contest_id):
             "attempt_number": attempt_num,
             "is_retest": attempt_num > 1,
             "original_score": orig_info,
-            "retest_score": retest_info
+            "retest_score": retest_info,
+            "retest_marks": retest_info.get("score") if retest_info else None
         })
 
     # Sort leaderboard by:
@@ -3024,13 +3026,14 @@ def export_contest_report_excel(contest_id):
             p_doc = db.problems.find_one({"id": pid})
             if p_doc: problems.append(p_doc)
 
-    participants = list(db.contest_participants.find({"contest_id": contest_id}))
+    contest_id_values = [contest_id, ObjectId(contest_id)]
+    participants = list(db.contest_participants.find({"contest_id": {"$in": contest_id_values}}))
     submissions = list(db.submissions.find({}))
 
     original_scores = {}
     retest_scores = {}
     for participant in participants:
-        uid_key = str(participant.get("user_id", participant.get("student_id", "")))
+        uid_key = str(participant.get("student_id") or participant.get("user_id", ""))
         attempt_number = participant.get("attempt_number", 1)
         if attempt_number == 1:
             original_scores[uid_key] = {
@@ -3039,7 +3042,7 @@ def export_contest_report_excel(contest_id):
                 "coding_score": float(participant.get("coding_score", 0)),
                 "status": participant.get("status", "")
             }
-        elif uid_key not in retest_scores or attempt_number > retest_scores[uid_key].get("attempt_number", 1):
+        elif participant.get("submitted") and (uid_key not in retest_scores or attempt_number > retest_scores[uid_key].get("attempt_number", 1)):
             retest_scores[uid_key] = {
                 "score": participant.get("score", 0),
                 "mcq_score": float(participant.get("mcq_score", 0)),
@@ -3079,15 +3082,15 @@ def export_contest_report_excel(contest_id):
         cand_subs = [s for s in submissions if s.get("student_id") == student_id_val or str(s.get("user_id")) == str(u_id)]
         metrics = calculate_candidate_contest_metrics(contest, problems, p, cand_subs)
         attempt_number = p.get("attempt_number", 1)
-        uid_key = str(u_id or s_id or "")
+        uid_key = str(s_id or u_id or "")
         original_score = original_scores.get(uid_key) if attempt_number > 1 else None
-        retest_score = retest_scores.get(uid_key) if attempt_number == 1 else {
+        retest_score = retest_scores.get(uid_key) if attempt_number == 1 else ({
             "score": metrics["overall_score"],
             "mcq_score": metrics["mcq_score"],
             "coding_score": metrics["coding_score"],
             "attempt_number": attempt_number,
             "status": p.get("status", "")
-        }
+        } if p.get("submitted") else None)
 
         leaderboard.append({
             "student_id": student_id_val,
@@ -3116,7 +3119,8 @@ def export_contest_report_excel(contest_id):
             "attempt_number": attempt_number,
             "is_retest": attempt_number > 1,
             "original_score": original_score,
-            "retest_score": retest_score
+            "retest_score": retest_score,
+            "retest_marks": retest_score.get("score") if retest_score else None
         })
 
     # Sort based on report type
