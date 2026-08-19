@@ -2828,6 +2828,7 @@ def get_contest_report(contest_id):
 
     # Build a lookup of original attempt scores for retest students
     original_scores = {}
+    retest_scores = {}
     for p in all_participants:
         uid_key = str(p.get("user_id", p.get("student_id", "")))
         if p.get("attempt_number", 1) == 1:
@@ -2835,6 +2836,14 @@ def get_contest_report(contest_id):
                 "score": p.get("score", 0),
                 "mcq_score": float(p.get("mcq_score", 0)),
                 "coding_score": float(p.get("coding_score", 0)),
+                "status": p.get("status", "")
+            }
+        elif uid_key not in retest_scores or p.get("attempt_number", 1) > retest_scores[uid_key].get("attempt_number", 1):
+            retest_scores[uid_key] = {
+                "score": p.get("score", 0),
+                "mcq_score": float(p.get("mcq_score", 0)),
+                "coding_score": float(p.get("coding_score", 0)),
+                "attempt_number": p.get("attempt_number", 1),
                 "status": p.get("status", "")
             }
 
@@ -2879,6 +2888,13 @@ def get_contest_report(contest_id):
         attempt_num = p.get("attempt_number", 1)
         uid_key = str(u_id or s_id or "")
         orig_info = original_scores.get(uid_key) if attempt_num > 1 else None
+        retest_info = retest_scores.get(uid_key) if attempt_num == 1 else {
+            "score": metrics["overall_score"],
+            "mcq_score": metrics["mcq_score"],
+            "coding_score": metrics["coding_score"],
+            "attempt_number": attempt_num,
+            "status": p.get("status", "")
+        }
 
         leaderboard.append({
             "participant_id": str(p["_id"]),
@@ -2910,7 +2926,8 @@ def get_contest_report(contest_id):
             "is_terminated": bool(p.get("auto_terminated") or p.get("status") in ["TERMINATED", "AUTO_TERMINATED"]),
             "attempt_number": attempt_num,
             "is_retest": attempt_num > 1,
-            "original_score": orig_info
+            "original_score": orig_info,
+            "retest_score": retest_info
         })
 
     # Sort leaderboard by:
@@ -3010,6 +3027,27 @@ def export_contest_report_excel(contest_id):
     participants = list(db.contest_participants.find({"contest_id": contest_id}))
     submissions = list(db.submissions.find({}))
 
+    original_scores = {}
+    retest_scores = {}
+    for participant in participants:
+        uid_key = str(participant.get("user_id", participant.get("student_id", "")))
+        attempt_number = participant.get("attempt_number", 1)
+        if attempt_number == 1:
+            original_scores[uid_key] = {
+                "score": participant.get("score", 0),
+                "mcq_score": float(participant.get("mcq_score", 0)),
+                "coding_score": float(participant.get("coding_score", 0)),
+                "status": participant.get("status", "")
+            }
+        elif uid_key not in retest_scores or attempt_number > retest_scores[uid_key].get("attempt_number", 1):
+            retest_scores[uid_key] = {
+                "score": participant.get("score", 0),
+                "mcq_score": float(participant.get("mcq_score", 0)),
+                "coding_score": float(participant.get("coding_score", 0)),
+                "attempt_number": attempt_number,
+                "status": participant.get("status", "")
+            }
+
     # Filters
     dept_filter = request.args.get("department", "").strip()
     year_filter = request.args.get("year", "").strip()
@@ -3040,6 +3078,16 @@ def export_contest_report_excel(contest_id):
 
         cand_subs = [s for s in submissions if s.get("student_id") == student_id_val or str(s.get("user_id")) == str(u_id)]
         metrics = calculate_candidate_contest_metrics(contest, problems, p, cand_subs)
+        attempt_number = p.get("attempt_number", 1)
+        uid_key = str(u_id or s_id or "")
+        original_score = original_scores.get(uid_key) if attempt_number > 1 else None
+        retest_score = retest_scores.get(uid_key) if attempt_number == 1 else {
+            "score": metrics["overall_score"],
+            "mcq_score": metrics["mcq_score"],
+            "coding_score": metrics["coding_score"],
+            "attempt_number": attempt_number,
+            "status": p.get("status", "")
+        }
 
         leaderboard.append({
             "student_id": student_id_val,
@@ -3064,7 +3112,11 @@ def export_contest_report_excel(contest_id):
             "overall_score": metrics["overall_score"],
             "score_breakdown": metrics["score_breakdown"],
             "anti_cheat": metrics["anti_cheat"],
-            "problem_breakdowns": metrics["problem_breakdowns"]
+            "problem_breakdowns": metrics["problem_breakdowns"],
+            "attempt_number": attempt_number,
+            "is_retest": attempt_number > 1,
+            "original_score": original_score,
+            "retest_score": retest_score
         })
 
     # Sort based on report type
@@ -3118,36 +3170,44 @@ def export_contest_report_excel(contest_id):
         writer = csv.writer(output)
 
         if report_type == "mcq":
-            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Correct MCQs", "Total MCQs", "MCQ Score", "Accuracy %", "Time Taken", "Anti-Cheat Status"])
+            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Correct MCQs", "Total MCQs", "MCQ Score", "Original MCQ Marks", "Retest Marks", "Accuracy %", "Time Taken", "Anti-Cheat Status"])
             for item in leaderboard:
+                original_mcq = item["original_score"]["mcq_score"] if item["original_score"] else item["mcq_score"]
                 writer.writerow([
                     item["rank"],
                     item["student_id"],
                     item["name"],
                     item["department"],
                     item["year"],
+                    f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original",
                     item["mcqs_correct"],
                     item["total_contest_mcqs"],
                     item["mcq_score"],
+                    original_mcq,
+                    item["retest_score"]["mcq_score"] if item["retest_score"] else "—",
                     f"{item['mcq_percentage']}%",
                     item["time_taken"],
                     item["anti_cheat"]["status"]
                 ])
             filename = f"MCQ_Report_{clean_title}.csv"
         elif report_type == "coding":
-            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Problems Solved", "Total Problems", "Passed Test Cases", "Total Test Cases", "Coding Score", "Time Taken", "Time Complexity", "Space Complexity", "Anti-Cheat Status"])
+            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Problems Solved", "Total Problems", "Passed Test Cases", "Total Test Cases", "Coding Score", "Original Coding Marks", "Retest Marks", "Time Taken", "Time Complexity", "Space Complexity", "Anti-Cheat Status"])
             for item in leaderboard:
+                original_coding = item["original_score"]["coding_score"] if item["original_score"] else item["coding_score"]
                 writer.writerow([
                     item["rank"],
                     item["student_id"],
                     item["name"],
                     item["department"],
                     item["year"],
+                    f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original",
                     item["solved_count"],
                     item["total_contest_problems"],
                     item["passed_test_cases"],
                     item["total_contest_testcases"],
                     item["coding_score"],
+                    original_coding,
+                    item["retest_score"]["coding_score"] if item["retest_score"] else "—",
                     item["time_taken"],
                     item["time_complexity"],
                     item["space_complexity"],
@@ -3156,17 +3216,21 @@ def export_contest_report_excel(contest_id):
             filename = f"CODING_Report_{clean_title}.csv"
         else:
             # Overall
-            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "MCQ Score", "Coding Score", "Overall Score", "Performance Index / 100", "Problems Solved", "Test Cases", "Time Taken", "Anti-Cheat Status"])
+            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "MCQ Score", "Coding Score", "Overall Score", "Original Marks", "Retest Marks", "Performance Index / 100", "Problems Solved", "Test Cases", "Time Taken", "Anti-Cheat Status"])
             for item in leaderboard:
+                original_overall = item["original_score"]["score"] if item["original_score"] else item["overall_score"]
                 writer.writerow([
                     item["rank"],
                     item["student_id"],
                     item["name"],
                     item["department"],
                     item["year"],
+                    f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original",
                     item["mcq_score"],
                     item["coding_score"],
                     item["overall_score"],
+                    original_overall,
+                    item["retest_score"]["score"] if item["retest_score"] else "—",
                     item["final_score"],
                     f"{item['solved_count']} / {item['total_contest_problems']}",
                     f"{item['passed_test_cases']} / {item['total_contest_testcases']}",
@@ -3204,13 +3268,13 @@ def export_contest_report_excel(contest_id):
         # 1. MCQ Report Sheet
         ws_main = wb.active
         ws_main.title = "MCQ Performance Report"
-        ws_main.merge_cells("A1:I1")
+        ws_main.merge_cells("A1:N1")
         t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — MCQ Performance Report: {contest.get('title')}")
         t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
         t_cell.fill = PatternFill(start_color="7C3AED", end_color="7C3AED", fill_type="solid")
         t_cell.alignment = center_align
 
-        mcq_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Correct MCQs", "Total MCQs", "MCQ Score", "Accuracy %", "Time Taken", "Status"]
+        mcq_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Correct MCQs", "Total MCQs", "MCQ Score", "Original MCQ Marks", "Retest Marks", "Accuracy %", "Time Taken", "Status"]
         for c_i, h in enumerate(mcq_headers, 1):
             cell = ws_main.cell(row=3, column=c_i, value=h)
             cell.fill = header_fill
@@ -3223,17 +3287,20 @@ def export_contest_report_excel(contest_id):
             ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
             ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
             ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
-            ws_main.cell(row=r_i, column=6, value=item["mcqs_correct"]).alignment = center_align
-            ws_main.cell(row=r_i, column=7, value=item["total_contest_mcqs"]).alignment = center_align
+            ws_main.cell(row=r_i, column=6, value=f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original").alignment = center_align
+            ws_main.cell(row=r_i, column=7, value=item["mcqs_correct"]).alignment = center_align
+            ws_main.cell(row=r_i, column=8, value=item["total_contest_mcqs"]).alignment = center_align
             
-            sc_cell = ws_main.cell(row=r_i, column=8, value=item["mcq_score"])
+            sc_cell = ws_main.cell(row=r_i, column=9, value=item["mcq_score"])
             sc_cell.alignment = center_align
             sc_cell.font = Font(name="Calibri", size=11, bold=True)
+            original_mcq = item["original_score"]["mcq_score"] if item["original_score"] else item["mcq_score"]
+            ws_main.cell(row=r_i, column=10, value=original_mcq).alignment = center_align
+            ws_main.cell(row=r_i, column=11, value=item["retest_score"]["mcq_score"] if item["retest_score"] else "—").alignment = center_align
+            ws_main.cell(row=r_i, column=12, value=f"{item['mcq_percentage']}%").alignment = center_align
+            ws_main.cell(row=r_i, column=13, value=item["time_taken"]).alignment = center_align
             
-            ws_main.cell(row=r_i, column=9, value=f"{item['mcq_percentage']}%").alignment = center_align
-            ws_main.cell(row=r_i, column=10, value=item["time_taken"]).alignment = center_align
-            
-            st_cell = ws_main.cell(row=r_i, column=11, value=item["anti_cheat"]["status"])
+            st_cell = ws_main.cell(row=r_i, column=14, value=item["anti_cheat"]["status"])
             st_cell.alignment = center_align
             st_cell.font = Font(name="Calibri", size=10, bold=True)
             if item["anti_cheat"]["status"] == "CLEAN": st_cell.fill = clean_fill
@@ -3246,13 +3313,13 @@ def export_contest_report_excel(contest_id):
         # 1. Coding Report Sheet
         ws_main = wb.active
         ws_main.title = "Coding Performance Report"
-        ws_main.merge_cells("A1:K1")
+        ws_main.merge_cells("A1:O1")
         t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — Coding Performance Report: {contest.get('title')}")
         t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
         t_cell.fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
         t_cell.alignment = center_align
 
-        coding_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Problems Solved", "Test Cases", "Coding Score", "Time Taken", "Time Comp", "Space Comp", "Status"]
+        coding_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Problems Solved", "Test Cases", "Coding Score", "Original Coding Marks", "Retest Marks", "Time Taken", "Time Comp", "Space Comp", "Status"]
         for c_i, h in enumerate(coding_headers, 1):
             cell = ws_main.cell(row=3, column=c_i, value=h)
             cell.fill = header_fill
@@ -3265,18 +3332,21 @@ def export_contest_report_excel(contest_id):
             ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
             ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
             ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
-            ws_main.cell(row=r_i, column=6, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
-            ws_main.cell(row=r_i, column=7, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
+            ws_main.cell(row=r_i, column=6, value=f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original").alignment = center_align
+            ws_main.cell(row=r_i, column=7, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
+            ws_main.cell(row=r_i, column=8, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
             
-            sc_cell = ws_main.cell(row=r_i, column=8, value=item["coding_score"])
+            sc_cell = ws_main.cell(row=r_i, column=9, value=item["coding_score"])
             sc_cell.alignment = center_align
             sc_cell.font = Font(name="Calibri", size=11, bold=True)
+            original_coding = item["original_score"]["coding_score"] if item["original_score"] else item["coding_score"]
+            ws_main.cell(row=r_i, column=10, value=original_coding).alignment = center_align
+            ws_main.cell(row=r_i, column=11, value=item["retest_score"]["coding_score"] if item["retest_score"] else "—").alignment = center_align
+            ws_main.cell(row=r_i, column=12, value=item["time_taken"]).alignment = center_align
+            ws_main.cell(row=r_i, column=13, value=item["time_complexity"]).alignment = center_align
+            ws_main.cell(row=r_i, column=14, value=item["space_complexity"]).alignment = center_align
             
-            ws_main.cell(row=r_i, column=9, value=item["time_taken"]).alignment = center_align
-            ws_main.cell(row=r_i, column=10, value=item["time_complexity"]).alignment = center_align
-            ws_main.cell(row=r_i, column=11, value=item["space_complexity"]).alignment = center_align
-            
-            st_cell = ws_main.cell(row=r_i, column=12, value=item["anti_cheat"]["status"])
+            st_cell = ws_main.cell(row=r_i, column=15, value=item["anti_cheat"]["status"])
             st_cell.alignment = center_align
             st_cell.font = Font(name="Calibri", size=10, bold=True)
             if item["anti_cheat"]["status"] == "CLEAN": st_cell.fill = clean_fill
@@ -3321,7 +3391,7 @@ def export_contest_report_excel(contest_id):
         # 1. Overall Combined Report Sheet
         ws_main = wb.active
         ws_main.title = "Overall Performance"
-        ws_main.merge_cells("A1:L1")
+        ws_main.merge_cells("A1:O1")
         t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — Overall Performance Report: {contest.get('title')}")
         t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
         t_cell.fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
@@ -3329,8 +3399,8 @@ def export_contest_report_excel(contest_id):
 
         overall_headers = [
             "Rank", "Student ID", "Candidate Name", "Department", "Year", 
-            "MCQ Marks", "Coding Marks", "Overall Score", "Problems Solved", 
-            "Test Cases", "Time Taken", "Anti-Cheat Status"
+            "Attempt", "MCQ Marks", "Coding Marks", "Overall Score", "Original Marks", "Retest Marks",
+            "Problems Solved", "Test Cases", "Time Taken", "Anti-Cheat Status"
         ]
         for c_i, h in enumerate(overall_headers, 1):
             cell = ws_main.cell(row=3, column=c_i, value=h)
@@ -3344,30 +3414,34 @@ def export_contest_report_excel(contest_id):
             ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
             ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
             ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
+            ws_main.cell(row=r_i, column=6, value=f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original").alignment = center_align
             
             # MCQ Score
-            mcq_cell = ws_main.cell(row=r_i, column=6, value=item["mcq_score"])
+            mcq_cell = ws_main.cell(row=r_i, column=7, value=item["mcq_score"])
             mcq_cell.alignment = center_align
             mcq_cell.font = Font(name="Calibri", size=11, bold=True, color="7C3AED")
 
             # Coding Score
-            cod_cell = ws_main.cell(row=r_i, column=7, value=item["coding_score"])
+            cod_cell = ws_main.cell(row=r_i, column=8, value=item["coding_score"])
             cod_cell.alignment = center_align
             cod_cell.font = Font(name="Calibri", size=11, bold=True, color="059669")
 
             # Overall Score
-            sc_cell = ws_main.cell(row=r_i, column=8, value=item["overall_score"])
+            sc_cell = ws_main.cell(row=r_i, column=9, value=item["overall_score"])
             sc_cell.alignment = center_align
             sc_cell.font = Font(name="Calibri", size=11, bold=True)
             if item["overall_score"] >= 80: sc_cell.fill = clean_fill
             elif item["overall_score"] >= 50: sc_cell.fill = flagged_fill
             else: sc_cell.fill = terminated_fill
 
-            ws_main.cell(row=r_i, column=9, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
-            ws_main.cell(row=r_i, column=10, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
-            ws_main.cell(row=r_i, column=11, value=item["time_taken"]).alignment = center_align
+            original_overall = item["original_score"]["score"] if item["original_score"] else item["overall_score"]
+            ws_main.cell(row=r_i, column=10, value=original_overall).alignment = center_align
+            ws_main.cell(row=r_i, column=11, value=item["retest_score"]["score"] if item["retest_score"] else "—").alignment = center_align
+            ws_main.cell(row=r_i, column=12, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
+            ws_main.cell(row=r_i, column=13, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
+            ws_main.cell(row=r_i, column=14, value=item["time_taken"]).alignment = center_align
             
-            st_cell = ws_main.cell(row=r_i, column=12, value=item["anti_cheat"]["status"])
+            st_cell = ws_main.cell(row=r_i, column=15, value=item["anti_cheat"]["status"])
             st_cell.alignment = center_align
             st_cell.font = Font(name="Calibri", size=10, bold=True)
             if item["anti_cheat"]["status"] == "CLEAN": st_cell.fill = clean_fill

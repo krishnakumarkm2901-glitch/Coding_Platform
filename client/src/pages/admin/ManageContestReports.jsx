@@ -628,6 +628,7 @@ export const ManageContestReports = () => {
                     <th className="py-4 px-3 text-center min-w-[90px]">MCQ Marks</th>
                     <th className="py-4 px-3 text-center min-w-[90px]">Coding Marks</th>
                     <th className="py-4 px-3 text-center min-w-[100px]">Total Score</th>
+                    <th className="py-4 px-3 text-center min-w-[105px]">Retest Marks</th>
                     <th className="py-4 px-3 text-center min-w-[90px]">Problems</th>
                     <th className="py-4 px-3 text-center min-w-[95px]">Test Cases</th>
                     <th className="py-4 px-3 text-center min-w-[90px]">Time</th>
@@ -642,6 +643,7 @@ export const ManageContestReports = () => {
                     <th className="py-4 px-3 min-w-[200px]">Candidate</th>
                     <th className="py-4 px-3 text-center min-w-[110px]">MCQs Correct</th>
                     <th className="py-4 px-3 text-center min-w-[100px]">MCQ Marks</th>
+                    <th className="py-4 px-3 text-center min-w-[105px]">Retest Marks</th>
                     <th className="py-4 px-3 text-center min-w-[100px]">Accuracy</th>
                     <th className="py-4 px-3 text-center min-w-[100px]">Time Taken</th>
                     <th className="py-4 px-3 text-center min-w-[120px]">Status</th>
@@ -656,6 +658,7 @@ export const ManageContestReports = () => {
                     <th className="py-4 px-3 text-center min-w-[100px]">Problems</th>
                     <th className="py-4 px-3 text-center min-w-[100px]">Test Cases</th>
                     <th className="py-4 px-3 text-center min-w-[110px]">Coding Marks</th>
+                    <th className="py-4 px-3 text-center min-w-[115px]">Retest Marks</th>
                     <th className="py-4 px-3 text-center min-w-[90px]">Time</th>
                     <th className="py-4 px-3 text-center min-w-[110px]">Time Comp</th>
                     <th className="py-4 px-3 text-center min-w-[110px]">Space Comp</th>
@@ -731,6 +734,9 @@ export const ManageContestReports = () => {
                               {cand.overall_score || 0}
                             </span>
                           </td>
+                          <td className="py-3.5 px-3 text-center font-mono font-bold text-[#60A5FA]">
+                            {cand.retest_score ? cand.retest_score.score : '—'}
+                          </td>
                           <td className="py-3.5 px-3 text-center font-mono text-[#667085] dark:text-[#94A3B8]">
                             {cand.solved_count} / {cand.total_contest_problems}
                           </td>
@@ -754,6 +760,9 @@ export const ManageContestReports = () => {
                               {cand.mcq_score || 0}
                             </span>
                           </td>
+                          <td className="py-3.5 px-3 text-center font-mono font-bold text-[#60A5FA]">
+                            {cand.retest_score ? cand.retest_score.mcq_score : '—'}
+                          </td>
                           <td className="py-3.5 px-3 text-center font-mono font-bold text-[#22B573]">
                             {cand.mcq_percentage || 0}%
                           </td>
@@ -776,6 +785,9 @@ export const ManageContestReports = () => {
                             <span className="px-2.5 py-1 rounded-full text-xs font-extrabold bg-[#22B573]/15 text-[#22B573] border border-[#22B573]/30">
                               {cand.coding_score || 0}
                             </span>
+                          </td>
+                          <td className="py-3.5 px-3 text-center font-mono font-bold text-[#60A5FA]">
+                            {cand.retest_score ? cand.retest_score.coding_score : '—'}
                           </td>
                           <td className="py-3.5 px-3 text-center font-mono text-[11px] text-[#667085] dark:text-[#94A3B8]">
                             {cand.time_taken}
