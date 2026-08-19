@@ -797,7 +797,7 @@ export const ManageContestReports = () => {
                       <td className="py-3.5 px-3 text-center">
                         <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${cand.is_locked
                             ? 'bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30'
-                            : ac.status === 'AUTO_TERMINATED'
+                            : cand.is_terminated || ac.status === 'AUTO_TERMINATED'
                               ? 'bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30'
                               : ac.status === 'FLAGGED'
                                 ? 'bg-[#F2B705]/15 text-[#F2B705] border border-[#F2B705]/30'
@@ -808,7 +808,7 @@ export const ManageContestReports = () => {
                               <Lock className="w-3 h-3" />
                               <span>Locked</span>
                             </>
-                          ) : ac.status === 'AUTO_TERMINATED' ? (
+                          ) : cand.is_terminated || ac.status === 'AUTO_TERMINATED' ? (
                             <>
                               <ShieldAlert className="w-3 h-3" />
                               <span>Terminated</span>
@@ -830,7 +830,7 @@ export const ManageContestReports = () => {
                       {/* Audit & Restore Buttons */}
                       <td className="py-3.5 px-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {cand.is_locked && (
+                          {(cand.is_locked || cand.is_terminated) && !cand.has_active_retest && (
                             <button
                               type="button"
                               onClick={async () => {
@@ -848,7 +848,7 @@ export const ManageContestReports = () => {
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#F59E0B]/15 hover:bg-[#F59E0B] text-[#F59E0B] hover:text-white border border-[#F59E0B]/30 text-xs font-bold transition shadow-sm"
                             >
                               <Unlock className="w-3.5 h-3.5" />
-                              <span>Approve Retest</span>
+                              <span>Reset Contest / Allow Retest</span>
                             </button>
                           )}
                           <button

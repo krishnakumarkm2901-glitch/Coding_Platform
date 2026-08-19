@@ -703,7 +703,7 @@ export const ManageContests = () => {
     setIsParticipantsModalOpen(true);
     try {
       setParticipantsLoading(true);
-      const res = await api.get(`/admin/contests/${contest.id}/participants`);
+      const res = await api.get(`/admin/contests/${contest.id}/participants?show_all=true`);
       if (res.data.success) {
         setSelectedContestParticipants(res.data.participants || []);
       }
@@ -1356,7 +1356,7 @@ export const ManageContests = () => {
                 {selectedContestParticipants.map((p) => {
                   const logs = p.anti_cheat_logs || [];
                   const isLocked = p.is_locked || p.status === 'LOCKED';
-                  const isTerm = p.auto_terminated || p.status === 'AUTO_TERMINATED';
+                  const isTerm = p.auto_terminated || p.status === 'TERMINATED' || p.status === 'AUTO_TERMINATED';
                   const isRetestReady = p.is_retest_ready || p.status === 'RETEST_READY';
                   const isRetestApproved = p.is_retest_approved || p.status === 'RETEST_APPROVED';
                   const attemptNum = p.attempt_number || 1;
@@ -1453,13 +1453,13 @@ export const ManageContests = () => {
                         )}
                       </td>
 
-                      {/* Actions: Accept Retest button for LOCKED participants */}
+                      {/* Actions: only authenticated admins can reset terminated attempts */}
                       <td className="py-3.5 px-3 text-right">
-                        {isLocked && p.lock_timeout_remaining_seconds > 0 && (
+                        {isTerm && !p.has_active_retest && (
                           <button
                             type="button"
                             onClick={async () => {
-                              if (!window.confirm(`Accept retest for ${p.student_name}? A new shuffled question set will be created.`)) return;
+                              if (!window.confirm(`Reset contest for ${p.student_name}? Their terminated attempt will remain in history and a new shuffled attempt will be created.`)) return;
                               try {
                                 const contestId = selectedContestParticipants[0]?.id ? 
                                   (selectedContestParticipants.find(pp => pp.id)?.id || '') : '';
@@ -1475,7 +1475,7 @@ export const ManageContests = () => {
                                 }
                                 const res = await api.post(`/admin/contests/${cId}/restore/${p.id}`);
                                 if (res.data.success) {
-                                  alert(`✅ Retest approved for ${p.student_name}. Attempt #${res.data.attempt_number} created.`);
+                                  alert(`Contest reset for ${p.student_name}. Attempt #${res.data.attempt_number} is ready.`);
                                   // Refresh participants
                                   const refreshRes = await api.get(`/admin/contests/${cId}/participants`);
                                   if (refreshRes.data.success) {
@@ -1490,7 +1490,7 @@ export const ManageContests = () => {
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#F59E0B]/15 hover:bg-[#F59E0B] text-[#F59E0B] hover:text-white border border-[#F59E0B]/30 text-xs font-bold transition shadow-sm"
                           >
                             <Unlock className="w-3.5 h-3.5" />
-                            <span>Accept Retest</span>
+                              <span>Reset Contest / Allow Retest</span>
                           </button>
                         )}
                       </td>

@@ -1579,11 +1579,12 @@ def restore_contest_access(contest_id, participant_id):
     if not participant:
         return jsonify({"error": "Participant not found", "success": False}), 404
 
-    # Verify status is LOCKED or TERMINATED (can resolve either)
+    # Admins may activate a fresh attempt only from a terminated/locked history record.
     current_status = participant.get("status", "")
-    if current_status not in ["LOCKED", "AUTO_TERMINATED"]:
+    is_terminated = bool(participant.get("auto_terminated") or current_status in ["TERMINATED", "AUTO_TERMINATED"])
+    if current_status != "LOCKED" and not is_terminated:
         return jsonify({
-            "error": f"Cannot restore participant with status '{current_status}'. Only LOCKED or TERMINATED attempts can be resolved.",
+            "error": f"Cannot reset participant with status '{current_status}'. Only terminated attempts can be reset.",
             "current_status": current_status,
             "success": False
         }), 400
@@ -1611,8 +1612,6 @@ def restore_contest_access(contest_id, participant_id):
                 "success": False
             }), 403
 
-    # A valid LOCKED attempt and an already TERMINATED attempt both continue
-    # through the new-attempt retest workflow below.
     # Check for existing retest for this user
     user_id = participant.get("user_id")
     current_attempt = participant.get("attempt_number", 1)
@@ -1656,12 +1655,17 @@ def restore_contest_access(contest_id, participant_id):
         "student_id": student_id,
         "student_name": participant.get("student_name"),
         "department": participant.get("department", "CSE"),
-        "joined_at": None,
         "assigned_mcq_ids": new_assigned_mcq_ids,
         "attempt_number": next_attempt,
         "is_active_attempt": True,
         "original_attempt_id": ObjectId(participant_id),
         "status": "RETEST_READY",
+        "requires_fullscreen": True,
+        "resume_state": {},
+        "mcq_answers": {},
+        "code_solutions": {},
+        "joined_at": None,
+        "remaining_seconds": int(contest.get("duration_minutes", 60)) * 60,
         "score": 0,
         "problems_solved": 0,
         "mcqs_correct": 0,
@@ -1680,22 +1684,21 @@ def restore_contest_access(contest_id, participant_id):
     
     new_retest_result = db.contest_participants.insert_one(new_retest_doc)
 
-    # Keep the old attempt as immutable history. Approval is not termination.
+    # Keep the old attempt as immutable history; only append lineage metadata.
     db.contest_participants.update_one(
         {"_id": ObjectId(participant_id)},
         {
             "$set": {
-                "status": "RETEST_APPROVED",
+                "status": current_status,
                 "is_active_attempt": False,
                 "resolution_window_active": False,
-                "auto_terminated": False,
                 "retest_approved_at": now,
                 "retest_attempt_id": new_retest_result.inserted_id,
             },
             "$push": {
                 "anti_cheat_logs": {
                     "event_type": "RETEST_APPROVED",
-                    "detail": "Admin approved retest for this locked attempt",
+                    "detail": "Admin approved a new retest attempt",
                     "created_by": str(request.current_user.get("_id", "")),
                     "timestamp": now.isoformat()
                 }
@@ -1725,7 +1728,7 @@ def restore_contest_access(contest_id, participant_id):
 
     return jsonify({
         "success": True, 
-        "message": "Retest approved with a new shuffled question set",
+        "message": "Contest reset; a new shuffled retest attempt is ready",
         "new_participant_id": str(new_retest_result.inserted_id),
         "attempt_number": next_attempt
     }), 200
@@ -1775,6 +1778,12 @@ def get_contest_participants_admin(contest_id):
         is_locked = bool(p.get("status") == "LOCKED")
         is_retest_ready = bool(p.get("status") == "RETEST_READY")
         is_retest_approved = bool(p.get("status") == "RETEST_APPROVED")
+        active_retest = db.contest_participants.find_one({
+            "contest_id": p.get("contest_id"),
+            "user_id": p.get("user_id"),
+            "is_active_attempt": True,
+            "attempt_number": {"$gt": p.get("attempt_number", 1)},
+        })
 
         if is_term:
             status_val = "AUTO_TERMINATED"
@@ -1821,6 +1830,7 @@ def get_contest_participants_admin(contest_id):
             "is_locked": is_locked,
             "is_retest_ready": is_retest_ready,
             "is_retest_approved": is_retest_approved,
+            "has_active_retest": bool(active_retest),
             "termination_reason": p.get("termination_reason", ""),
             "lock_reason": p.get("lock_reason", ""),
             "lock_timeout_remaining_seconds": lock_timeout_remaining,
@@ -2897,6 +2907,7 @@ def get_contest_report(contest_id):
             "anti_cheat": metrics["anti_cheat"],
             "problem_breakdowns": metrics["problem_breakdowns"],
             "is_locked": bool(p.get("status") == "LOCKED"),
+            "is_terminated": bool(p.get("auto_terminated") or p.get("status") in ["TERMINATED", "AUTO_TERMINATED"]),
             "attempt_number": attempt_num,
             "is_retest": attempt_num > 1,
             "original_score": orig_info

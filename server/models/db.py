@@ -68,14 +68,24 @@ def setup_indexes(database):
         # Contests indexes
         database.contests.create_index([("is_published", ASCENDING), ("start_time", ASCENDING), ("end_time", ASCENDING)])
         
-        # Contest Participants compound indexes
-        database.contest_participants.create_index([("contest_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
+        # Contest participants are stored per attempt, so a student can have
+        # multiple historical attempts for the same contest.
+        try:
+            database.contest_participants.drop_index("contest_id_1_user_id_1")
+        except Exception:
+            pass
+        database.contest_participants.create_index([("contest_id", ASCENDING), ("user_id", ASCENDING)])
+        database.contest_participants.create_index([("contest_id", ASCENDING), ("user_id", ASCENDING), ("attempt_number", DESCENDING)])
         database.contest_participants.create_index([("contest_id", ASCENDING), ("student_id", ASCENDING)])
         database.contest_participants.create_index([("contest_id", ASCENDING), ("score", DESCENDING), ("submitted_at", ASCENDING)])
         database.contest_participants.create_index([("user_id", ASCENDING), ("joined_at", DESCENDING)])
         
-        # Contest Assigned Questions indexes (persisted randomized 20-question subsets)
-        database.contest_assigned_questions.create_index([("contest_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
+        # Contest assigned questions are also stored per attempt.
+        try:
+            database.contest_assigned_questions.drop_index("contest_id_1_user_id_1")
+        except Exception:
+            pass
+        database.contest_assigned_questions.create_index([("contest_id", ASCENDING), ("user_id", ASCENDING), ("attempt_number", ASCENDING)])
         database.contest_assigned_questions.create_index([("contest_id", ASCENDING), ("student_id", ASCENDING)])
         
         # Contest Submissions & Anti Cheat Logs
