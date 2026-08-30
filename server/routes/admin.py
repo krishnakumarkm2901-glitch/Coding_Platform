@@ -2492,25 +2492,35 @@ def export_attendance_excel():
 @admin_bp.route("/reports/contests", methods=["GET"])
 @admin_required
 def list_contests_for_reports():
-    """List all contests available for performance reporting."""
-    db = get_db()
-    contests_cursor = db.contests.find({}).sort("start_time", -1)
-    
+    """List all contests available for performance reporting with single aggregation & caching."""
+    cache_key = "reports:contests_list"
+    cached_list = cache.get(cache_key)
     now = get_utc_now()
+    if cached_list and isinstance(cached_list, list):
+        return jsonify({"success": True, "contests": cached_list, "server_time": format_utc_iso(now)}), 200
+
+    db = get_db()
+    contests_cursor = list(db.contests.find({}).sort("start_time", -1))
+    
+    # 1 single rapid aggregation across all participants instead of looping queries
+    counts_agg = list(db.contest_participants.aggregate([
+        {
+            "$group": {
+                "_id": {"$ifNull": ["$contest_id", "$contestId"]},
+                "count": {"$sum": 1}
+            }
+        }
+    ]))
+    counts_map = {}
+    for item in counts_agg:
+        raw_id = item.get("_id")
+        if raw_id is not None:
+            counts_map[str(raw_id)] = item.get("count", 0)
+
     contests = []
     for c in contests_cursor:
         c_id = str(c["_id"])
-        c_id_match = [c_id]
-        if ObjectId.is_valid(c_id):
-            c_id_match.append(ObjectId(c_id))
-        
-        # Count distinct candidates or total participants
-        participants_count = db.contest_participants.count_documents({
-            "$or": [
-                {"contest_id": {"$in": c_id_match}},
-                {"contestId": {"$in": c_id_match}}
-            ]
-        })
+        participants_count = counts_map.get(c_id, 0)
         prob_ids = [str(pid) for pid in c.get("problem_ids", []) if pid]
         mcq_ids = [str(mid) for mid in c.get("mcq_ids", []) if mid]
         
@@ -2533,6 +2543,8 @@ def list_contests_for_reports():
             "participants_count": participants_count
         })
 
+    # Cache for 15 seconds
+    cache.set(cache_key, contests, ttl=15)
     return jsonify({"success": True, "contests": contests, "server_time": format_utc_iso(now)}), 200
 
 
@@ -2975,6 +2987,19 @@ def get_contest_report(contest_id):
 
         real_contest_id_str = str(contest["_id"])
 
+        # Optional filters & pagination
+        dept_filter = request.args.get("department", "").strip()
+        year_filter = request.args.get("year", "").strip()
+        search_filter = request.args.get("search", "").strip().lower()
+        page = max(int(request.args.get("page", 1) or 1), 1)
+        limit_param = request.args.get("limit", "50").strip().lower()
+        limit = 50 if limit_param in ["", "50"] else (0 if limit_param in ["0", "all"] else max(int(limit_param), 1))
+
+        cache_key = f"contest_report:data:{real_contest_id_str}:{dept_filter}:{year_filter}:{search_filter}:{page}:{limit}"
+        cached_result = cache.get(cache_key)
+        if cached_result and isinstance(cached_result, dict):
+            return jsonify(cached_result), 200
+
         # Fetch contest problems
         problem_ids = contest.get("problem_ids", [])
         problems = []
@@ -3242,7 +3267,7 @@ def get_contest_report(contest_id):
         # Summary KPIs (from MongoDB aggregation or cached)
         summary = calculate_contest_summary_kpis(db, real_contest_id_str, contest)
 
-        return jsonify({
+        response_payload = {
             "success": True,
             "contest": {
                 "id": real_contest_id_str,
@@ -3269,7 +3294,11 @@ def get_contest_report(contest_id):
                 "difficulty": p.get("difficulty", "Medium"),
                 "topic": p.get("topic", "General")
             } for p in problems]
-        }), 200
+        }
+
+        # Cache compiled report response for 10 seconds
+        cache.set(cache_key, response_payload, ttl=10)
+        return jsonify(response_payload), 200
 
     except Exception as e:
         logger.exception("Error generating contest report for %s: %s", contest_id, e)

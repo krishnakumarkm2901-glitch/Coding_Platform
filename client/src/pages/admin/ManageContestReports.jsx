@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import {
   BarChart3,
@@ -84,24 +84,30 @@ export const ManageContestReports = () => {
   });
 
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [exportingType, setExportingType] = useState(null); // 'overall_excel' | 'mcq_excel' | 'coding_excel' | ...
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [modalTab, setModalTab] = useState('overall'); // 'overall' | 'coding' | 'anticheat'
 
+  const abortRef = useRef(null);
+
   useEffect(() => {
     fetchContestsList();
+    return () => {
+      if (abortRef.current) abortRef.current.abort();
+    };
   }, []);
 
   useEffect(() => {
     if (selectedContestId) {
-      fetchContestReport(selectedContestId);
+      fetchContestReport(selectedContestId, false);
     }
   }, [selectedContestId, deptFilter, yearFilter]);
 
   useEffect(() => {
     if (!selectedContestId) return undefined;
 
-    const refreshReport = () => fetchContestReport(selectedContestId);
+    const refreshReport = () => fetchContestReport(selectedContestId, true);
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') refreshReport();
     };
@@ -121,42 +127,65 @@ export const ManageContestReports = () => {
       setLoading(true);
       const res = await api.get('/admin/reports/contests');
       if (res.data.success) {
-        setContestsList(res.data.contests || []);
-        if (res.data.contests?.length > 0) {
-          setSelectedContestId(res.data.contests[0].id);
+        const list = res.data.contests || [];
+        setContestsList(list);
+        if (list.length > 0) {
+          setSelectedContestId(list[0].id);
+        } else {
+          setLoading(false);
         }
+      } else {
+        setLoading(false);
       }
     } catch (err) {
       console.error('Failed to load contests list:', err);
-    } finally {
       setLoading(false);
     }
   };
 
-  const fetchContestReport = async (contestId) => {
+  const fetchContestReport = async (contestId, isBackground = false) => {
+    if (!contestId) return;
+
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    abortRef.current = new AbortController();
+
     try {
-      setLoading(true);
+      if (!isBackground) {
+        setLoading(true);
+      } else {
+        setIsRefreshing(true);
+      }
+
       const params = {
         department: deptFilter !== 'All' ? deptFilter : undefined,
         year: yearFilter !== 'All' ? yearFilter : undefined,
         search: search.trim() || undefined
       };
 
-      const res = await api.get(`/admin/reports/contests/${contestId}`, { params });
+      const res = await api.get(`/admin/reports/contests/${contestId}`, {
+        params,
+        signal: abortRef.current.signal
+      });
+
       if (res.data.success) {
         setReportData(res.data);
       }
     } catch (err) {
-      console.error('Failed to load contest report:', err);
+      if (err.name !== 'CanceledError' && err.code !== 'ERR_CANCELED') {
+        console.error('Failed to load contest report:', err);
+      }
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     if (selectedContestId) {
-      fetchContestReport(selectedContestId);
+      fetchContestReport(selectedContestId, false);
     }
   };
 

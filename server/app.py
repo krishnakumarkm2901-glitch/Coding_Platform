@@ -1,5 +1,5 @@
 import os
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from config import Config
 from models.db import init_db
@@ -88,9 +88,24 @@ def create_app():
     def internal_error(error):
         return jsonify({"error": "Internal server error. Please check server logs.", "success": False}), 500
 
-    @app.errorhandler(400)
-    def bad_request(error):
-        return jsonify({"error": "Bad request", "success": False}), 400
+    # Automatic Gzip Compression for JSON & Text Responses (>1KB)
+    import gzip
+    @app.after_request
+    def compress_response(response):
+        accept_encoding = request.headers.get("Accept-Encoding", "")
+        if (
+            "gzip" in accept_encoding.lower()
+            and response.status_code < 300
+            and not response.direct_passthrough
+            and response.mimetype in ["application/json", "text/html", "text/css", "text/plain", "application/javascript"]
+        ):
+            data = response.get_data()
+            if len(data) > 1024:
+                compressed_data = gzip.compress(data, compresslevel=6)
+                response.set_data(compressed_data)
+                response.headers["Content-Encoding"] = "gzip"
+                response.headers["Content-Length"] = len(compressed_data)
+        return response
 
     return app
 

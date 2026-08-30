@@ -3,6 +3,25 @@ from flask import request, jsonify
 from utils.security import decode_token
 from models.db import get_db
 from bson import ObjectId
+from services.cache_service import cache
+
+def _get_cached_user(user_id_str):
+    cache_key = f"auth:user:{user_id_str}"
+    cached = cache.get(cache_key)
+    if cached and isinstance(cached, dict):
+        return cached
+
+    db = get_db()
+    user = db.users.find_one({"_id": ObjectId(user_id_str)})
+    if not user:
+        return None
+    user["_id"] = str(user["_id"])
+    if "password" in user:
+        del user["password"]
+    
+    # Cache active user for 60 seconds
+    cache.set(cache_key, user, ttl=60)
+    return user
 
 def token_required(f):
     @wraps(f)
@@ -20,14 +39,10 @@ def token_required(f):
         if not payload:
             return jsonify({"error": "Invalid or expired token", "success": False}), 401
         
-        db = get_db()
         try:
-            user = db.users.find_one({"_id": ObjectId(payload["user_id"])})
+            user = _get_cached_user(payload["user_id"])
             if not user or user.get("status") == "disabled":
                 return jsonify({"error": "User account is disabled or does not exist", "success": False}), 403
-            user["_id"] = str(user["_id"])
-            if "password" in user:
-                del user["password"]
             request.current_user = user
         except Exception:
             return jsonify({"error": "User authentication failed", "success": False}), 401
@@ -50,14 +65,10 @@ def admin_required(f):
         if not payload or payload.get("role") != "ADMIN":
             return jsonify({"error": "Admin access required", "success": False}), 403
         
-        db = get_db()
         try:
-            user = db.users.find_one({"_id": ObjectId(payload["user_id"])})
+            user = _get_cached_user(payload["user_id"])
             if not user or user.get("role") != "ADMIN" or user.get("status") == "disabled":
                 return jsonify({"error": "Unauthorized admin access", "success": False}), 403
-            user["_id"] = str(user["_id"])
-            if "password" in user:
-                del user["password"]
             request.current_user = user
         except Exception:
             return jsonify({"error": "Authentication failed", "success": False}), 401
@@ -80,14 +91,10 @@ def student_required(f):
         if not payload or payload.get("role") != "STUDENT":
             return jsonify({"error": "Student access required", "success": False}), 403
         
-        db = get_db()
         try:
-            user = db.users.find_one({"_id": ObjectId(payload["user_id"])})
+            user = _get_cached_user(payload["user_id"])
             if not user or user.get("role") != "STUDENT" or user.get("status") == "disabled":
                 return jsonify({"error": "Student account is inactive or not found", "success": False}), 403
-            user["_id"] = str(user["_id"])
-            if "password" in user:
-                del user["password"]
             request.current_user = user
         except Exception:
             return jsonify({"error": "Authentication failed", "success": False}), 401
