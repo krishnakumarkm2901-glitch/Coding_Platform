@@ -125,15 +125,32 @@ export const ManageContestReports = () => {
   const fetchContestsList = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/admin/reports/contests');
-      if (res.data.success) {
-        const list = res.data.contests || [];
-        setContestsList(list);
-        if (list.length > 0) {
-          setSelectedContestId(list[0].id);
-        } else {
-          setLoading(false);
+      let list = [];
+      try {
+        const res = await api.get('/admin/reports/contests');
+        if (res.data && res.data.success && Array.isArray(res.data.contests) && res.data.contests.length > 0) {
+          list = res.data.contests;
         }
+      } catch (adminErr) {
+        console.warn('Admin contests route fallback:', adminErr);
+      }
+
+      if (list.length === 0) {
+        try {
+          const res = await api.get('/contests');
+          if (res.data && res.data.success && Array.isArray(res.data.contests) && res.data.contests.length > 0) {
+            list = res.data.contests;
+          }
+        } catch (cErr) {
+          console.error('Contests fallback failed:', cErr);
+        }
+      }
+
+      if (list.length > 0) {
+        setContestsList(list);
+        const firstId = list[0].id || list[0]._id;
+        setSelectedContestId(firstId);
+        fetchContestReport(firstId, false);
       } else {
         setLoading(false);
       }
@@ -141,6 +158,11 @@ export const ManageContestReports = () => {
       console.error('Failed to load contests list:', err);
       setLoading(false);
     }
+  };
+
+  const handleContestChange = (newContestId) => {
+    setSelectedContestId(newContestId);
+    fetchContestReport(newContestId, false);
   };
 
   const fetchContestReport = async (contestId, isBackground = false) => {
@@ -599,14 +621,18 @@ export const ManageContestReports = () => {
             </label>
             <select
               value={selectedContestId}
-              onChange={(e) => setSelectedContestId(e.target.value)}
+              onChange={(e) => handleContestChange(e.target.value)}
               className="w-full py-2.5 px-3.5 bg-[#DDF2FF]/40 dark:bg-[#142A43]/40 border border-[#0757B8]/30 dark:border-[#0066CC]/40 rounded-xl text-[#0757B8] dark:text-[#60A5FA] font-bold text-xs"
             >
-              {contestsList.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.title} ({c.participants_count} Candidates • {c.duration_minutes}m)
-                </option>
-              ))}
+              {contestsList.length === 0 ? (
+                <option value="">Loading contests...</option>
+              ) : (
+                contestsList.map(c => (
+                  <option key={c.id || c._id} value={c.id || c._id}>
+                    {c.title} ({c.participants_count ? `${c.participants_count} Candidates • ` : ''}{c.duration_minutes}m)
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
