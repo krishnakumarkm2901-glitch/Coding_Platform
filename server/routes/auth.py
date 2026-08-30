@@ -131,32 +131,54 @@ def admin_login():
 
 @auth_bp.route("/me", methods=["GET"])
 def get_current_user():
-    """Return auth state; missing, invalid, and expired tokens are normal."""
+    """Return authenticated user info or unauthenticated status."""
     from utils.security import decode_token
+    from utils.decorators import _get_cached_user
 
     auth_header = request.headers.get("Authorization", "")
     parts = auth_header.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
         return jsonify({"success": True, "authenticated": False, "user": None}), 200
+        
     payload = decode_token(parts[1])
-    if not payload or not ObjectId.is_valid(str(payload.get("user_id", ""))):
+    if not payload or not payload.get("user_id"):
         return jsonify({"success": True, "authenticated": False, "user": None}), 200
+        
     try:
-        db = get_db()
-        if db is None:
-            raise RuntimeError("Database is not initialized")
-        user = db.users.find_one({"_id": ObjectId(payload["user_id"])})
+        user = _get_cached_user(payload["user_id"])
     except Exception:
-        logger.exception("Current-user database lookup failed")
+        logger.exception("Current-user lookup failed")
         return jsonify({"error": "Authentication service is temporarily unavailable", "success": False}), 503
-    if not user or user.get("status") == "disabled":
+
+    if not user:
+        # Fallback to payload claims if JWT signature is valid
+        user = {
+            "id": str(payload.get("user_id", "")),
+            "_id": str(payload.get("user_id", "")),
+            "name": payload.get("name", "User"),
+            "email": payload.get("email", ""),
+            "role": payload.get("role", "STUDENT"),
+            "student_id": payload.get("student_id", "")
+        }
+
+    if user.get("status") == "disabled":
         return jsonify({"success": True, "authenticated": False, "user": None}), 200
-    user["_id"] = str(user["_id"])
-    user.pop("password", None)
+
+    user_info = {
+        "id": str(user.get("_id") or user.get("id")),
+        "_id": str(user.get("_id") or user.get("id")),
+        "name": user.get("name", ""),
+        "email": user.get("email", ""),
+        "role": user.get("role", "STUDENT"),
+        "student_id": user.get("student_id", ""),
+        "department": user.get("department", ""),
+        "year": user.get("year", "")
+    }
+
     return jsonify({
         "success": True,
         "authenticated": True,
-        "user": user
+        "user": user_info
     }), 200
 
 @auth_bp.route("/logout", methods=["POST"])

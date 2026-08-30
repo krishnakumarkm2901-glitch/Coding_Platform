@@ -57,10 +57,14 @@ api.interceptors.response.use(
       return api(config);
     }
 
-    // 401 — session expired
+    // 401 — genuine session expired / invalid token
     if (error.response && error.response.status === 401) {
       const currentPath = window.location.pathname;
-      if (!currentPath.includes('/login')) {
+      const errorMsg = String(error.response.data?.error || '').toLowerCase();
+      const isAuthEndpoint = (config.url || '').includes('/auth/me') || (config.url || '').includes('/auth/verify');
+      const isTokenExpired = errorMsg.includes('expired') || errorMsg.includes('invalid token') || errorMsg.includes('missing');
+
+      if ((isAuthEndpoint || isTokenExpired) && !currentPath.includes('/login')) {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         if (currentPath.startsWith('/admin')) {

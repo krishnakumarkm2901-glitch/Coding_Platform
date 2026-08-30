@@ -22,13 +22,19 @@ export const AuthProvider = ({ children }) => {
       if (storedToken) {
         try {
           const res = await api.get('/auth/me');
-          if (res.data.success) {
+          if (res.data && res.data.success && res.data.user) {
             setUser(res.data.user);
             localStorage.setItem('user', JSON.stringify(res.data.user));
+          } else if (res.data && res.data.authenticated === false) {
+            // Only clear session if server explicitly says the token is invalid/expired
+            logout();
           }
-        } catch {
-          logout();
+        } catch (err) {
+          // If network blip / 500 / timeout / Render cold start, PRESERVE existing valid session from localStorage
+          console.warn('Silent auth check notification (session preserved):', err?.message);
         }
+      } else {
+        setUser(null);
       }
       setLoading(false);
     };
