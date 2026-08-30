@@ -58,6 +58,7 @@ def create_app():
     def health_check():
         from services.cache_service import cache
         from services.compiler_pool import compiler_pool
+        from services.queue_service import get_queue_stats
         from utils.time_utils import get_utc_now, format_utc_iso
         from models.db import get_db
 
@@ -73,6 +74,7 @@ def create_app():
             "status": "healthy" if db_healthy else "degraded",
             "database": "connected" if db_healthy else "disconnected",
             "cache": cache.get_stats(),
+            "queue": get_queue_stats(),
             "compiler_workers": compiler_pool.get_metrics(),
             "server_time_utc": format_utc_iso(get_utc_now())
         }), 200 if db_healthy else 503

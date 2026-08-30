@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from models.db import get_db
 from utils.security import check_password, hash_password, generate_token
 from utils.decorators import token_required
+from utils.rate_limiter import rate_limit
 from bson import ObjectId
 from datetime import datetime, timezone
 import logging
@@ -11,6 +12,7 @@ logger = logging.getLogger(__name__)
 auth_bp = Blueprint("auth", __name__)
 
 @auth_bp.route("/login", methods=["POST"])
+@rate_limit(max_requests=10, window_seconds=300)
 def student_login():
     """Student login using student_id / register number and password."""
     data = request.get_json() or {}
@@ -78,6 +80,7 @@ def student_login():
     }), 200
 
 @auth_bp.route("/admin/login", methods=["POST"])
+@rate_limit(max_requests=10, window_seconds=300)
 def admin_login():
     """Admin login using email or username and password."""
     data = request.get_json() or {}
@@ -163,6 +166,7 @@ def logout():
 
 @auth_bp.route("/change-password", methods=["POST"])
 @token_required
+@rate_limit(max_requests=5, window_seconds=300, key_func=lambda: getattr(request, 'current_user', {}).get('_id', request.remote_addr))
 def change_password():
     """Change current user's password."""
     data = request.get_json() or {}

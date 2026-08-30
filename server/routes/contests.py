@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from models.db import get_db
 from utils.decorators import token_required, student_required
+from utils.rate_limiter import rate_limit
 from services.piston_service import execute_code, normalize_output
 from services.cache_service import cache
 from services.compiler_pool import compiler_pool
@@ -1227,6 +1228,7 @@ def get_student_contest_report(contest_id):
     }), 200
 
 @contests_bp.route("/<contest_id>/leaderboard", methods=["GET"])
+@rate_limit(max_requests=30, window_seconds=60)
 def get_contest_leaderboard(contest_id):
     """Retrieve contest leaderboard sorted by score and submission time with caching.
     Deduplicates per student: shows only the latest/best attempt per student."""
@@ -1294,7 +1296,7 @@ def get_contest_leaderboard(contest_id):
         })
         rank += 1
 
-    cache.set(cache_key, leaderboard, ttl=5)
+    cache.set(cache_key, leaderboard, ttl=10)
 
     return jsonify({
         "success": True,
@@ -1303,8 +1305,15 @@ def get_contest_leaderboard(contest_id):
     }), 200
 
 @contests_bp.route("/leaderboard/global", methods=["GET"])
+@rate_limit(max_requests=20, window_seconds=60)
 def get_global_leaderboard():
     """Retrieve global platform leaderboard based on problems solved & contest points."""
+    # Cache global leaderboard for 30 seconds — it involves heavy aggregation
+    cache_key = "leaderboard:global"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return jsonify({"success": True, "leaderboard": cached}), 200
+
     db = get_db()
     
     # Aggregate total solved problems per student
@@ -1344,6 +1353,8 @@ def get_global_leaderboard():
     leaderboard.sort(key=lambda x: x["total_score"], reverse=True)
     for idx, item in enumerate(leaderboard):
         item["rank"] = idx + 1
+
+    cache.set(cache_key, leaderboard, ttl=30)
 
     return jsonify({
         "success": True,

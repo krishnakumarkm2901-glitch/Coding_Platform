@@ -1,13 +1,26 @@
 from flask import Blueprint, request, jsonify
 from models.db import get_db
 from utils.decorators import token_required
+from utils.rate_limiter import rate_limit
 from services.piston_service import execute_code, normalize_output
+from services.queue_service import (
+    is_queue_available,
+    enqueue_submission,
+    get_result,
+)
 from bson import ObjectId
 from datetime import datetime, timezone
+import uuid
 
 submissions_bp = Blueprint("submissions", __name__)
 
+
+# ---------------------------------------------------------------------------
+# Run Code (custom input) — always synchronous for instant feedback
+# ---------------------------------------------------------------------------
+
 @submissions_bp.route("/run", methods=["POST"])
+@rate_limit(max_requests=10, window_seconds=60, key_func=lambda: request.remote_addr)
 def run_code_custom():
     """Run code against custom input using Piston API."""
     data = request.get_json() or {}
@@ -28,10 +41,38 @@ def run_code_custom():
         "execution_time": result["execution_time"]
     }), 200
 
+
+# ---------------------------------------------------------------------------
+# Submit Solution — async via queue when available, sync fallback
+# ---------------------------------------------------------------------------
+
+def _get_user_id_for_rate_limit():
+    """Extract user ID from JWT for rate limiting (best-effort)."""
+    try:
+        auth_header = request.headers.get("Authorization", "")
+        if "Bearer " in auth_header:
+            from utils.security import decode_token
+            payload = decode_token(auth_header.split(" ")[1])
+            if payload:
+                return payload.get("user_id", request.remote_addr)
+    except Exception:
+        pass
+    return request.remote_addr
+
+
 @submissions_bp.route("/submit", methods=["POST"])
 @token_required
+@rate_limit(max_requests=5, window_seconds=60, key_func=_get_user_id_for_rate_limit)
 def submit_solution():
-    """Submit solution code to be tested against all test cases."""
+    """Submit solution code to be tested against all test cases.
+
+    When the Redis queue is available, the submission is enqueued and
+    a job_id is returned immediately (status='QUEUED').  The client
+    polls GET /submissions/<id> until the status changes.
+
+    When the queue is unavailable, execution happens synchronously
+    (preserving the original behaviour for local development).
+    """
     data = request.get_json() or {}
     problem_id = data.get("problem_id")
     language = data.get("language", "python").lower()
@@ -60,6 +101,73 @@ def submit_solution():
         sample_out = problem.get("sample_output", "")
         test_cases = [{"input": sample_in, "expected_output": sample_out, "is_sample": True}]
 
+    # ---- Async path: enqueue and return immediately ----
+    if is_queue_available():
+        # Create a QUEUED submission record in MongoDB
+        submission_doc = {
+            "user_id": user_id,
+            "student_id": user.get("student_id", ""),
+            "student_name": user.get("name", ""),
+            "problem_id": str(problem["_id"]),
+            "problem_title": problem.get("title", ""),
+            "language": language,
+            "code": code,
+            "status": "QUEUED",
+            "runtime": 0,
+            "memory": 0,
+            "passed_test_cases": 0,
+            "total_test_cases": len(test_cases),
+            "error_message": "",
+            "created_at": datetime.now(timezone.utc),
+        }
+        sub_result = db.submissions.insert_one(submission_doc)
+        submission_id = str(sub_result.inserted_id)
+
+        # Serialise test cases for the queue (strip ObjectId fields)
+        serialised_tcs = []
+        for tc in test_cases:
+            serialised_tcs.append({
+                "input": tc.get("input", ""),
+                "expected_output": tc.get("expected_output", tc.get("output", "")),
+                "is_sample": tc.get("is_sample", False),
+            })
+
+        job_id = str(uuid.uuid4())
+        enqueue_submission({
+            "job_id": job_id,
+            "type": "submit",
+            "submission_id": submission_id,
+            "problem_id": str(problem["_id"]),
+            "problem_title": problem.get("title", ""),
+            "user_id": user_id,
+            "student_id": user.get("student_id", ""),
+            "student_name": user.get("name", ""),
+            "language": language,
+            "code": code,
+            "test_cases": serialised_tcs,
+            "timeout": 6,
+        })
+
+        return jsonify({
+            "success": True,
+            "submission_id": submission_id,
+            "job_id": job_id,
+            "status": "QUEUED",
+            "message": "Submission queued for evaluation.",
+            "passed_test_cases": 0,
+            "total_test_cases": len(test_cases),
+            "runtime": 0,
+            "error_message": "",
+            "failed_case": None,
+        }), 202  # 202 Accepted
+
+    # ---- Sync path: execute inline (original behaviour) ----
+    return _submit_synchronous(db, user, problem, test_cases, language, code)
+
+
+def _submit_synchronous(db, user, problem, test_cases, language, code):
+    """Original synchronous submission flow — used when Redis is unavailable."""
+    user_id = user["_id"]
     total_test_cases = len(test_cases)
     passed_test_cases = 0
     final_status = "Accepted"
@@ -145,7 +253,6 @@ def submit_solution():
             "_id": {"$ne": sub_result.inserted_id}
         })
         if not solved_before:
-            # Create a notification for the solved problem
             create_notification(
                 user_id=user_id,
                 title="Problem Solved",
@@ -181,6 +288,52 @@ def submit_solution():
         "error_message": first_error,
         "failed_case": failed_test_case_info
     }), 200
+
+
+# ---------------------------------------------------------------------------
+# Poll submission status (for async queue flow)
+# ---------------------------------------------------------------------------
+
+@submissions_bp.route("/<submission_id>/status", methods=["GET"])
+@token_required
+def get_submission_status(submission_id):
+    """Fast polling endpoint for queued submissions.
+
+    Returns the current status.  If the submission has been evaluated,
+    returns the full result.  If still queued, returns status='QUEUED'.
+    """
+    if not ObjectId.is_valid(submission_id):
+        return jsonify({"error": "Invalid submission ID", "success": False}), 400
+
+    db = get_db()
+    sub = db.submissions.find_one(
+        {"_id": ObjectId(submission_id)},
+        {"code": 0},  # Exclude code for lightweight polling
+    )
+    if not sub:
+        return jsonify({"error": "Submission not found", "success": False}), 404
+
+    # Only allow owner or admin
+    if str(sub.get("user_id")) != str(request.current_user["_id"]) and request.current_user.get("role") != "ADMIN":
+        return jsonify({"error": "Unauthorized", "success": False}), 403
+
+    status = sub.get("status", "QUEUED")
+
+    return jsonify({
+        "success": True,
+        "submission_id": submission_id,
+        "status": status,
+        "passed_test_cases": sub.get("passed_test_cases", 0),
+        "total_test_cases": sub.get("total_test_cases", 0),
+        "runtime": sub.get("runtime", 0),
+        "error_message": sub.get("error_message", ""),
+        "is_complete": status not in ("QUEUED", "PROCESSING"),
+    }), 200
+
+
+# ---------------------------------------------------------------------------
+# Submission history
+# ---------------------------------------------------------------------------
 
 @submissions_bp.route("", methods=["GET"])
 @token_required

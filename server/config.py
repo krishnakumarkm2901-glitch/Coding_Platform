@@ -27,3 +27,10 @@ class Config:
     CORS_ORIGINS = _origins if _origins else ["*"]
     
     JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", 48))
+
+    # Redis / Queue Configuration
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    # "auto" = use queue when Redis is up, sync otherwise
+    # "queue" = always use queue (fail if Redis is down)
+    # "sync"  = always execute synchronously (local dev default)
+    EXECUTION_MODE = os.getenv("EXECUTION_MODE", "auto").lower()

@@ -59,6 +59,9 @@ def setup_indexes(database):
         database.submissions.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
         database.submissions.create_index([("user_id", ASCENDING), ("problem_id", ASCENDING), ("status", ASCENDING)])
         database.submissions.create_index([("problem_id", ASCENDING), ("status", ASCENDING)])
+        # Queue-related indexes: fast polling for QUEUED/PROCESSING submissions
+        database.submissions.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
+        database.submissions.create_index([("user_id", ASCENDING), ("status", ASCENDING)])
         
         # MCQs indexes
         database.mcqs.create_index([("topic", ASCENDING)])

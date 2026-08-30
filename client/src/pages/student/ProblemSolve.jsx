@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import api from '../../services/api';
+import api, { deduplicatedPost, pollSubmissionResult } from '../../services/api';
 import confetti from 'canvas-confetti';
 import { 
   Play, 
@@ -119,20 +119,53 @@ export const ProblemSolve = () => {
       setRunResult(null);
       setActiveTab('result');
 
-      const res = await api.post('/submissions/submit', {
+      const res = await deduplicatedPost('/submissions/submit', {
         problem_id: problem.id,
         language,
         code,
       });
 
-      if (res.data.success) {
+      // Async queue path: status is QUEUED, need to poll for result
+      if (res.data.status === 'QUEUED' && res.data.submission_id) {
+        setSubmitResult({
+          status: 'Judging...',
+          passed_test_cases: 0,
+          total_test_cases: res.data.total_test_cases,
+          runtime: 0,
+          error_message: 'Your submission is being evaluated...',
+        });
+
+        const finalResult = await pollSubmissionResult(res.data.submission_id, {
+          intervalMs: 1500,
+          maxAttempts: 40,
+          onProgress: (progress) => {
+            if (progress.status !== 'QUEUED') {
+              setSubmitResult((prev) => ({
+                ...prev,
+                status: progress.status === 'PROCESSING' ? 'Judging...' : progress.status,
+              }));
+            }
+          },
+        });
+
+        setSubmitResult(finalResult);
+        if (finalResult.status === 'Accepted') {
+          confetti({
+            particleCount: 120,
+            spread: 70,
+            origin: { y: 0.6 },
+            colors: ['#0757B8', '#22B573', '#F2B705'],
+          });
+        }
+      } else if (res.data.success) {
+        // Sync fallback path: result is immediate
         setSubmitResult(res.data);
         if (res.data.status === 'Accepted') {
           confetti({
             particleCount: 120,
             spread: 70,
             origin: { y: 0.6 },
-            colors: ['#0757B8', '#22B573', '#F2B705']
+            colors: ['#0757B8', '#22B573', '#F2B705'],
           });
         }
       }
