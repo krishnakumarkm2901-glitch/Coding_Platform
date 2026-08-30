@@ -61,6 +61,7 @@ export const LeaderboardPage = () => {
   const [topThree, setTopThree] = useState([]);
   const [currentStudentStats, setCurrentStudentStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   // Filters
   const [timePeriod, setTimePeriod] = useState('all_time');
@@ -79,13 +80,14 @@ export const LeaderboardPage = () => {
     if (activeTab === 'practice') {
       fetchPracticeLeaderboard();
     } else {
-      fetchContestData();
+      fetchContestData(selectedContestId || contestId);
     }
   }, [activeTab, timePeriod, deptFilter, yearFilter, difficultyFilter, selectedContestId]);
 
   const fetchPracticeLeaderboard = async () => {
     try {
       setLoading(true);
+      setError(null);
       const params = {
         time_period: timePeriod,
         department: deptFilter !== 'All' ? deptFilter : undefined,
@@ -102,49 +104,74 @@ export const LeaderboardPage = () => {
       }
     } catch (err) {
       console.error('Failed to load practice leaderboard:', err);
+      setError('Unable to load practice leaderboard. Please retry.');
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchContestData = async () => {
+  const fetchContestData = async (targetId = null, isBackground = false) => {
+    let currentId = targetId || selectedContestId || contestId;
+
+    if (!isBackground) setLoading(true);
+    setError(null);
+
     try {
-      setLoading(true);
-      // Fetch contests list if needed
-      if (contestsList.length === 0) {
+      let activeList = contestsList;
+      if (activeList.length === 0) {
         const cListRes = await api.get('/contests');
-        if (cListRes.data.success && cListRes.data.contests?.length > 0) {
-          setContestsList(cListRes.data.contests);
-          if (!selectedContestId) {
-            setSelectedContestId(cListRes.data.contests[0].id);
+        if (cListRes.data && cListRes.data.success && Array.isArray(cListRes.data.contests) && cListRes.data.contests.length > 0) {
+          activeList = cListRes.data.contests;
+          setContestsList(activeList);
+          if (!currentId) {
+            currentId = activeList[0].id || activeList[0]._id;
+            setSelectedContestId(currentId);
           }
         }
       }
 
-      const targetContestId = selectedContestId || contestId;
-      if (targetContestId) {
-        const [lbRes, cRes] = await Promise.all([
-          api.get(`/contests/${targetContestId}/leaderboard`),
-          api.get(`/contests/${targetContestId}`)
+      if (currentId) {
+        const params = {
+          department: deptFilter !== 'All' ? deptFilter : undefined,
+          year: yearFilter !== 'All' ? yearFilter : undefined,
+          search: search.trim() || undefined
+        };
+
+        const [lbRes, cRes] = await Promise.allSettled([
+          api.get(`/contests/${currentId}/leaderboard`, { params }),
+          api.get(`/contests/${currentId}`)
         ]);
-        if (lbRes.data.success) {
-          setContestLeaderboard(lbRes.data.leaderboard || []);
+
+        if (lbRes.status === 'fulfilled' && lbRes.value.data && lbRes.value.data.success) {
+          const raw = lbRes.value.data.leaderboard || lbRes.value.data.data || [];
+          setContestLeaderboard(Array.isArray(raw) ? raw : []);
+        } else if (lbRes.status === 'rejected') {
+          console.warn('Contest leaderboard fetch issue:', lbRes.reason);
         }
-        if (cRes.data.success) {
-          setContestTitle(cRes.data.contest.title);
+
+        if (cRes.status === 'fulfilled' && cRes.value.data && cRes.value.data.success && cRes.value.data.contest) {
+          setContestTitle(cRes.value.data.contest.title || 'Contest');
         }
       }
     } catch (err) {
       console.error('Failed to load contest leaderboard:', err);
+      setError('Unable to load contest standings. Please retry.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleContestChange = (newContestId) => {
+    setSelectedContestId(newContestId);
+    fetchContestData(newContestId, false);
   };
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     if (activeTab === 'practice') {
       fetchPracticeLeaderboard();
+    } else {
+      fetchContestData(selectedContestId, false);
     }
   };
 
@@ -154,9 +181,6 @@ export const LeaderboardPage = () => {
     setYearFilter('All');
     setDifficultyFilter('all');
     setSearch('');
-    setTimeout(() => {
-      fetchPracticeLeaderboard();
-    }, 50);
   };
 
   return (
@@ -698,14 +722,18 @@ export const LeaderboardPage = () => {
               </label>
               <select
                 value={selectedContestId}
-                onChange={(e) => setSelectedContestId(e.target.value)}
+                onChange={(e) => handleContestChange(e.target.value)}
                 className="w-full py-2.5 px-3.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#0757B8] dark:text-[#60A5FA] font-bold text-xs"
               >
-                {contestsList.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.title} ({c.duration_minutes}m)
-                  </option>
-                ))}
+                {contestsList.length === 0 ? (
+                  <option value="">Loading active contests...</option>
+                ) : (
+                  contestsList.map(c => (
+                    <option key={c.id || c._id} value={c.id || c._id}>
+                      {c.title} ({c.participants_count ? `${c.participants_count} Candidates • ` : ''}{c.duration_minutes}m)
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 
@@ -721,13 +749,34 @@ export const LeaderboardPage = () => {
           </div>
 
           <div className="rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] overflow-hidden shadow-sm">
-            {loading ? (
+            {error ? (
+              <div className="py-16 text-center text-rose-500">
+                <AlertCircle className="w-10 h-10 mx-auto mb-2 opacity-80" />
+                <p className="font-bold text-sm text-[#172033] dark:text-[#F8FAFC]">Unable to load contest standings.</p>
+                <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">{error}</p>
+                <button
+                  type="button"
+                  onClick={() => fetchContestData(selectedContestId, false)}
+                  className="mt-4 px-4 py-2 bg-[#0757B8] dark:bg-[#0066CC] text-white rounded-xl text-xs font-bold hover:opacity-90 transition shadow-sm"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : loading ? (
               <div className="py-20">
                 <PageLoader text="Loading contest standings..." />
               </div>
             ) : contestLeaderboard.length === 0 ? (
               <div className="py-20 text-center text-[#667085] dark:text-[#94A3B8] text-xs">
-                No participant records found for this contest.
+                <Users className="w-8 h-8 mx-auto mb-2 text-[#667085] opacity-50" />
+                <p className="font-bold text-sm text-[#172033] dark:text-[#F8FAFC]">No participant records found for this contest.</p>
+                <button
+                  type="button"
+                  onClick={() => fetchContestData(selectedContestId, false)}
+                  className="mt-3 px-3 py-1.5 bg-[#0757B8] dark:bg-[#0066CC] text-white rounded-xl text-xs font-bold hover:opacity-90 transition"
+                >
+                  Refresh
+                </button>
               </div>
             ) : (
               <div className="overflow-x-auto">

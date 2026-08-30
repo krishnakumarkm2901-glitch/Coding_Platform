@@ -1228,81 +1228,131 @@ def get_student_contest_report(contest_id):
     }), 200
 
 @contests_bp.route("/<contest_id>/leaderboard", methods=["GET"])
-@rate_limit(max_requests=30, window_seconds=60)
+@rate_limit(max_requests=120, window_seconds=60)
 def get_contest_leaderboard(contest_id):
-    """Retrieve contest leaderboard sorted by score and submission time with caching.
+    """Retrieve contest leaderboard sorted by score and submission time with caching & pagination.
     Deduplicates per student: shows only the latest/best attempt per student."""
     db = get_db()
-    if not ObjectId.is_valid(contest_id):
-        return jsonify({"error": "Invalid contest ID", "success": False}), 400
+    
+    dept_filter = request.args.get("department", "").strip()
+    year_filter = request.args.get("year", "").strip()
+    search_filter = request.args.get("search", "").strip().lower()
+    page = max(int(request.args.get("page", 1) or 1), 1)
+    limit_param = request.args.get("limit", "0").strip().lower()
+    limit = 0 if limit_param in ["0", "all", ""] else max(int(limit_param), 1)
 
-    cache_key = f"contest:{contest_id}:leaderboard"
-    cached_leaderboard = cache.get(cache_key)
-    if cached_leaderboard is not None:
-        return jsonify({
-            "success": True,
-            "leaderboard": cached_leaderboard,
-            "total_participants": len(cached_leaderboard)
-        }), 200
+    cache_key = f"contest:{contest_id}:leaderboard:{dept_filter}:{year_filter}:{search_filter}:{page}:{limit}"
+    cached_payload = cache.get(cache_key)
+    if cached_payload is not None and isinstance(cached_payload, dict):
+        return jsonify(cached_payload), 200
 
-    # Fetch ALL attempts, then deduplicate per student
-    participants_cursor = db.contest_participants.find({"contest_id": contest_id}).sort([
+    c_id_match = [str(contest_id)]
+    if ObjectId.is_valid(str(contest_id)):
+        c_id_match.append(ObjectId(str(contest_id)))
+
+    # Fetch ALL attempts matching contest ID variants, then deduplicate per student
+    participants_cursor = db.contest_participants.find({
+        "$or": [
+            {"contest_id": {"$in": c_id_match}},
+            {"contestId": {"$in": c_id_match}}
+        ]
+    }).sort([
         ("attempt_number", -1),
         ("score", -1),
         ("submitted_at", 1)
     ])
 
     # Keep only the best attempt per student:
-    # Priority: submitted retest > submitted original > active retest > active original
     seen_students = {}
     for p in participants_cursor:
-        sid = str(p.get("user_id", p.get("student_id", "")))
+        sid = str(p.get("user_id") or p.get("userId") or p.get("student_id") or p.get("studentId") or p.get("_id", ""))
         if not sid:
             continue
         existing = seen_students.get(sid)
         if existing is None:
             seen_students[sid] = p
         else:
-            # Prefer submitted over non-submitted
             p_submitted = bool(p.get("submitted"))
             e_submitted = bool(existing.get("submitted"))
             if p_submitted and not e_submitted:
                 seen_students[sid] = p
-            elif p_submitted == e_submitted and p.get("score", 0) > existing.get("score", 0):
+            elif p_submitted == e_submitted and float(p.get("score", 0) or 0) > float(existing.get("score", 0) or 0):
                 seen_students[sid] = p
 
     # Sort by score desc, then submission time asc
     best_attempts = sorted(
         seen_students.values(),
-        key=lambda x: (-x.get("score", 0), x.get("submitted_at") or datetime.max.replace(tzinfo=timezone.utc))
+        key=lambda x: (-float(x.get("score", 0) or 0), x.get("submitted_at") or datetime.max.replace(tzinfo=timezone.utc))
     )
 
-    leaderboard = []
+    all_leaderboard = []
     rank = 1
     for p in best_attempts:
-        attempt_num = p.get("attempt_number", 1)
-        leaderboard.append({
+        s_name = str(p.get("student_name") or p.get("studentName") or p.get("name") or "Student")
+        s_id = str(p.get("student_id") or p.get("studentId") or p.get("user_id") or "N/A")
+        dept = str(p.get("department") or "CSE")
+        year = str(p.get("year") or "1st Year")
+
+        # Apply filters
+        if dept_filter and dept_filter.lower() != "all" and dept_filter.lower() not in dept.lower():
+            continue
+        if year_filter and year_filter.lower() != "all":
+            y_key = year_filter.split(" ")[0].lower()
+            if y_key not in year.lower():
+                continue
+        if search_filter:
+            if search_filter not in s_name.lower() and search_filter not in s_id.lower():
+                continue
+
+        attempt_num = int(p.get("attempt_number", 1) or 1)
+        all_leaderboard.append({
             "rank": rank,
-            "student_name": p.get("student_name", "Student"),
-            "student_id": p.get("student_id", "N/A"),
-            "department": p.get("department", "CSE"),
-            "score": p.get("score", 0),
-            "problems_solved": p.get("problems_solved", 0),
-            "mcqs_correct": p.get("mcqs_correct", 0),
-            "submitted": p.get("submitted", False),
+            "participant_id": str(p["_id"]),
+            "student_name": s_name,
+            "name": s_name,
+            "student_id": s_id,
+            "department": dept,
+            "year": year,
+            "score": float(p.get("score", 0) or 0),
+            "overall_score": float(p.get("score", 0) or 0),
+            "problems_solved": int(p.get("problems_solved", 0) or 0),
+            "solved_count": int(p.get("problems_solved", 0) or 0),
+            "mcqs_correct": int(p.get("mcqs_correct", 0) or 0),
+            "mcq_score": float(p.get("mcq_score", 0) or (int(p.get("mcqs_correct", 0) or 0) * 10)),
+            "coding_score": float(p.get("coding_score", 0) or (int(p.get("problems_solved", 0) or 0) * 10)),
+            "submitted": bool(p.get("submitted", False)),
             "tab_switches": len(p.get("anti_cheat_logs", [])),
             "attempt_number": attempt_num,
             "is_retest": attempt_num > 1
         })
         rank += 1
 
-    cache.set(cache_key, leaderboard, ttl=10)
+    total_candidates = len(all_leaderboard)
 
-    return jsonify({
+    # Paginate if limit > 0
+    if limit > 0:
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        paginated = all_leaderboard[start_idx:end_idx]
+        total_pages = max((total_candidates + limit - 1) // limit, 1)
+    else:
+        paginated = all_leaderboard
+        total_pages = 1
+
+    response_payload = {
         "success": True,
-        "leaderboard": leaderboard,
-        "total_participants": len(leaderboard)
-    }), 200
+        "leaderboard": paginated,
+        "total_participants": total_candidates,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total_candidates,
+            "total_pages": total_pages
+        }
+    }
+
+    cache.set(cache_key, response_payload, ttl=10)
+    return jsonify(response_payload), 200
 
 @contests_bp.route("/leaderboard/global", methods=["GET"])
 @rate_limit(max_requests=20, window_seconds=60)
