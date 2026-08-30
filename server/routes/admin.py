@@ -18,6 +18,8 @@ import logging
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+from services.cache_service import cache
+
 logger = logging.getLogger(__name__)
 admin_bp = Blueprint("admin", __name__)
 
@@ -2485,6 +2487,8 @@ def export_attendance_excel():
 
 # ----------------- CONTEST REPORTS & ADVANCED LEADERBOARD -----------------
 
+# ----------------- CONTEST REPORTS & ADVANCED LEADERBOARD -----------------
+
 @admin_bp.route("/reports/contests", methods=["GET"])
 @admin_required
 def list_contests_for_reports():
@@ -2496,7 +2500,17 @@ def list_contests_for_reports():
     contests = []
     for c in contests_cursor:
         c_id = str(c["_id"])
-        participants_count = db.contest_participants.count_documents({"contest_id": c_id})
+        c_id_match = [c_id]
+        if ObjectId.is_valid(c_id):
+            c_id_match.append(ObjectId(c_id))
+        
+        # Count distinct candidates or total participants
+        participants_count = db.contest_participants.count_documents({
+            "$or": [
+                {"contest_id": {"$in": c_id_match}},
+                {"contestId": {"$in": c_id_match}}
+            ]
+        })
         prob_ids = [str(pid) for pid in c.get("problem_ids", []) if pid]
         mcq_ids = [str(mid) for mid in c.get("mcq_ids", []) if mid]
         
@@ -2521,7 +2535,8 @@ def list_contests_for_reports():
 
     return jsonify({"success": True, "contests": contests, "server_time": format_utc_iso(now)}), 200
 
-def calculate_candidate_contest_metrics(contest, problems, participant, submissions):
+
+def calculate_candidate_contest_metrics(contest, problems, participant, cand_subs=None):
     """
     Compute 5-factor weighted score (out of 100) and complexity ratings for a candidate.
     Formula:
@@ -2531,12 +2546,12 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
       - Time Complexity:   10%
       - Space Complexity:  10%
     """
+    cand_subs = cand_subs or []
     total_contest_problems = max(len(problems), 1)
     total_contest_testcases = sum(len(p.get("test_cases", [])) or 4 for p in problems)
     if total_contest_testcases == 0:
         total_contest_testcases = total_contest_problems * 4
 
-    # Evaluate problems solved and passed test cases
     solved_count = 0
     passed_test_cases = 0
     total_runtime = 0.0
@@ -2544,24 +2559,56 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
     evaluated_submissions_count = 0
 
     problem_breakdowns = []
+    coding_results = participant.get("coding_results") or {}
+    code_solutions = participant.get("code_solutions") or {}
 
     for prob in problems:
-        p_id = str(prob["_id"])
+        p_id = str(prob.get("_id") or prob.get("id", ""))
         prob_title = prob.get("title", "Problem")
         prob_tcs_total = len(prob.get("test_cases", [])) or 4
 
-        # Find candidate's best submission for this problem
-        cand_subs = [s for s in submissions if str(s.get("problem_id")) == p_id]
+        # 1. Check if participant document has stored coding_results for this problem
+        prob_res = coding_results.get(p_id) or coding_results.get(str(prob.get("id", "")))
+        
+        # 2. Check candidate's standalone submissions for this problem if any
+        cand_prob_subs = [s for s in cand_subs if str(s.get("problem_id")) == p_id]
         best_sub = None
-        for s in cand_subs:
+        for s in cand_prob_subs:
             if s.get("status") == "Accepted":
                 best_sub = s
                 break
-        if not best_sub and cand_subs:
-            # Pick submission with max passed test cases
-            best_sub = max(cand_subs, key=lambda x: x.get("passed_test_cases", 0))
+        if not best_sub and cand_prob_subs:
+            best_sub = max(cand_prob_subs, key=lambda x: x.get("passed_test_cases", 0))
 
-        if best_sub:
+        if prob_res and isinstance(prob_res, dict):
+            status = prob_res.get("status", "Attempted")
+            p_passed = int(prob_res.get("passed", 0))
+            p_total = int(prob_res.get("total", prob_tcs_total)) or prob_tcs_total
+            if status == "Accepted" or p_passed == p_total:
+                solved_count += 1
+                status = "Accepted"
+                p_passed = prob_tcs_total
+            passed_test_cases += min(p_passed, prob_tcs_total)
+            rt = float(prob_res.get("time_ms", 32.5) or 32.5)
+            mem = 16.0
+            total_runtime += rt
+            total_memory += mem
+            evaluated_submissions_count += 1
+            sol_obj = code_solutions.get(p_id, {})
+            lang = sol_obj.get("language", "python") if isinstance(sol_obj, dict) else "python"
+
+            problem_breakdowns.append({
+                "problem_id": p_id,
+                "problem_title": prob_title,
+                "difficulty": prob.get("difficulty", "Medium"),
+                "status": status,
+                "passed_test_cases": p_passed,
+                "total_test_cases": prob_tcs_total,
+                "runtime": rt,
+                "memory": mem,
+                "language": lang
+            })
+        elif best_sub:
             sub_passed_tc = best_sub.get("passed_test_cases", 0)
             if best_sub.get("status") == "Accepted":
                 solved_count += 1
@@ -2614,7 +2661,7 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
                     "language": "-"
                 })
 
-    # If participant has problem solved count higher in document, respect it
+    # Respect higher problems_solved count if stored
     if participant.get("problems_solved", 0) > solved_count:
         solved_count = min(participant.get("problems_solved", 0), total_contest_problems)
         passed_test_cases = max(passed_test_cases, solved_count * 4)
@@ -2628,7 +2675,7 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
     score_problems_solved = round(prob_ratio * 20.0, 1)
 
     # 3. Time Taken & Time Efficiency (10%)
-    duration_min = contest.get("duration_minutes", 60)
+    duration_min = int(contest.get("duration_minutes", 60) or 60)
     duration_sec = duration_min * 60
     joined_at = participant.get("joined_at")
     submitted_at = participant.get("submitted_at")
@@ -2646,11 +2693,9 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
         time_taken_sec = max(int((end_time_calc - joined_at_utc).total_seconds()), 60)
         time_taken_sec = min(time_taken_sec, duration_sec)
     else:
-        # Default estimation based on solved count
         time_taken_sec = min(solved_count * 900 + 300, duration_sec)
 
     time_ratio = min(time_taken_sec / max(duration_sec, 60), 1.0)
-    # Faster submissions get higher efficiency score
     if solved_count > 0 or passed_test_cases > 0:
         score_time_efficiency = round(max(10.0 * (1.0 - 0.5 * time_ratio), 2.0), 1)
     else:
@@ -2694,12 +2739,10 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
     final_score = round(score_test_cases + score_problems_solved + score_time_efficiency + score_time_complexity + score_space_complexity, 1)
     final_score = min(max(final_score, 0.0), 100.0)
 
-    # Format time taken string
     mins = time_taken_sec // 60
     secs = time_taken_sec % 60
     time_taken_str = f"{mins}m {secs:02d}s"
 
-    # Anti-cheat status
     auto_terminated = bool(participant.get("auto_terminated") or participant.get("status") == "AUTO_TERMINATED")
     flags_count = len(participant.get("anti_cheat_logs", []))
     if auto_terminated:
@@ -2709,9 +2752,8 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
     else:
         anti_cheat_status = "CLEAN"
 
-    # MCQ & Coding Specific Metrics
     assigned_mcqs = participant.get("assigned_mcq_ids")
-    total_contest_mcqs = len(assigned_mcqs) if assigned_mcqs else int(contest.get("mcqs_per_student") or len(contest.get("mcq_ids", [])))
+    total_contest_mcqs = len(assigned_mcqs) if assigned_mcqs else int(contest.get("mcqs_per_student") or len(contest.get("mcq_ids", [])) or 20)
     mcqs_correct = int(participant.get("mcqs_correct", 0))
     mcq_score = float(participant.get("mcq_score", mcqs_correct * 10))
     mcq_percentage = round((mcqs_correct / max(total_contest_mcqs, 1)) * 100, 1) if total_contest_mcqs > 0 else 0.0
@@ -2751,798 +2793,934 @@ def calculate_candidate_contest_metrics(contest, problems, participant, submissi
         "anti_cheat": {
             "status": anti_cheat_status,
             "auto_terminated": auto_terminated,
-            "termination_reason": participant.get("termination_reason", ""),
+            "termination_reason": str(participant.get("termination_reason") or ""),
             "flags_count": flags_count,
             "logs": participant.get("anti_cheat_logs", [])
         },
         "problem_breakdowns": problem_breakdowns
     }
 
-@admin_bp.route("/reports/contests/<contest_id>", methods=["GET"])
-@admin_required
-def get_contest_report(contest_id):
-    """Retrieve full contest performance report with ranked leaderboard and score breakdown."""
-    db = get_db()
-    if not ObjectId.is_valid(contest_id):
-        return jsonify({"error": "Invalid contest ID", "success": False}), 400
 
-    contest = db.contests.find_one({"_id": ObjectId(contest_id)})
-    if not contest:
-        return jsonify({"error": "Contest not found", "success": False}), 404
+def calculate_contest_summary_kpis(db, contest_id_str, contest_doc=None):
+    """
+    High-performance aggregation pipeline for contest summary statistics.
+    Optimized for 3,000+ candidates. Cached in Redis for 10 seconds.
+    """
+    cache_key = f"contest_report:summary:{contest_id_str}"
+    cached_summary = cache.get(cache_key)
+    if cached_summary is not None and isinstance(cached_summary, dict):
+        return cached_summary
 
-    # Fetch contest problems
-    problem_ids = contest.get("problem_ids", [])
-    problems = []
-    for pid in problem_ids:
-        if ObjectId.is_valid(str(pid)):
-            p_doc = db.problems.find_one({"_id": ObjectId(str(pid))})
-            if p_doc:
-                problems.append(p_doc)
-        else:
-            p_doc = db.problems.find_one({"id": pid})
-            if p_doc:
-                problems.append(p_doc)
+    if not contest_doc:
+        contest_query = {"_id": ObjectId(contest_id_str)} if ObjectId.is_valid(contest_id_str) else {"id": contest_id_str}
+        contest_doc = db.contests.find_one(contest_query) or {}
 
-    # Materialize expired lock windows before building report statuses.
-    now = get_utc_now()
-    db.contest_participants.update_many(
+    c_id_match = [contest_id_str]
+    if ObjectId.is_valid(contest_id_str):
+        c_id_match.append(ObjectId(contest_id_str))
+
+    match_filter = {
+        "$or": [
+            {"contest_id": {"$in": c_id_match}},
+            {"contestId": {"$in": c_id_match}}
+        ]
+    }
+
+    # Pipeline to deduplicate by student (latest attempt) and compute aggregates
+    pipeline = [
+        {"$match": match_filter},
+        {"$sort": {"attempt_number": -1, "score": -1, "submitted_at": 1}},
         {
-            "contest_id": contest_id,
-            "status": "LOCKED",
-            "lock_timeout_at": {"$lte": now},
-        },
-        {"$set": {
-            "status": "AUTO_TERMINATED",
-            "auto_terminated": True,
-            "resolution_window_active": False,
-            "terminated_at": now,
-            "termination_reason": "Lock resolution window (30 minutes) expired without admin action",
-        }},
-    )
-
-    # Fetch participants — all attempts
-    contest_id_values = [contest_id, ObjectId(contest_id)]
-    all_participants = list(db.contest_participants.find({"contest_id": {"$in": contest_id_values}}))
-    
-    # Deduplicate: keep best/latest attempt per student for the leaderboard
-    # Priority: submitted retest > submitted original > active > locked/terminated
-    student_best = {}
-    for p in all_participants:
-        uid_key = str(p.get("student_id") or p.get("user_id", ""))
-        if not uid_key:
-            continue
-        existing = student_best.get(uid_key)
-        if existing is None:
-            student_best[uid_key] = p
-        else:
-            # Prefer submitted over non-submitted
-            p_submitted = bool(p.get("submitted"))
-            e_submitted = bool(existing.get("submitted"))
-            if p_submitted and not e_submitted:
-                student_best[uid_key] = p
-            elif p_submitted == e_submitted:
-                # Prefer higher attempt number (latest)
-                if p.get("attempt_number", 1) > existing.get("attempt_number", 1):
-                    student_best[uid_key] = p
-                elif p.get("score", 0) > existing.get("score", 0):
-                    student_best[uid_key] = p
-
-    # Build a lookup of original attempt scores for retest students
-    original_scores = {}
-    retest_scores = {}
-    for p in all_participants:
-        uid_key = str(p.get("user_id", p.get("student_id", "")))
-        if p.get("attempt_number", 1) == 1:
-            original_scores[uid_key] = {
-                "score": p.get("score", 0),
-                "mcq_score": float(p.get("mcq_score", 0)),
-                "coding_score": float(p.get("coding_score", 0)),
-                "status": p.get("status", "")
+            "$group": {
+                "_id": {
+                    "$ifNull": ["$student_id", {"$ifNull": ["$user_id", "$_id"]}]
+                },
+                "score": {"$first": "$score"},
+                "mcq_score": {"$first": "$mcq_score"},
+                "coding_score": {"$first": "$coding_score"},
+                "mcqs_correct": {"$first": "$mcqs_correct"},
+                "total_mcqs": {"$first": "$total_mcqs"},
+                "problems_solved": {"$first": "$problems_solved"},
+                "status": {"$first": "$status"},
+                "auto_terminated": {"$first": "$auto_terminated"},
+                "anti_cheat_logs_count": {"$first": {"$size": {"$ifNull": ["$anti_cheat_logs", []]}}}
             }
-        elif p.get("submitted") and (uid_key not in retest_scores or p.get("attempt_number", 1) > retest_scores[uid_key].get("attempt_number", 1)):
-            retest_scores[uid_key] = {
-                "score": p.get("score", 0),
-                "mcq_score": float(p.get("mcq_score", 0)),
-                "coding_score": float(p.get("coding_score", 0)),
-                "attempt_number": p.get("attempt_number", 1),
-                "status": p.get("status", "")
-            }
-
-    participants = list(student_best.values())
-
-    # Fetch all submissions for this contest
-    submissions = list(db.submissions.find({}))
-
-    # Optional department / year filter from request
-    dept_filter = request.args.get("department", "").strip()
-    year_filter = request.args.get("year", "").strip()
-    search_filter = request.args.get("search", "").strip().lower()
-
-    leaderboard = []
-
-    for p in participants:
-        u_id = p.get("user_id")
-        s_id = p.get("student_id")
-        user_doc = None
-        if u_id and ObjectId.is_valid(str(u_id)):
-            user_doc = db.users.find_one({"_id": ObjectId(str(u_id))})
-        elif s_id:
-            user_doc = db.users.find_one({"student_id": s_id})
-
-        student_name = p.get("student_name") or (user_doc.get("name") if user_doc else "Student")
-        student_id_val = s_id or (user_doc.get("student_id") if user_doc else "STU")
-        department = p.get("department") or (user_doc.get("department") if user_doc else "CSE")
-        year = (user_doc.get("year") if user_doc else "1st Year")
-
-        # Apply search and department/year filters
-        if dept_filter and dept_filter.lower() != "all" and dept_filter.lower() not in department.lower():
-            continue
-        if year_filter and year_filter.lower() != "all" and year_filter.split(" ")[0].lower() not in year.lower():
-            continue
-        if search_filter:
-            if search_filter not in student_name.lower() and search_filter not in student_id_val.lower():
-                continue
-
-        cand_subs = [s for s in submissions if s.get("student_id") == student_id_val or str(s.get("user_id")) == str(u_id)]
-        metrics = calculate_candidate_contest_metrics(contest, problems, p, cand_subs)
-
-        attempt_num = p.get("attempt_number", 1)
-        uid_key = str(s_id or u_id or "")
-        orig_info = original_scores.get(uid_key) if attempt_num > 1 else None
-        retest_info = retest_scores.get(uid_key) if attempt_num == 1 else ({
-            "score": metrics["overall_score"],
-            "mcq_score": metrics["mcq_score"],
-            "coding_score": metrics["coding_score"],
-            "attempt_number": attempt_num,
-            "status": p.get("status", "")
-        } if p.get("submitted") else None)
-
-        leaderboard.append({
-            "participant_id": str(p["_id"]),
-            "user_id": str(u_id or ""),
-            "student_id": student_id_val,
-            "name": student_name,
-            "department": department,
-            "year": year,
-            "solved_count": metrics["solved_count"],
-            "total_contest_problems": metrics["total_contest_problems"],
-            "passed_test_cases": metrics["passed_test_cases"],
-            "total_contest_testcases": metrics["total_contest_testcases"],
-            "time_taken": metrics["time_taken_formatted"],
-            "time_taken_seconds": metrics["time_taken_seconds"],
-            "time_complexity": metrics["time_complexity_label"],
-            "space_complexity": metrics["space_complexity_label"],
-            "final_score": metrics["final_score"],
-            "mcq_score": metrics["mcq_score"],
-            "mcqs_correct": metrics["mcqs_correct"],
-            "total_contest_mcqs": metrics["total_contest_mcqs"],
-            "mcq_percentage": metrics["mcq_percentage"],
-            "coding_score": metrics["coding_score"],
-            "coding_percentage": metrics["coding_percentage"],
-            "overall_score": metrics["overall_score"],
-            "score_breakdown": metrics["score_breakdown"],
-            "anti_cheat": metrics["anti_cheat"],
-            "problem_breakdowns": metrics["problem_breakdowns"],
-            "is_locked": bool(p.get("status") == "LOCKED"),
-            "is_terminated": bool(p.get("auto_terminated") or p.get("status") in ["TERMINATED", "AUTO_TERMINATED"]),
-            "attempt_number": attempt_num,
-            "is_retest": attempt_num > 1,
-            "original_score": orig_info,
-            "retest_score": retest_info,
-            "retest_marks": retest_info.get("score") if retest_info else None
-        })
-
-    # Sort leaderboard by:
-    # 1. Overall Score / Final Score (descending)
-    # 2. Problems Solved (descending)
-    # 3. MCQs Correct (descending)
-    # 4. Time Taken (ascending)
-    leaderboard.sort(key=lambda x: (
-        -x["overall_score"],
-        -x["final_score"],
-        -x["solved_count"],
-        -x["mcqs_correct"],
-        x["time_taken_seconds"]
-    ))
-
-    # Assign ranks
-    for idx, item in enumerate(leaderboard, 1):
-        item["rank"] = idx
-
-    # Summary KPIs for Overall, MCQ, and Coding
-    total_candidates = len(leaderboard)
-    avg_score = round(sum(item["overall_score"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0
-    highest_score = max((item["overall_score"] for item in leaderboard), default=0.0)
-    clean_candidates_count = sum(1 for item in leaderboard if item["anti_cheat"]["status"] == "CLEAN")
-    clean_rate = round((clean_candidates_count / max(total_candidates, 1)) * 100, 1) if total_candidates > 0 else 100.0
-
-    return jsonify({
-        "success": True,
-        "contest": {
-            "id": str(contest["_id"]),
-            "title": contest.get("title"),
-            "description": contest.get("description", ""),
-            "duration_minutes": contest.get("duration_minutes", 60),
-            "start_time": format_utc_iso(parse_to_utc_datetime(contest.get("start_time"))),
-            "end_time": format_utc_iso(parse_to_utc_datetime(contest.get("end_time"))),
-            "problems_count": len(problems),
-            "mcqs_count": len(contest.get("mcq_ids", [])),
-            "total_points": contest.get("total_points", 100)
         },
-        "summary": {
-            "total_candidates": total_candidates,
+        {
+            "$group": {
+                "_id": None,
+                "total_candidates": {"$sum": 1},
+                "avg_overall_score": {"$avg": "$score"},
+                "highest_overall_score": {"$max": "$score"},
+                "avg_mcq_score": {"$avg": "$mcq_score"},
+                "highest_mcq_score": {"$max": "$mcq_score"},
+                "avg_coding_score": {"$avg": "$coding_score"},
+                "highest_coding_score": {"$max": "$coding_score"},
+                "avg_problems_solved": {"$avg": "$problems_solved"},
+                "clean_count": {
+                    "$sum": {
+                        "$cond": [
+                            {"$and": [
+                                {"$eq": ["$anti_cheat_logs_count", 0]},
+                                {"$ne": ["$auto_terminated", True]},
+                                {"$ne": ["$status", "AUTO_TERMINATED"]}
+                            ]},
+                            1,
+                            0
+                        ]
+                    }
+                },
+                "auto_terminated_count": {
+                    "$sum": {
+                        "$cond": [
+                            {"$or": [
+                                {"$eq": ["$auto_terminated", True]},
+                                {"$eq": ["$status", "AUTO_TERMINATED"]}
+                            ]},
+                            1,
+                            0
+                        ]
+                    }
+                }
+            }
+        }
+    ]
+
+    agg_results = list(db.contest_participants.aggregate(pipeline))
+
+    total_mcqs = len(contest_doc.get("mcq_ids", [])) or int(contest_doc.get("mcqs_per_student") or 20)
+    total_coding = len(contest_doc.get("problem_ids", []))
+
+    if agg_results:
+        res = agg_results[0]
+        total_cand = res.get("total_candidates", 0)
+        avg_score = round(float(res.get("avg_overall_score") or 0.0), 1)
+        highest_score = round(float(res.get("highest_overall_score") or 0.0), 1)
+        clean_count = int(res.get("clean_count", 0))
+        clean_rate = round((clean_count / max(total_cand, 1)) * 100, 1) if total_cand > 0 else 100.0
+        avg_mcq = round(float(res.get("avg_mcq_score") or 0.0), 1)
+        highest_mcq = round(float(res.get("highest_mcq_score") or 0.0), 1)
+        avg_mcq_acc = round((avg_mcq / max(total_mcqs * 10, 1)) * 100, 1) if total_mcqs > 0 else 0.0
+        avg_coding = round(float(res.get("avg_coding_score") or 0.0), 1)
+        highest_coding = round(float(res.get("highest_coding_score") or 0.0), 1)
+        avg_tcs = round(float(res.get("avg_problems_solved") or 0.0) * 4, 1)
+
+        summary = {
+            "total_candidates": total_cand,
             "average_score": avg_score,
             "highest_score": highest_score,
             "clean_rate": clean_rate,
-            "clean_count": clean_candidates_count,
-            "auto_terminated_count": sum(1 for item in leaderboard if item["anti_cheat"]["auto_terminated"]),
-            # Overall KPIs
+            "clean_count": clean_count,
+            "auto_terminated_count": int(res.get("auto_terminated_count", 0)),
             "avg_overall_score": avg_score,
             "highest_overall_score": highest_score,
-            # MCQ KPIs
-            "total_mcqs": len(contest.get("mcq_ids", [])),
-            "avg_mcq_score": round(sum(item["mcq_score"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0,
-            "highest_mcq_score": max((item["mcq_score"] for item in leaderboard), default=0.0),
-            "avg_mcq_accuracy": round(sum(item["mcq_percentage"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0,
-            # Coding KPIs
-            "total_coding_problems": len(problems),
-            "avg_coding_score": round(sum(item["coding_score"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0,
-            "highest_coding_score": max((item["coding_score"] for item in leaderboard), default=0.0),
-            "avg_test_cases_passed": round(sum(item["passed_test_cases"] for item in leaderboard) / max(total_candidates, 1), 1) if total_candidates > 0 else 0.0
-        },
-        "leaderboard": leaderboard,
-        "problems": [{
-            "id": str(p["_id"]),
-            "title": p.get("title"),
-            "difficulty": p.get("difficulty", "Medium"),
-            "topic": p.get("topic", "General")
-        } for p in problems]
-    }), 200
+            "total_mcqs": total_mcqs,
+            "avg_mcq_score": avg_mcq,
+            "highest_mcq_score": highest_mcq,
+            "avg_mcq_accuracy": avg_mcq_acc,
+            "total_coding_problems": total_coding,
+            "avg_coding_score": avg_coding,
+            "highest_coding_score": highest_coding,
+            "avg_test_cases_passed": avg_tcs
+        }
+    else:
+        summary = {
+            "total_candidates": 0,
+            "average_score": 0.0,
+            "highest_score": 0.0,
+            "clean_rate": 100.0,
+            "clean_count": 0,
+            "auto_terminated_count": 0,
+            "avg_overall_score": 0.0,
+            "highest_overall_score": 0.0,
+            "total_mcqs": total_mcqs,
+            "avg_mcq_score": 0.0,
+            "highest_mcq_score": 0.0,
+            "avg_mcq_accuracy": 0.0,
+            "total_coding_problems": total_coding,
+            "avg_coding_score": 0.0,
+            "highest_coding_score": 0.0,
+            "avg_test_cases_passed": 0.0
+        }
+
+    cache.set(cache_key, summary, ttl=10)
+    return summary
+
+
+@admin_bp.route("/reports/contests/<contest_id>/summary", methods=["GET"])
+@admin_required
+def get_contest_report_summary_only(contest_id):
+    """Fast live aggregated summary statistics endpoint for summary cards polling."""
+    db = get_db()
+    contest_query = {"_id": ObjectId(contest_id)} if ObjectId.is_valid(contest_id) else {"id": contest_id}
+    contest = db.contests.find_one(contest_query)
+    if not contest:
+        return jsonify({"error": "Contest not found", "success": False}), 404
+
+    summary = calculate_contest_summary_kpis(db, str(contest["_id"]), contest)
+    return jsonify({"success": True, "contest_id": str(contest["_id"]), "summary": summary}), 200
+
+
+@admin_bp.route("/reports/contests/<contest_id>", methods=["GET"])
+@admin_required
+def get_contest_report(contest_id):
+    """Retrieve full contest performance report with ranked leaderboard and score breakdown.
+    Supports pagination: ?page=1&limit=50 (or limit=0 for all) and live KPI aggregation."""
+    try:
+        db = get_db()
+        contest_query = {"_id": ObjectId(contest_id)} if ObjectId.is_valid(contest_id) else {"id": contest_id}
+        contest = db.contests.find_one(contest_query)
+        if not contest:
+            return jsonify({"error": "Contest not found", "success": False, "totalCandidates": 0}), 404
+
+        real_contest_id_str = str(contest["_id"])
+
+        # Fetch contest problems
+        problem_ids = contest.get("problem_ids", [])
+        problems = []
+        for pid in problem_ids:
+            if ObjectId.is_valid(str(pid)):
+                p_doc = db.problems.find_one({"_id": ObjectId(str(pid))})
+                if p_doc: problems.append(p_doc)
+            else:
+                p_doc = db.problems.find_one({"id": pid})
+                if p_doc: problems.append(p_doc)
+
+        # Materialize expired lock windows
+        now = get_utc_now()
+        db.contest_participants.update_many(
+            {
+                "$or": [
+                    {"contest_id": {"$in": [real_contest_id_str, contest_id]}},
+                    {"contestId": {"$in": [real_contest_id_str, contest_id]}}
+                ],
+                "status": "LOCKED",
+                "lock_timeout_at": {"$lte": now},
+            },
+            {"$set": {
+                "status": "AUTO_TERMINATED",
+                "auto_terminated": True,
+                "resolution_window_active": False,
+                "terminated_at": now,
+                "termination_reason": "Lock resolution window (30 minutes) expired without admin action",
+            }}
+        )
+
+        # Fetch all participant records matching contest_id
+        contest_id_values = [real_contest_id_str, contest_id]
+        if ObjectId.is_valid(real_contest_id_str):
+            contest_id_values.append(ObjectId(real_contest_id_str))
+
+        all_participants = list(db.contest_participants.find({
+            "$or": [
+                {"contest_id": {"$in": contest_id_values}},
+                {"contestId": {"$in": contest_id_values}}
+            ]
+        }))
+
+        # If no participants, return immediately with clean summary
+        if not all_participants:
+            summary = calculate_contest_summary_kpis(db, real_contest_id_str, contest)
+            return jsonify({
+                "success": True,
+                "contest": {
+                    "id": real_contest_id_str,
+                    "title": contest.get("title", "Contest"),
+                    "description": contest.get("description", ""),
+                    "duration_minutes": contest.get("duration_minutes", 60),
+                    "start_time": format_utc_iso(parse_to_utc_datetime(contest.get("start_time"))),
+                    "end_time": format_utc_iso(parse_to_utc_datetime(contest.get("end_time"))),
+                    "problems_count": len(problems),
+                    "mcqs_count": len(contest.get("mcq_ids", [])),
+                    "total_points": contest.get("total_points", 100)
+                },
+                "summary": summary,
+                "leaderboard": [],
+                "pagination": {"page": 1, "limit": 50, "total_candidates": 0, "total_pages": 1},
+                "problems": [{
+                    "id": str(p.get("_id") or p.get("id")),
+                    "title": p.get("title"),
+                    "difficulty": p.get("difficulty", "Medium"),
+                    "topic": p.get("topic", "General")
+                } for p in problems]
+            }), 200
+
+        # Deduplicate per student: keep latest attempt for leaderboard display
+        # Priority: submitted retest > submitted original > active retest > active original
+        student_best = {}
+        original_scores = {}
+        retest_scores = {}
+
+        for p in all_participants:
+            uid_key = str(p.get("student_id") or p.get("user_id") or p.get("userId") or p.get("studentId") or p.get("_id"))
+            if not uid_key:
+                continue
+
+            attempt_num = int(p.get("attempt_number", 1) or 1)
+            p_score = float(p.get("score", 0) or 0)
+            p_mcq = float(p.get("mcq_score", 0) or 0)
+            p_coding = float(p.get("coding_score", 0) or 0)
+
+            if attempt_num == 1:
+                original_scores[uid_key] = {
+                    "score": p_score,
+                    "mcq_score": p_mcq,
+                    "coding_score": p_coding,
+                    "status": str(p.get("status", ""))
+                }
+            elif p.get("submitted") and (uid_key not in retest_scores or attempt_num > retest_scores[uid_key].get("attempt_number", 1)):
+                retest_scores[uid_key] = {
+                    "score": p_score,
+                    "mcq_score": p_mcq,
+                    "coding_score": p_coding,
+                    "attempt_number": attempt_num,
+                    "status": str(p.get("status", ""))
+                }
+
+            existing = student_best.get(uid_key)
+            if existing is None:
+                student_best[uid_key] = p
+            else:
+                p_sub = bool(p.get("submitted"))
+                e_sub = bool(existing.get("submitted"))
+                if p_sub and not e_sub:
+                    student_best[uid_key] = p
+                elif p_sub == e_sub:
+                    if attempt_num > int(existing.get("attempt_number", 1) or 1):
+                        student_best[uid_key] = p
+                    elif p_score > float(existing.get("score", 0) or 0):
+                        student_best[uid_key] = p
+
+        participants = list(student_best.values())
+
+        # Collect user identifiers for SINGLE bulk fetch from db.users (NO N+1 QUERIES!)
+        user_ids_to_query = []
+        student_ids_to_query = []
+        for p in participants:
+            u_id = p.get("user_id") or p.get("userId")
+            if u_id:
+                if ObjectId.is_valid(str(u_id)):
+                    user_ids_to_query.append(ObjectId(str(u_id)))
+                else:
+                    student_ids_to_query.append(str(u_id))
+            s_id = p.get("student_id") or p.get("studentId")
+            if s_id:
+                student_ids_to_query.append(str(s_id))
+
+        user_query_conditions = []
+        if user_ids_to_query:
+            user_query_conditions.append({"_id": {"$in": user_ids_to_query}})
+        if student_ids_to_query:
+            user_query_conditions.append({"student_id": {"$in": student_ids_to_query}})
+
+        users_map_by_id = {}
+        users_map_by_stu = {}
+        if user_query_conditions:
+            bulk_users = list(db.users.find({"$or": user_query_conditions}))
+            for u in bulk_users:
+                users_map_by_id[str(u["_id"])] = u
+                if u.get("student_id"):
+                    users_map_by_stu[str(u["student_id"])] = u
+
+        # Optional filters
+        dept_filter = request.args.get("department", "").strip()
+        year_filter = request.args.get("year", "").strip()
+        search_filter = request.args.get("search", "").strip().lower()
+
+        # Pagination params
+        page = max(int(request.args.get("page", 1) or 1), 1)
+        limit_param = request.args.get("limit", "50").strip().lower()
+        limit = 50 if limit_param in ["", "50"] else (0 if limit_param in ["0", "all"] else max(int(limit_param), 1))
+
+        leaderboard = []
+
+        for p in participants:
+            u_id = str(p.get("user_id") or p.get("userId") or "")
+            s_id = str(p.get("student_id") or p.get("studentId") or "")
+            
+            user_doc = users_map_by_id.get(u_id) or users_map_by_stu.get(s_id) or users_map_by_stu.get(u_id)
+
+            student_name = str(p.get("student_name") or p.get("studentName") or (user_doc.get("name") if user_doc else "Student"))
+            student_id_val = str(s_id or (user_doc.get("student_id") if user_doc else u_id or "STU"))
+            department = str(p.get("department") or (user_doc.get("department") if user_doc else "CSE"))
+            
+            raw_year = user_doc.get("year") if user_doc else p.get("year")
+            if raw_year is not None:
+                year_str = str(raw_year).strip()
+                if year_str in ["1", "1st", "1st Year", "I"]: year = "1st Year"
+                elif year_str in ["2", "2nd", "2nd Year", "II"]: year = "2nd Year"
+                elif year_str in ["3", "3rd", "3rd Year", "III"]: year = "3rd Year"
+                elif year_str in ["4", "4th", "4th Year", "IV"]: year = "4th Year"
+                else: year = year_str if "Year" in year_str else f"{year_str} Year"
+            else:
+                year = "1st Year"
+
+            # Apply safe filters
+            if dept_filter and dept_filter.lower() != "all" and dept_filter.lower() not in department.lower():
+                continue
+            if year_filter and year_filter.lower() != "all":
+                y_key = year_filter.split(" ")[0].lower()
+                if y_key not in year.lower():
+                    continue
+            if search_filter:
+                if search_filter not in student_name.lower() and search_filter not in student_id_val.lower():
+                    continue
+
+            metrics = calculate_candidate_contest_metrics(contest, problems, p, None)
+
+            attempt_num = int(p.get("attempt_number", 1) or 1)
+            uid_key = str(s_id or u_id or p.get("_id"))
+            orig_info = original_scores.get(uid_key) if attempt_num > 1 else None
+            retest_info = retest_scores.get(uid_key) if attempt_num == 1 else ({
+                "score": metrics["overall_score"],
+                "mcq_score": metrics["mcq_score"],
+                "coding_score": metrics["coding_score"],
+                "attempt_number": attempt_num,
+                "status": str(p.get("status", ""))
+            } if p.get("submitted") else None)
+
+            leaderboard.append({
+                "participant_id": str(p["_id"]),
+                "user_id": u_id,
+                "student_id": student_id_val,
+                "name": student_name,
+                "department": department,
+                "year": year,
+                "solved_count": metrics["solved_count"],
+                "total_contest_problems": metrics["total_contest_problems"],
+                "passed_test_cases": metrics["passed_test_cases"],
+                "total_contest_testcases": metrics["total_contest_testcases"],
+                "time_taken": metrics["time_taken_formatted"],
+                "time_taken_seconds": metrics["time_taken_seconds"],
+                "time_complexity": metrics["time_complexity_label"],
+                "space_complexity": metrics["space_complexity_label"],
+                "final_score": metrics["final_score"],
+                "mcq_score": metrics["mcq_score"],
+                "mcqs_correct": metrics["mcqs_correct"],
+                "total_contest_mcqs": metrics["total_contest_mcqs"],
+                "mcq_percentage": metrics["mcq_percentage"],
+                "coding_score": metrics["coding_score"],
+                "coding_percentage": metrics["coding_percentage"],
+                "overall_score": metrics["overall_score"],
+                "score_breakdown": metrics["score_breakdown"],
+                "anti_cheat": metrics["anti_cheat"],
+                "problem_breakdowns": metrics["problem_breakdowns"],
+                "is_locked": bool(p.get("status") == "LOCKED"),
+                "is_terminated": bool(p.get("auto_terminated") or p.get("status") in ["TERMINATED", "AUTO_TERMINATED"]),
+                "attempt_number": attempt_num,
+                "is_retest": attempt_num > 1,
+                "original_score": orig_info,
+                "retest_score": retest_info,
+                "retest_marks": retest_info.get("score") if retest_info else None
+            })
+
+        # Sort leaderboard by Overall Score desc, then Solved Count desc, then Time Taken asc
+        leaderboard.sort(key=lambda x: (
+            -x["overall_score"],
+            -x["final_score"],
+            -x["solved_count"],
+            -x["mcqs_correct"],
+            x["time_taken_seconds"]
+        ))
+
+        # Assign absolute ranks
+        for idx, item in enumerate(leaderboard, 1):
+            item["rank"] = idx
+
+        total_filtered_candidates = len(leaderboard)
+
+        # Slice for pagination if limit > 0
+        if limit > 0:
+            start_idx = (page - 1) * limit
+            end_idx = start_idx + limit
+            paginated_leaderboard = leaderboard[start_idx:end_idx]
+            total_pages = max((total_filtered_candidates + limit - 1) // limit, 1)
+        else:
+            paginated_leaderboard = leaderboard
+            total_pages = 1
+
+        # Summary KPIs (from MongoDB aggregation or cached)
+        summary = calculate_contest_summary_kpis(db, real_contest_id_str, contest)
+
+        return jsonify({
+            "success": True,
+            "contest": {
+                "id": real_contest_id_str,
+                "title": contest.get("title", "Contest"),
+                "description": contest.get("description", ""),
+                "duration_minutes": contest.get("duration_minutes", 60),
+                "start_time": format_utc_iso(parse_to_utc_datetime(contest.get("start_time"))),
+                "end_time": format_utc_iso(parse_to_utc_datetime(contest.get("end_time"))),
+                "problems_count": len(problems),
+                "mcqs_count": len(contest.get("mcq_ids", [])),
+                "total_points": contest.get("total_points", 100)
+            },
+            "summary": summary,
+            "leaderboard": paginated_leaderboard,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total_candidates": total_filtered_candidates,
+                "total_pages": total_pages
+            },
+            "problems": [{
+                "id": str(p.get("_id") or p.get("id")),
+                "title": p.get("title"),
+                "difficulty": p.get("difficulty", "Medium"),
+                "topic": p.get("topic", "General")
+            } for p in problems]
+        }), 200
+
+    except Exception as e:
+        logger.exception("Error generating contest report for %s: %s", contest_id, e)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to compile report: {str(e)}",
+            "totalCandidates": 0
+        }), 500
+
 
 @admin_bp.route("/reports/contests/<contest_id>/export", methods=["GET"])
 @admin_required
 def export_contest_report_excel(contest_id):
     """Generate and stream formatted Excel or CSV reports for Overall, MCQ, or Coding."""
-    db = get_db()
-    if not ObjectId.is_valid(contest_id):
-        return jsonify({"error": "Invalid contest ID", "success": False}), 400
+    try:
+        db = get_db()
+        contest_query = {"_id": ObjectId(contest_id)} if ObjectId.is_valid(contest_id) else {"id": contest_id}
+        contest = db.contests.find_one(contest_query)
+        if not contest:
+            return jsonify({"error": "Contest not found", "success": False}), 404
 
-    contest = db.contests.find_one({"_id": ObjectId(contest_id)})
-    if not contest:
-        return jsonify({"error": "Contest not found", "success": False}), 404
+        real_contest_id_str = str(contest["_id"])
 
-    # Report type and format
-    report_type = (request.args.get("report_type") or request.args.get("type") or "overall").strip().lower()
-    export_format = (request.args.get("format") or "excel").strip().lower()
+        report_type = (request.args.get("report_type") or request.args.get("type") or "overall").strip().lower()
+        export_format = (request.args.get("format") or "excel").strip().lower()
 
-    # Fetch problems and participants
-    problem_ids = contest.get("problem_ids", [])
-    problems = []
-    for pid in problem_ids:
-        if ObjectId.is_valid(str(pid)):
-            p_doc = db.problems.find_one({"_id": ObjectId(str(pid))})
-            if p_doc: problems.append(p_doc)
-        else:
-            p_doc = db.problems.find_one({"id": pid})
-            if p_doc: problems.append(p_doc)
+        # Fetch problems
+        problem_ids = contest.get("problem_ids", [])
+        problems = []
+        for pid in problem_ids:
+            if ObjectId.is_valid(str(pid)):
+                p_doc = db.problems.find_one({"_id": ObjectId(str(pid))})
+                if p_doc: problems.append(p_doc)
+            else:
+                p_doc = db.problems.find_one({"id": pid})
+                if p_doc: problems.append(p_doc)
 
-    contest_id_values = [contest_id, ObjectId(contest_id)]
-    participants = list(db.contest_participants.find({"contest_id": {"$in": contest_id_values}}))
-    submissions = list(db.submissions.find({}))
+        contest_id_values = [real_contest_id_str, contest_id]
+        if ObjectId.is_valid(real_contest_id_str):
+            contest_id_values.append(ObjectId(real_contest_id_str))
 
-    original_scores = {}
-    retest_scores = {}
-    for participant in participants:
-        uid_key = str(participant.get("student_id") or participant.get("user_id", ""))
-        attempt_number = participant.get("attempt_number", 1)
-        if attempt_number == 1:
-            original_scores[uid_key] = {
-                "score": participant.get("score", 0),
-                "mcq_score": float(participant.get("mcq_score", 0)),
-                "coding_score": float(participant.get("coding_score", 0)),
-                "status": participant.get("status", "")
-            }
-        elif participant.get("submitted") and (uid_key not in retest_scores or attempt_number > retest_scores[uid_key].get("attempt_number", 1)):
-            retest_scores[uid_key] = {
-                "score": participant.get("score", 0),
-                "mcq_score": float(participant.get("mcq_score", 0)),
-                "coding_score": float(participant.get("coding_score", 0)),
-                "attempt_number": attempt_number,
-                "status": participant.get("status", "")
-            }
+        all_participants = list(db.contest_participants.find({
+            "$or": [
+                {"contest_id": {"$in": contest_id_values}},
+                {"contestId": {"$in": contest_id_values}}
+            ]
+        }))
 
-    # Filters
-    dept_filter = request.args.get("department", "").strip()
-    year_filter = request.args.get("year", "").strip()
-    search_filter = request.args.get("search", "").strip().lower()
+        student_best = {}
+        original_scores = {}
+        retest_scores = {}
 
-    leaderboard = []
-    for p in participants:
-        u_id = p.get("user_id")
-        s_id = p.get("student_id")
-        user_doc = None
-        if u_id and ObjectId.is_valid(str(u_id)):
-            user_doc = db.users.find_one({"_id": ObjectId(str(u_id))})
-        elif s_id:
-            user_doc = db.users.find_one({"student_id": s_id})
-
-        student_name = p.get("student_name") or (user_doc.get("name") if user_doc else "Student")
-        student_id_val = s_id or (user_doc.get("student_id") if user_doc else "STU")
-        department = p.get("department") or (user_doc.get("department") if user_doc else "CSE")
-        year = (user_doc.get("year") if user_doc else "1st Year")
-
-        if dept_filter and dept_filter.lower() != "all" and dept_filter.lower() not in department.lower():
-            continue
-        if year_filter and year_filter.lower() != "all" and year_filter.split(" ")[0].lower() not in year.lower():
-            continue
-        if search_filter:
-            if search_filter not in student_name.lower() and search_filter not in student_id_val.lower():
+        for p in all_participants:
+            uid_key = str(p.get("student_id") or p.get("user_id") or p.get("userId") or p.get("studentId") or p.get("_id"))
+            if not uid_key:
                 continue
 
-        cand_subs = [s for s in submissions if s.get("student_id") == student_id_val or str(s.get("user_id")) == str(u_id)]
-        metrics = calculate_candidate_contest_metrics(contest, problems, p, cand_subs)
-        attempt_number = p.get("attempt_number", 1)
-        uid_key = str(s_id or u_id or "")
-        original_score = original_scores.get(uid_key) if attempt_number > 1 else None
-        retest_score = retest_scores.get(uid_key) if attempt_number == 1 else ({
-            "score": metrics["overall_score"],
-            "mcq_score": metrics["mcq_score"],
-            "coding_score": metrics["coding_score"],
-            "attempt_number": attempt_number,
-            "status": p.get("status", "")
-        } if p.get("submitted") else None)
+            attempt_num = int(p.get("attempt_number", 1) or 1)
+            p_score = float(p.get("score", 0) or 0)
+            p_mcq = float(p.get("mcq_score", 0) or 0)
+            p_coding = float(p.get("coding_score", 0) or 0)
 
-        leaderboard.append({
-            "student_id": student_id_val,
-            "name": student_name,
-            "department": department,
-            "year": year,
-            "solved_count": metrics["solved_count"],
-            "total_contest_problems": metrics["total_contest_problems"],
-            "passed_test_cases": metrics["passed_test_cases"],
-            "total_contest_testcases": metrics["total_contest_testcases"],
-            "time_taken": metrics["time_taken_formatted"],
-            "time_taken_seconds": metrics["time_taken_seconds"],
-            "time_complexity": metrics["time_complexity_label"],
-            "space_complexity": metrics["space_complexity_label"],
-            "final_score": metrics["final_score"],
-            "mcq_score": metrics["mcq_score"],
-            "mcqs_correct": metrics["mcqs_correct"],
-            "total_contest_mcqs": metrics["total_contest_mcqs"],
-            "mcq_percentage": metrics["mcq_percentage"],
-            "coding_score": metrics["coding_score"],
-            "coding_percentage": metrics["coding_percentage"],
-            "overall_score": metrics["overall_score"],
-            "score_breakdown": metrics["score_breakdown"],
-            "anti_cheat": metrics["anti_cheat"],
-            "problem_breakdowns": metrics["problem_breakdowns"],
-            "attempt_number": attempt_number,
-            "is_retest": attempt_number > 1,
-            "original_score": original_score,
-            "retest_score": retest_score,
-            "retest_marks": retest_score.get("score") if retest_score else None
-        })
+            if attempt_num == 1:
+                original_scores[uid_key] = {
+                    "score": p_score,
+                    "mcq_score": p_mcq,
+                    "coding_score": p_coding,
+                    "status": str(p.get("status", ""))
+                }
+            elif p.get("submitted") and (uid_key not in retest_scores or attempt_num > retest_scores[uid_key].get("attempt_number", 1)):
+                retest_scores[uid_key] = {
+                    "score": p_score,
+                    "mcq_score": p_mcq,
+                    "coding_score": p_coding,
+                    "attempt_number": attempt_num,
+                    "status": str(p.get("status", ""))
+                }
 
-    # Sort based on report type
-    if report_type == "mcq":
-        leaderboard.sort(key=lambda x: (-x["mcq_score"], -x["mcqs_correct"], x["time_taken_seconds"]))
-    elif report_type == "coding":
-        leaderboard.sort(key=lambda x: (-x["coding_score"], -x["solved_count"], -x["passed_test_cases"], x["time_taken_seconds"]))
-    else:
-        # overall
-        leaderboard.sort(key=lambda x: (-x["overall_score"], -x["final_score"], -x["solved_count"], -x["mcqs_correct"], x["time_taken_seconds"]))
+            existing = student_best.get(uid_key)
+            if existing is None:
+                student_best[uid_key] = p
+            else:
+                p_sub = bool(p.get("submitted"))
+                e_sub = bool(existing.get("submitted"))
+                if p_sub and not e_sub:
+                    student_best[uid_key] = p
+                elif p_sub == e_sub:
+                    if attempt_num > int(existing.get("attempt_number", 1) or 1):
+                        student_best[uid_key] = p
+                    elif p_score > float(existing.get("score", 0) or 0):
+                        student_best[uid_key] = p
 
-    for idx, item in enumerate(leaderboard, 1):
-        item["rank"] = idx
+        participants = list(student_best.values())
 
-    total_cands = len(leaderboard)
-    avg_overall = round(sum(x["overall_score"] for x in leaderboard) / max(total_cands, 1), 1)
-    highest_overall = max((x["overall_score"] for x in leaderboard), default=0.0)
-    total_mcqs = len(contest.get("mcq_ids", []))
-    avg_mcq = round(sum(x["mcq_score"] for x in leaderboard) / max(total_cands, 1), 1)
-    highest_mcq = max((x["mcq_score"] for x in leaderboard), default=0.0)
-    avg_mcq_acc = round(sum(x["mcq_percentage"] for x in leaderboard) / max(total_cands, 1), 1)
-    total_coding = len(contest.get("problem_ids", []))
-    avg_coding = round(sum(x["coding_score"] for x in leaderboard) / max(total_cands, 1), 1)
-    highest_coding = max((x["coding_score"] for x in leaderboard), default=0.0)
-    clean_count = sum(1 for x in leaderboard if x["anti_cheat"]["status"] == "CLEAN")
-    clean_rate = round((clean_count / max(total_cands, 1)) * 100, 1)
-    auto_terminated_count = sum(1 for x in leaderboard if x["anti_cheat"]["auto_terminated"])
+        # Bulk user lookup
+        user_ids_to_query = []
+        student_ids_to_query = []
+        for p in participants:
+            u_id = p.get("user_id") or p.get("userId")
+            if u_id:
+                if ObjectId.is_valid(str(u_id)):
+                    user_ids_to_query.append(ObjectId(str(u_id)))
+                else:
+                    student_ids_to_query.append(str(u_id))
+            s_id = p.get("student_id") or p.get("studentId")
+            if s_id:
+                student_ids_to_query.append(str(s_id))
 
-    summary = {
-        "total_candidates": total_cands,
-        "avg_overall_score": avg_overall,
-        "highest_overall_score": highest_overall,
-        "total_mcqs": total_mcqs,
-        "avg_mcq_score": avg_mcq,
-        "highest_mcq_score": highest_mcq,
-        "avg_mcq_accuracy": avg_mcq_acc,
-        "total_coding_problems": total_coding,
-        "avg_coding_score": avg_coding,
-        "highest_coding_score": highest_coding,
-        "clean_rate": clean_rate,
-        "clean_count": clean_count,
-        "auto_terminated_count": auto_terminated_count
-    }
+        user_query_conditions = []
+        if user_ids_to_query:
+            user_query_conditions.append({"_id": {"$in": user_ids_to_query}})
+        if student_ids_to_query:
+            user_query_conditions.append({"student_id": {"$in": student_ids_to_query}})
 
-    clean_title = slugify(contest.get("title", "contest"))
+        users_map_by_id = {}
+        users_map_by_stu = {}
+        if user_query_conditions:
+            bulk_users = list(db.users.find({"$or": user_query_conditions}))
+            for u in bulk_users:
+                users_map_by_id[str(u["_id"])] = u
+                if u.get("student_id"):
+                    users_map_by_stu[str(u["student_id"])] = u
 
-    # ================= CSV EXPORT =================
-    if export_format == "csv":
-        import csv
-        output = io.StringIO()
-        writer = csv.writer(output)
+        # Filters
+        dept_filter = request.args.get("department", "").strip()
+        year_filter = request.args.get("year", "").strip()
+        search_filter = request.args.get("search", "").strip().lower()
+
+        leaderboard = []
+        for p in participants:
+            u_id = str(p.get("user_id") or p.get("userId") or "")
+            s_id = str(p.get("student_id") or p.get("studentId") or "")
+            user_doc = users_map_by_id.get(u_id) or users_map_by_stu.get(s_id) or users_map_by_stu.get(u_id)
+
+            student_name = str(p.get("student_name") or p.get("studentName") or (user_doc.get("name") if user_doc else "Student"))
+            student_id_val = str(s_id or (user_doc.get("student_id") if user_doc else u_id or "STU"))
+            department = str(p.get("department") or (user_doc.get("department") if user_doc else "CSE"))
+            
+            raw_year = user_doc.get("year") if user_doc else p.get("year")
+            if raw_year is not None:
+                year_str = str(raw_year).strip()
+                if year_str in ["1", "1st", "1st Year", "I"]: year = "1st Year"
+                elif year_str in ["2", "2nd", "2nd Year", "II"]: year = "2nd Year"
+                elif year_str in ["3", "3rd", "3rd Year", "III"]: year = "3rd Year"
+                elif year_str in ["4", "4th", "4th Year", "IV"]: year = "4th Year"
+                else: year = year_str if "Year" in year_str else f"{year_str} Year"
+            else:
+                year = "1st Year"
+
+            if dept_filter and dept_filter.lower() != "all" and dept_filter.lower() not in department.lower():
+                continue
+            if year_filter and year_filter.lower() != "all":
+                y_key = year_filter.split(" ")[0].lower()
+                if y_key not in year.lower():
+                    continue
+            if search_filter:
+                if search_filter not in student_name.lower() and search_filter not in student_id_val.lower():
+                    continue
+
+            metrics = calculate_candidate_contest_metrics(contest, problems, p, None)
+            attempt_number = int(p.get("attempt_number", 1) or 1)
+            uid_key = str(s_id or u_id or p.get("_id"))
+            original_score = original_scores.get(uid_key) if attempt_number > 1 else None
+            retest_score = retest_scores.get(uid_key) if attempt_number == 1 else ({
+                "score": metrics["overall_score"],
+                "mcq_score": metrics["mcq_score"],
+                "coding_score": metrics["coding_score"],
+                "attempt_number": attempt_number,
+                "status": str(p.get("status", ""))
+            } if p.get("submitted") else None)
+
+            leaderboard.append({
+                "student_id": student_id_val,
+                "name": student_name,
+                "department": department,
+                "year": year,
+                "solved_count": metrics["solved_count"],
+                "total_contest_problems": metrics["total_contest_problems"],
+                "passed_test_cases": metrics["passed_test_cases"],
+                "total_contest_testcases": metrics["total_contest_testcases"],
+                "time_taken": metrics["time_taken_formatted"],
+                "time_taken_seconds": metrics["time_taken_seconds"],
+                "time_complexity": metrics["time_complexity_label"],
+                "space_complexity": metrics["space_complexity_label"],
+                "final_score": metrics["final_score"],
+                "mcq_score": metrics["mcq_score"],
+                "mcqs_correct": metrics["mcqs_correct"],
+                "total_contest_mcqs": metrics["total_contest_mcqs"],
+                "mcq_percentage": metrics["mcq_percentage"],
+                "coding_score": metrics["coding_score"],
+                "coding_percentage": metrics["coding_percentage"],
+                "overall_score": metrics["overall_score"],
+                "score_breakdown": metrics["score_breakdown"],
+                "anti_cheat": metrics["anti_cheat"],
+                "problem_breakdowns": metrics["problem_breakdowns"],
+                "attempt_number": attempt_number,
+                "is_retest": attempt_number > 1,
+                "original_score": original_score,
+                "retest_score": retest_score,
+                "retest_marks": retest_score.get("score") if retest_score else None
+            })
+
+        # Sort based on report type
+        if report_type == "mcq":
+            leaderboard.sort(key=lambda x: (-x["mcq_score"], -x["mcqs_correct"], x["time_taken_seconds"]))
+        elif report_type == "coding":
+            leaderboard.sort(key=lambda x: (-x["coding_score"], -x["solved_count"], -x["passed_test_cases"], x["time_taken_seconds"]))
+        else:
+            leaderboard.sort(key=lambda x: (-x["overall_score"], -x["final_score"], -x["solved_count"], -x["mcqs_correct"], x["time_taken_seconds"]))
+
+        for idx, item in enumerate(leaderboard, 1):
+            item["rank"] = idx
+
+        clean_title = slugify(contest.get("title", "contest"))
+
+        # ================= CSV EXPORT =================
+        if export_format == "csv":
+            import csv
+            output = io.StringIO()
+            writer = csv.writer(output)
+
+            if report_type == "mcq":
+                writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Correct MCQs", "Total MCQs", "MCQ Score", "Original MCQ Marks", "Retest Marks", "Accuracy %", "Time Taken", "Anti-Cheat Status"])
+                for item in leaderboard:
+                    original_mcq = item["original_score"]["mcq_score"] if item["original_score"] else item["mcq_score"]
+                    writer.writerow([
+                        item["rank"],
+                        item["student_id"],
+                        item["name"],
+                        item["department"],
+                        item["year"],
+                        f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original",
+                        item["mcqs_correct"],
+                        item["total_contest_mcqs"],
+                        item["mcq_score"],
+                        original_mcq,
+                        item["retest_score"]["mcq_score"] if item["retest_score"] else "—",
+                        f"{item['mcq_percentage']}%",
+                        item["time_taken"],
+                        item["anti_cheat"]["status"]
+                    ])
+                filename = f"MCQ_Report_{clean_title}.csv"
+            elif report_type == "coding":
+                writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Problems Solved", "Total Problems", "Passed Test Cases", "Total Test Cases", "Coding Score", "Original Coding Marks", "Retest Marks", "Time Taken", "Time Complexity", "Space Complexity", "Anti-Cheat Status"])
+                for item in leaderboard:
+                    original_coding = item["original_score"]["coding_score"] if item["original_score"] else item["coding_score"]
+                    writer.writerow([
+                        item["rank"],
+                        item["student_id"],
+                        item["name"],
+                        item["department"],
+                        item["year"],
+                        f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original",
+                        item["solved_count"],
+                        item["total_contest_problems"],
+                        item["passed_test_cases"],
+                        item["total_contest_testcases"],
+                        item["coding_score"],
+                        original_coding,
+                        item["retest_score"]["coding_score"] if item["retest_score"] else "—",
+                        item["time_taken"],
+                        item["time_complexity"],
+                        item["space_complexity"],
+                        item["anti_cheat"]["status"]
+                    ])
+                filename = f"CODING_Report_{clean_title}.csv"
+            else:
+                writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "MCQ Score", "Coding Score", "Overall Score", "Original Marks", "Retest Marks", "Performance Index / 100", "Problems Solved", "Test Cases", "Time Taken", "Anti-Cheat Status"])
+                for item in leaderboard:
+                    original_overall = item["original_score"]["score"] if item["original_score"] else item["overall_score"]
+                    writer.writerow([
+                        item["rank"],
+                        item["student_id"],
+                        item["name"],
+                        item["department"],
+                        item["year"],
+                        f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original",
+                        item["mcq_score"],
+                        item["coding_score"],
+                        item["overall_score"],
+                        original_overall,
+                        item["retest_score"]["score"] if item["retest_score"] else "—",
+                        item["final_score"],
+                        f"{item['solved_count']} / {item['total_contest_problems']}",
+                        f"{item['passed_test_cases']} / {item['total_contest_testcases']}",
+                        item["time_taken"],
+                        item["anti_cheat"]["status"]
+                    ])
+                filename = f"OVERALL_Report_{clean_title}.csv"
+
+            csv_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
+            csv_bytes.seek(0)
+            resp = send_file(
+                csv_bytes,
+                mimetype="text/csv",
+                as_attachment=True,
+                download_name=filename
+            )
+            resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+            resp.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            resp.headers["Access-Control-Expose-Headers"] = "Content-Disposition, Content-Type"
+            return resp
+
+        # ================= EXCEL EXPORT =================
+        wb = openpyxl.Workbook()
+        header_fill = PatternFill(start_color="303442", end_color="303442", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        center_align = Alignment(horizontal="center", vertical="center")
+        left_align = Alignment(horizontal="left", vertical="center")
 
         if report_type == "mcq":
-            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Correct MCQs", "Total MCQs", "MCQ Score", "Original MCQ Marks", "Retest Marks", "Accuracy %", "Time Taken", "Anti-Cheat Status"])
-            for item in leaderboard:
-                original_mcq = item["original_score"]["mcq_score"] if item["original_score"] else item["mcq_score"]
-                writer.writerow([
-                    item["rank"],
-                    item["student_id"],
-                    item["name"],
-                    item["department"],
-                    item["year"],
-                    f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original",
-                    item["mcqs_correct"],
-                    item["total_contest_mcqs"],
-                    item["mcq_score"],
-                    original_mcq,
-                    item["retest_score"]["mcq_score"] if item["retest_score"] else "—",
-                    f"{item['mcq_percentage']}%",
-                    item["time_taken"],
-                    item["anti_cheat"]["status"]
-                ])
-            filename = f"MCQ_Report_{clean_title}.csv"
-        elif report_type == "coding":
-            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Problems Solved", "Total Problems", "Passed Test Cases", "Total Test Cases", "Coding Score", "Original Coding Marks", "Retest Marks", "Time Taken", "Time Complexity", "Space Complexity", "Anti-Cheat Status"])
-            for item in leaderboard:
-                original_coding = item["original_score"]["coding_score"] if item["original_score"] else item["coding_score"]
-                writer.writerow([
-                    item["rank"],
-                    item["student_id"],
-                    item["name"],
-                    item["department"],
-                    item["year"],
-                    f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original",
-                    item["solved_count"],
-                    item["total_contest_problems"],
-                    item["passed_test_cases"],
-                    item["total_contest_testcases"],
-                    item["coding_score"],
-                    original_coding,
-                    item["retest_score"]["coding_score"] if item["retest_score"] else "—",
-                    item["time_taken"],
-                    item["time_complexity"],
-                    item["space_complexity"],
-                    item["anti_cheat"]["status"]
-                ])
-            filename = f"CODING_Report_{clean_title}.csv"
-        else:
-            # Overall
-            writer.writerow(["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "MCQ Score", "Coding Score", "Overall Score", "Original Marks", "Retest Marks", "Performance Index / 100", "Problems Solved", "Test Cases", "Time Taken", "Anti-Cheat Status"])
-            for item in leaderboard:
-                original_overall = item["original_score"]["score"] if item["original_score"] else item["overall_score"]
-                writer.writerow([
-                    item["rank"],
-                    item["student_id"],
-                    item["name"],
-                    item["department"],
-                    item["year"],
-                    f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original",
-                    item["mcq_score"],
-                    item["coding_score"],
-                    item["overall_score"],
-                    original_overall,
-                    item["retest_score"]["score"] if item["retest_score"] else "—",
-                    item["final_score"],
-                    f"{item['solved_count']} / {item['total_contest_problems']}",
-                    f"{item['passed_test_cases']} / {item['total_contest_testcases']}",
-                    item["time_taken"],
-                    item["anti_cheat"]["status"]
-                ])
-            filename = f"OVERALL_Report_{clean_title}.csv"
+            ws_main = wb.active
+            ws_main.title = "MCQ Performance Report"
+            ws_main.merge_cells("A1:N1")
+            t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — MCQ Performance Report: {contest.get('title')}")
+            t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+            t_cell.fill = PatternFill(start_color="7C3AED", end_color="7C3AED", fill_type="solid")
+            t_cell.alignment = center_align
 
-        csv_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
-        csv_bytes.seek(0)
+            mcq_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Correct MCQs", "Total MCQs", "MCQ Score", "Original MCQ Marks", "Retest Marks", "Accuracy %", "Time Taken", "Status"]
+            for c_i, h in enumerate(mcq_headers, 1):
+                cell = ws_main.cell(row=3, column=c_i, value=h)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = center_align if c_i not in [2, 3, 4] else left_align
+
+            for r_i, item in enumerate(leaderboard, 4):
+                ws_main.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
+                ws_main.cell(row=r_i, column=2, value=item["student_id"]).alignment = left_align
+                ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
+                ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
+                ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
+                ws_main.cell(row=r_i, column=6, value=f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original").alignment = center_align
+                ws_main.cell(row=r_i, column=7, value=item["mcqs_correct"]).alignment = center_align
+                ws_main.cell(row=r_i, column=8, value=item["total_contest_mcqs"]).alignment = center_align
+                
+                sc_cell = ws_main.cell(row=r_i, column=9, value=item["mcq_score"])
+                sc_cell.alignment = center_align
+                sc_cell.font = Font(name="Calibri", size=11, bold=True)
+                
+                original_mcq = item["original_score"]["mcq_score"] if item["original_score"] else item["mcq_score"]
+                ws_main.cell(row=r_i, column=10, value=original_mcq).alignment = center_align
+                ws_main.cell(row=r_i, column=11, value=item["retest_score"]["mcq_score"] if item["retest_score"] else "—").alignment = center_align
+                ws_main.cell(row=r_i, column=12, value=f"{item['mcq_percentage']}%").alignment = center_align
+                ws_main.cell(row=r_i, column=13, value=item["time_taken"]).alignment = center_align
+                ws_main.cell(row=r_i, column=14, value=item["anti_cheat"]["status"]).alignment = center_align
+
+            filename = f"MCQ_Report_{clean_title}.xlsx"
+
+        elif report_type == "coding":
+            ws_main = wb.active
+            ws_main.title = "Coding Performance Report"
+            ws_main.merge_cells("A1:Q1")
+            t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — Coding Performance Report: {contest.get('title')}")
+            t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+            t_cell.fill = PatternFill(start_color="059669", end_color="059669", fill_type="solid")
+            t_cell.alignment = center_align
+
+            coding_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Problems Solved", "Total Problems", "Passed Test Cases", "Total Test Cases", "Coding Score", "Original Coding Marks", "Retest Marks", "Time Taken", "Time Complexity", "Space Complexity", "Anti-Cheat"]
+            for c_i, h in enumerate(coding_headers, 1):
+                cell = ws_main.cell(row=3, column=c_i, value=h)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = center_align if c_i not in [2, 3, 4] else left_align
+
+            for r_i, item in enumerate(leaderboard, 4):
+                ws_main.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
+                ws_main.cell(row=r_i, column=2, value=item["student_id"]).alignment = left_align
+                ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
+                ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
+                ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
+                ws_main.cell(row=r_i, column=6, value=f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original").alignment = center_align
+                ws_main.cell(row=r_i, column=7, value=item["solved_count"]).alignment = center_align
+                ws_main.cell(row=r_i, column=8, value=item["total_contest_problems"]).alignment = center_align
+                ws_main.cell(row=r_i, column=9, value=item["passed_test_cases"]).alignment = center_align
+                ws_main.cell(row=r_i, column=10, value=item["total_contest_testcases"]).alignment = center_align
+                
+                sc_cell = ws_main.cell(row=r_i, column=11, value=item["coding_score"])
+                sc_cell.alignment = center_align
+                sc_cell.font = Font(name="Calibri", size=11, bold=True)
+                
+                original_coding = item["original_score"]["coding_score"] if item["original_score"] else item["coding_score"]
+                ws_main.cell(row=r_i, column=12, value=original_coding).alignment = center_align
+                ws_main.cell(row=r_i, column=13, value=item["retest_score"]["coding_score"] if item["retest_score"] else "—").alignment = center_align
+                ws_main.cell(row=r_i, column=14, value=item["time_taken"]).alignment = center_align
+                ws_main.cell(row=r_i, column=15, value=item["time_complexity"]).alignment = center_align
+                ws_main.cell(row=r_i, column=16, value=item["space_complexity"]).alignment = center_align
+                ws_main.cell(row=r_i, column=17, value=item["anti_cheat"]["status"]).alignment = center_align
+
+            filename = f"CODING_Report_{clean_title}.xlsx"
+
+        else:
+            # Overall Report
+            ws_main = wb.active
+            ws_main.title = "Overall Performance Report"
+            ws_main.merge_cells("A1:P1")
+            t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — Overall Performance Report: {contest.get('title')}")
+            t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+            t_cell.fill = PatternFill(start_color="1E40AF", end_color="1E40AF", fill_type="solid")
+            t_cell.alignment = center_align
+
+            overall_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "MCQ Score", "Coding Score", "Overall Score", "Original Marks", "Retest Marks", "Performance Index", "Problems Solved", "Test Cases", "Time Taken", "Anti-Cheat"]
+            for c_i, h in enumerate(overall_headers, 1):
+                cell = ws_main.cell(row=3, column=c_i, value=h)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = center_align if c_i not in [2, 3, 4] else left_align
+
+            for r_i, item in enumerate(leaderboard, 4):
+                ws_main.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
+                ws_main.cell(row=r_i, column=2, value=item["student_id"]).alignment = left_align
+                ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
+                ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
+                ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
+                ws_main.cell(row=r_i, column=6, value=f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original").alignment = center_align
+                ws_main.cell(row=r_i, column=7, value=item["mcq_score"]).alignment = center_align
+                ws_main.cell(row=r_i, column=8, value=item["coding_score"]).alignment = center_align
+                
+                sc_cell = ws_main.cell(row=r_i, column=9, value=item["overall_score"])
+                sc_cell.alignment = center_align
+                sc_cell.font = Font(name="Calibri", size=11, bold=True)
+                
+                original_overall = item["original_score"]["score"] if item["original_score"] else item["overall_score"]
+                ws_main.cell(row=r_i, column=10, value=original_overall).alignment = center_align
+                ws_main.cell(row=r_i, column=11, value=item["retest_score"]["score"] if item["retest_score"] else "—").alignment = center_align
+                ws_main.cell(row=r_i, column=12, value=item["final_score"]).alignment = center_align
+                ws_main.cell(row=r_i, column=13, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
+                ws_main.cell(row=r_i, column=14, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
+                ws_main.cell(row=r_i, column=15, value=item["time_taken"]).alignment = center_align
+                ws_main.cell(row=r_i, column=16, value=item["anti_cheat"]["status"]).alignment = center_align
+
+            filename = f"OVERALL_Report_{clean_title}.xlsx"
+
+        excel_stream = io.BytesIO()
+        wb.save(excel_stream)
+        excel_stream.seek(0)
+
         resp = send_file(
-            csv_bytes,
-            mimetype="text/csv",
+            excel_stream,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
             download_name=filename
         )
-        resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+        resp.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         resp.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
         resp.headers["Access-Control-Expose-Headers"] = "Content-Disposition, Content-Type"
         return resp
 
-    # ================= EXCEL EXPORT =================
-    wb = openpyxl.Workbook()
-    header_fill = PatternFill(start_color="303442", end_color="303442", fill_type="solid")
-    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-    center_align = Alignment(horizontal="center", vertical="center")
-    left_align = Alignment(horizontal="left", vertical="center")
-    candidate_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    
-    clean_fill = PatternFill(start_color="D1FAE5", end_color="D1FAE5", fill_type="solid")
-    terminated_fill = PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid")
-    flagged_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
-
-    if report_type == "mcq":
-        # 1. MCQ Report Sheet
-        ws_main = wb.active
-        ws_main.title = "MCQ Performance Report"
-        ws_main.merge_cells("A1:N1")
-        t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — MCQ Performance Report: {contest.get('title')}")
-        t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
-        t_cell.fill = PatternFill(start_color="7C3AED", end_color="7C3AED", fill_type="solid")
-        t_cell.alignment = center_align
-
-        mcq_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Correct MCQs", "Total MCQs", "MCQ Score", "Original MCQ Marks", "Retest Marks", "Accuracy %", "Time Taken", "Status"]
-        for c_i, h in enumerate(mcq_headers, 1):
-            cell = ws_main.cell(row=3, column=c_i, value=h)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = center_align if c_i not in [2, 3, 4] else left_align
-
-        for r_i, item in enumerate(leaderboard, 4):
-            ws_main.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
-            ws_main.cell(row=r_i, column=2, value=item["student_id"]).alignment = left_align
-            ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
-            ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
-            ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
-            ws_main.cell(row=r_i, column=6, value=f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original").alignment = center_align
-            ws_main.cell(row=r_i, column=7, value=item["mcqs_correct"]).alignment = center_align
-            ws_main.cell(row=r_i, column=8, value=item["total_contest_mcqs"]).alignment = center_align
-            
-            sc_cell = ws_main.cell(row=r_i, column=9, value=item["mcq_score"])
-            sc_cell.alignment = center_align
-            sc_cell.font = Font(name="Calibri", size=11, bold=True)
-            original_mcq = item["original_score"]["mcq_score"] if item["original_score"] else item["mcq_score"]
-            ws_main.cell(row=r_i, column=10, value=original_mcq).alignment = center_align
-            ws_main.cell(row=r_i, column=11, value=item["retest_score"]["mcq_score"] if item["retest_score"] else "—").alignment = center_align
-            ws_main.cell(row=r_i, column=12, value=f"{item['mcq_percentage']}%").alignment = center_align
-            ws_main.cell(row=r_i, column=13, value=item["time_taken"]).alignment = center_align
-            
-            st_cell = ws_main.cell(row=r_i, column=14, value=item["anti_cheat"]["status"])
-            st_cell.alignment = center_align
-            st_cell.font = Font(name="Calibri", size=10, bold=True)
-            if item["anti_cheat"]["status"] == "CLEAN": st_cell.fill = clean_fill
-            elif item["anti_cheat"]["status"] == "AUTO_TERMINATED": st_cell.fill = terminated_fill
-            else: st_cell.fill = flagged_fill
-
-        filename = f"MCQ_Report_{clean_title}.xlsx"
-
-    elif report_type == "coding":
-        # 1. Coding Report Sheet
-        ws_main = wb.active
-        ws_main.title = "Coding Performance Report"
-        ws_main.merge_cells("A1:O1")
-        t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — Coding Performance Report: {contest.get('title')}")
-        t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
-        t_cell.fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
-        t_cell.alignment = center_align
-
-        coding_headers = ["Rank", "Student ID", "Candidate Name", "Department", "Year", "Attempt", "Problems Solved", "Test Cases", "Coding Score", "Original Coding Marks", "Retest Marks", "Time Taken", "Time Comp", "Space Comp", "Status"]
-        for c_i, h in enumerate(coding_headers, 1):
-            cell = ws_main.cell(row=3, column=c_i, value=h)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = center_align if c_i not in [2, 3, 4] else left_align
-
-        for r_i, item in enumerate(leaderboard, 4):
-            ws_main.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
-            ws_main.cell(row=r_i, column=2, value=item["student_id"]).alignment = left_align
-            ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
-            ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
-            ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
-            ws_main.cell(row=r_i, column=6, value=f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original").alignment = center_align
-            ws_main.cell(row=r_i, column=7, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
-            ws_main.cell(row=r_i, column=8, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
-            
-            sc_cell = ws_main.cell(row=r_i, column=9, value=item["coding_score"])
-            sc_cell.alignment = center_align
-            sc_cell.font = Font(name="Calibri", size=11, bold=True)
-            original_coding = item["original_score"]["coding_score"] if item["original_score"] else item["coding_score"]
-            ws_main.cell(row=r_i, column=10, value=original_coding).alignment = center_align
-            ws_main.cell(row=r_i, column=11, value=item["retest_score"]["coding_score"] if item["retest_score"] else "—").alignment = center_align
-            ws_main.cell(row=r_i, column=12, value=item["time_taken"]).alignment = center_align
-            ws_main.cell(row=r_i, column=13, value=item["time_complexity"]).alignment = center_align
-            ws_main.cell(row=r_i, column=14, value=item["space_complexity"]).alignment = center_align
-            
-            st_cell = ws_main.cell(row=r_i, column=15, value=item["anti_cheat"]["status"])
-            st_cell.alignment = center_align
-            st_cell.font = Font(name="Calibri", size=10, bold=True)
-            if item["anti_cheat"]["status"] == "CLEAN": st_cell.fill = clean_fill
-            elif item["anti_cheat"]["status"] == "AUTO_TERMINATED": st_cell.fill = terminated_fill
-            else: st_cell.fill = flagged_fill
-
-        # 2. Problem-wise breakdown sheet for Coding
-        ws_prob = wb.create_sheet(title="Coding Problems Breakdown")
-        ws_prob.merge_cells("A1:I1")
-        p_title = ws_prob.cell(row=1, column=1, value="NIT Campus Coder — Candidate Problem-by-Problem Submissions")
-        p_title.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
-        p_title.fill = PatternFill(start_color="303442", end_color="303442", fill_type="solid")
-        p_title.alignment = center_align
-
-        prob_headers = ["Student ID", "Candidate Name", "Problem Title", "Difficulty", "Verdict", "Test Cases Passed", "Runtime (ms)", "Memory (MB)", "Language"]
-        for c_i, h in enumerate(prob_headers, 1):
-            cell = ws_prob.cell(row=3, column=c_i, value=h)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = left_align
-
-        p_row = 4
-        for item in leaderboard:
-            for pb in item.get("problem_breakdowns", []):
-                ws_prob.cell(row=p_row, column=1, value=item["student_id"])
-                ws_prob.cell(row=p_row, column=2, value=item["name"])
-                ws_prob.cell(row=p_row, column=3, value=pb["problem_title"])
-                ws_prob.cell(row=p_row, column=4, value=pb["difficulty"])
-                v_cell = ws_prob.cell(row=p_row, column=5, value=pb["status"])
-                if pb["status"] == "Accepted": v_cell.fill = clean_fill
-                elif pb["status"] == "Not Attempted": pass
-                else: v_cell.fill = terminated_fill
-                ws_prob.cell(row=p_row, column=6, value=f"{pb['passed_test_cases']} / {pb['total_test_cases']}")
-                ws_prob.cell(row=p_row, column=7, value=pb["runtime"])
-                ws_prob.cell(row=p_row, column=8, value=pb["memory"])
-                ws_prob.cell(row=p_row, column=9, value=pb["language"])
-                p_row += 1
-
-        filename = f"CODING_Report_{clean_title}.xlsx"
-
-    else:
-        # 1. Overall Combined Report Sheet
-        ws_main = wb.active
-        ws_main.title = "Overall Performance"
-        ws_main.merge_cells("A1:O1")
-        t_cell = ws_main.cell(row=1, column=1, value=f"NIT Campus Coder — Overall Performance Report: {contest.get('title')}")
-        t_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
-        t_cell.fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
-        t_cell.alignment = center_align
-
-        overall_headers = [
-            "Rank", "Student ID", "Candidate Name", "Department", "Year", 
-            "Attempt", "MCQ Marks", "Coding Marks", "Overall Score", "Original Marks", "Retest Marks",
-            "Problems Solved", "Test Cases", "Time Taken", "Anti-Cheat Status"
-        ]
-        for c_i, h in enumerate(overall_headers, 1):
-            cell = ws_main.cell(row=3, column=c_i, value=h)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = center_align if c_i not in [2, 3, 4] else left_align
-
-        for r_i, item in enumerate(leaderboard, 4):
-            ws_main.cell(row=r_i, column=1, value=item["rank"]).alignment = center_align
-            ws_main.cell(row=r_i, column=2, value=item["student_id"]).alignment = left_align
-            ws_main.cell(row=r_i, column=3, value=item["name"]).alignment = left_align
-            ws_main.cell(row=r_i, column=4, value=item["department"]).alignment = left_align
-            ws_main.cell(row=r_i, column=5, value=item["year"]).alignment = center_align
-            ws_main.cell(row=r_i, column=6, value=f"Retest #{item['attempt_number']}" if item["is_retest"] else "Original").alignment = center_align
-            
-            # MCQ Score
-            mcq_cell = ws_main.cell(row=r_i, column=7, value=item["mcq_score"])
-            mcq_cell.alignment = center_align
-            mcq_cell.font = Font(name="Calibri", size=11, bold=True, color="7C3AED")
-
-            # Coding Score
-            cod_cell = ws_main.cell(row=r_i, column=8, value=item["coding_score"])
-            cod_cell.alignment = center_align
-            cod_cell.font = Font(name="Calibri", size=11, bold=True, color="059669")
-
-            # Overall Score
-            sc_cell = ws_main.cell(row=r_i, column=9, value=item["overall_score"])
-            sc_cell.alignment = center_align
-            sc_cell.font = Font(name="Calibri", size=11, bold=True)
-            if item["overall_score"] >= 80: sc_cell.fill = clean_fill
-            elif item["overall_score"] >= 50: sc_cell.fill = flagged_fill
-            else: sc_cell.fill = terminated_fill
-
-            original_overall = item["original_score"]["score"] if item["original_score"] else item["overall_score"]
-            ws_main.cell(row=r_i, column=10, value=original_overall).alignment = center_align
-            ws_main.cell(row=r_i, column=11, value=item["retest_score"]["score"] if item["retest_score"] else "—").alignment = center_align
-            ws_main.cell(row=r_i, column=12, value=f"{item['solved_count']} / {item['total_contest_problems']}").alignment = center_align
-            ws_main.cell(row=r_i, column=13, value=f"{item['passed_test_cases']} / {item['total_contest_testcases']}").alignment = center_align
-            ws_main.cell(row=r_i, column=14, value=item["time_taken"]).alignment = center_align
-            
-            st_cell = ws_main.cell(row=r_i, column=15, value=item["anti_cheat"]["status"])
-            st_cell.alignment = center_align
-            st_cell.font = Font(name="Calibri", size=10, bold=True)
-            if item["anti_cheat"]["status"] == "CLEAN": st_cell.fill = clean_fill
-            elif item["anti_cheat"]["status"] == "AUTO_TERMINATED": st_cell.fill = terminated_fill
-            else: st_cell.fill = flagged_fill
-
-        # 2. Summary Statistics Sheet
-        ws_sum = wb.create_sheet(title="Executive Summary")
-        ws_sum.merge_cells("A1:B1")
-        s_title = ws_sum.cell(row=1, column=1, value=f"Executive KPI Summary — {contest.get('title')}")
-        s_title.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
-        s_title.fill = PatternFill(start_color="0757B8", end_color="0757B8", fill_type="solid")
-        s_title.alignment = center_align
-
-        sum_metrics = [
-            ("Contest Title", contest.get("title")),
-            ("Duration (Minutes)", contest.get("duration_minutes", 60)),
-            ("Total Candidates Attended", summary.get("total_candidates", 0)),
-            ("Average Overall Score", summary.get("avg_overall_score", 0)),
-            ("Highest Overall Score", summary.get("highest_overall_score", 0)),
-            ("Total MCQs in Contest", summary.get("total_mcqs", 0)),
-            ("Average MCQ Score", summary.get("avg_mcq_score", 0)),
-            ("Highest MCQ Score", summary.get("highest_mcq_score", 0)),
-            ("Average MCQ Accuracy (%)", f"{summary.get('avg_mcq_accuracy', 0)}%"),
-            ("Total Coding Problems", summary.get("total_coding_problems", 0)),
-            ("Average Coding Score", summary.get("avg_coding_score", 0)),
-            ("Highest Coding Score", summary.get("highest_coding_score", 0)),
-            ("Clean Integrity Rate (%)", f"{summary.get('clean_rate', 100)}%"),
-            ("Terminated / Flagged Count", f"{summary.get('auto_terminated_count', 0)} Terminated / {len(leaderboard) - summary.get('clean_count', 0)} Flagged")
-        ]
-
-        ws_sum.cell(row=3, column=1, value="Metric").fill = header_fill
-        ws_sum.cell(row=3, column=1).font = header_font
-        ws_sum.cell(row=3, column=2, value="Value").fill = header_fill
-        ws_sum.cell(row=3, column=2).font = header_font
-
-        for r_i, (k, v) in enumerate(sum_metrics, 4):
-            ws_sum.cell(row=r_i, column=1, value=k).font = Font(name="Calibri", size=11, bold=True)
-            ws_sum.cell(row=r_i, column=2, value=str(v))
-
-        filename = f"OVERALL_Report_{clean_title}.xlsx"
-
-    # Shared Anti-Cheat Audit Sheet in Excel
-    ws_audit = wb.create_sheet(title="Anti-Cheat Audit")
-    audit_headers = ["Student ID", "Candidate Name", "Department", "Anti-Cheat Status", "Auto-Terminated", "Termination Reason", "Flags Count", "Security Events Summary"]
-    for c_i, h in enumerate(audit_headers, 1):
-        cell = ws_audit.cell(row=1, column=c_i, value=h)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = left_align
-
-    for a_i, item in enumerate(leaderboard, 2):
-        ac = item["anti_cheat"]
-        ws_audit.cell(row=a_i, column=1, value=item["student_id"])
-        ws_audit.cell(row=a_i, column=2, value=item["name"])
-        ws_audit.cell(row=a_i, column=3, value=item["department"])
-        st_cell = ws_audit.cell(row=a_i, column=4, value=ac["status"])
-        if ac["status"] == "CLEAN": st_cell.fill = clean_fill
-        elif ac["status"] == "AUTO_TERMINATED": st_cell.fill = terminated_fill
-        else: st_cell.fill = flagged_fill
-
-        ws_audit.cell(row=a_i, column=5, value="YES" if ac["auto_terminated"] else "NO")
-        ws_audit.cell(row=a_i, column=6, value=ac["termination_reason"] or "-")
-        ws_audit.cell(row=a_i, column=7, value=ac["flags_count"])
-        
-        events_summary = ", ".join([f"{log.get('event_type')}: {log.get('detail', '')}" for log in ac.get("logs", [])]) or "No integrity violations"
-        ws_audit.cell(row=a_i, column=8, value=events_summary)
-
-    # Adjust widths for all sheets
-    for ws in wb.worksheets:
-        for col in ws.columns:
-            max_len = max(len(str(cell.value or '')) for cell in col)
-            col_letter = openpyxl.utils.get_column_letter(col[0].column)
-            ws.column_dimensions[col_letter].width = max(min(max_len + 4, 45), 11)
-
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-
-    from services.notification_service import create_notification
-    create_notification(
-        user_id=request.current_user["_id"],
-        title="Contest Report Generated",
-        message=f"Successfully generated and downloaded {report_type.upper()} report for contest '{contest.get('title')}'.",
-        notif_type="contest"
-    )
-
-    resp = send_file(
-        out,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name=filename
-    )
-    resp.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    resp.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-    resp.headers["Access-Control-Expose-Headers"] = "Content-Disposition, Content-Type"
-    return resp
+    except Exception as e:
+        logger.exception("Error exporting contest report for %s: %s", contest_id, e)
+        return jsonify({"success": False, "error": f"Failed to export report: {str(e)}"}), 500
 
 # ----------------- ADMIN NOTIFICATIONS & ANNOUNCEMENTS -----------------
 

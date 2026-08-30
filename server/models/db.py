@@ -81,6 +81,10 @@ def setup_indexes(database):
         database.contest_participants.create_index([("contest_id", ASCENDING), ("user_id", ASCENDING), ("attempt_number", DESCENDING)])
         database.contest_participants.create_index([("contest_id", ASCENDING), ("student_id", ASCENDING)])
         database.contest_participants.create_index([("contest_id", ASCENDING), ("score", DESCENDING), ("submitted_at", ASCENDING)])
+        database.contest_participants.create_index([("contest_id", ASCENDING), ("is_active_attempt", ASCENDING), ("score", DESCENDING), ("submitted_at", ASCENDING)])
+        database.contest_participants.create_index([("contest_id", ASCENDING), ("department", ASCENDING), ("score", DESCENDING)])
+        database.contest_participants.create_index([("contest_id", ASCENDING), ("status", ASCENDING)])
+        database.contest_participants.create_index([("contest_id", ASCENDING), ("submitted", ASCENDING)])
         database.contest_participants.create_index([("user_id", ASCENDING), ("joined_at", DESCENDING)])
         
         # Contest assigned questions are also stored per attempt.
