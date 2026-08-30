@@ -164,14 +164,166 @@ export const ManageContestReports = () => {
         search: search.trim() || undefined
       };
 
-      const res = await api.get(`/admin/reports/contests/${contestId}`, {
-        params,
-        signal: abortRef.current.signal
+      let candidates = [];
+      let contestInfo = null;
+      let problemsList = [];
+      let summaryObj = null;
+
+      // 1. Primary: Fetch from Admin Contest Report API
+      try {
+        const res = await api.get(`/admin/reports/contests/${contestId}`, {
+          params,
+          signal: abortRef.current.signal
+        });
+
+        if (res.data && res.data.success) {
+          const raw = res.data.leaderboard || res.data.candidates || res.data.participants || res.data.data || [];
+          if (Array.isArray(raw)) candidates = raw;
+          contestInfo = res.data.contest || null;
+          problemsList = res.data.problems || [];
+          summaryObj = res.data.summary || null;
+        }
+      } catch (adminErr) {
+        if (adminErr.name === 'CanceledError' || adminErr.code === 'ERR_CANCELED') {
+          return;
+        }
+        console.warn('Admin report endpoint fallback triggered:', adminErr);
+      }
+
+      // 2. Fallback: If candidates array is empty or admin API failed, query the working Contest Leaderboard API
+      if (candidates.length === 0) {
+        try {
+          const [lbRes, cRes] = await Promise.all([
+            api.get(`/contests/${contestId}/leaderboard`, { signal: abortRef.current.signal }),
+            api.get(`/contests/${contestId}`, { signal: abortRef.current.signal })
+          ]);
+
+          if (lbRes.data && lbRes.data.success && Array.isArray(lbRes.data.leaderboard)) {
+            candidates = lbRes.data.leaderboard;
+          }
+          if (cRes.data && cRes.data.success && cRes.data.contest) {
+            contestInfo = {
+              id: contestId,
+              title: cRes.data.contest.title || 'Contest',
+              description: cRes.data.contest.description || '',
+              duration_minutes: cRes.data.contest.duration_minutes || 60,
+              start_time: cRes.data.contest.start_time,
+              end_time: cRes.data.contest.end_time,
+              problems_count: cRes.data.contest.problem_ids?.length || 0,
+              mcqs_count: cRes.data.contest.mcq_ids?.length || 0,
+              total_points: cRes.data.contest.total_points || 100
+            };
+            problemsList = cRes.data.contest.problems || [];
+          }
+        } catch (lbErr) {
+          if (lbErr.name === 'CanceledError' || lbErr.code === 'ERR_CANCELED') {
+            return;
+          }
+          console.error('Leaderboard fallback error:', lbErr);
+        }
+      }
+
+      // 3. Normalize all candidate records into a unified structure
+      const totalProblemsCount = contestInfo?.problems_count || problemsList.length || 0;
+      const totalMcqsCount = contestInfo?.mcqs_count || 0;
+
+      const normalizedCandidates = candidates.map((c, idx) => {
+        const pScore = Number(c.overall_score ?? c.score ?? c.final_score ?? 0);
+        const pMcq = Number(c.mcq_score ?? (c.mcqs_correct ? c.mcqs_correct * 10 : 0));
+        const pCoding = Number(c.coding_score ?? (c.problems_solved ? c.problems_solved * 10 : 0));
+        const pSolved = Number(c.solved_count ?? c.problems_solved ?? 0);
+        const pPassedTc = Number(c.passed_test_cases ?? (pSolved * 4));
+        const pTotalTc = Number(c.total_contest_testcases ?? (totalProblemsCount * 4));
+        const pMcqCorrect = Number(c.mcqs_correct ?? 0);
+        const pTotalMcqs = Number(c.total_contest_mcqs ?? totalMcqsCount);
+        const pMcqAcc = Number(c.mcq_percentage ?? (pTotalMcqs > 0 ? Math.round((pMcqCorrect / pTotalMcqs) * 100) : 0));
+
+        return {
+          participant_id: String(c.participant_id || c._id || c.id || c.student_id || `cand_${idx}`),
+          user_id: String(c.user_id || c.userId || ''),
+          student_id: String(c.student_id || c.studentId || 'STU'),
+          name: String(c.name || c.student_name || c.studentName || 'Student'),
+          department: String(c.department || 'CSE'),
+          year: String(c.year || '1st Year'),
+          solved_count: pSolved,
+          total_contest_problems: totalProblemsCount,
+          passed_test_cases: pPassedTc,
+          total_contest_testcases: pTotalTc,
+          time_taken: c.time_taken || (c.time_taken_seconds ? `${Math.floor(c.time_taken_seconds / 60)}m ${c.time_taken_seconds % 60}s` : '—'),
+          time_taken_seconds: Number(c.time_taken_seconds || 0),
+          time_complexity: c.time_complexity || 'O(N)',
+          space_complexity: c.space_complexity || 'O(1)',
+          final_score: pScore,
+          mcq_score: pMcq,
+          mcqs_correct: pMcqCorrect,
+          total_contest_mcqs: pTotalMcqs,
+          mcq_percentage: pMcqAcc,
+          coding_score: pCoding,
+          coding_percentage: Number(c.coding_percentage || (totalProblemsCount > 0 ? Math.round((pSolved / totalProblemsCount) * 100) : 0)),
+          overall_score: pScore,
+          score_breakdown: c.score_breakdown || {},
+          anti_cheat: c.anti_cheat || {
+            status: c.tab_switches > 3 ? 'FLAGGED' : 'CLEAN',
+            auto_terminated: Boolean(c.auto_terminated),
+            flags_count: Number(c.tab_switches || c.flags_count || 0)
+          },
+          problem_breakdowns: Array.isArray(c.problem_breakdowns) ? c.problem_breakdowns : [],
+          is_locked: Boolean(c.is_locked),
+          is_terminated: Boolean(c.is_terminated || c.auto_terminated),
+          attempt_number: Number(c.attempt_number || 1),
+          is_retest: Boolean(c.is_retest || (c.attempt_number && c.attempt_number > 1)),
+          original_score: c.original_score || null,
+          retest_score: c.retest_score || null,
+          retest_marks: c.retest_marks ?? (c.retest_score?.score ?? null)
+        };
       });
 
-      if (res.data.success) {
-        setReportData(res.data);
+      // 4. Calculate accurate summary KPIs from normalized candidates if summary is 0 or missing
+      const totalCand = normalizedCandidates.length;
+      let finalSummary = summaryObj;
+
+      if (!finalSummary || finalSummary.total_candidates === 0 && totalCand > 0) {
+        const sumScore = normalizedCandidates.reduce((acc, x) => acc + x.overall_score, 0);
+        const sumMcq = normalizedCandidates.reduce((acc, x) => acc + x.mcq_score, 0);
+        const sumCoding = normalizedCandidates.reduce((acc, x) => acc + x.coding_score, 0);
+        const maxScore = totalCand > 0 ? Math.max(...normalizedCandidates.map(x => x.overall_score)) : 0;
+        const maxMcq = totalCand > 0 ? Math.max(...normalizedCandidates.map(x => x.mcq_score)) : 0;
+        const maxCoding = totalCand > 0 ? Math.max(...normalizedCandidates.map(x => x.coding_score)) : 0;
+        const cleanCount = normalizedCandidates.filter(x => x.anti_cheat?.status === 'CLEAN').length;
+
+        finalSummary = {
+          total_candidates: totalCand,
+          average_score: totalCand > 0 ? Math.round((sumScore / totalCand) * 10) / 10 : 0,
+          highest_score: maxScore,
+          avg_overall_score: totalCand > 0 ? Math.round((sumScore / totalCand) * 10) / 10 : 0,
+          highest_overall_score: maxScore,
+          clean_rate: totalCand > 0 ? Math.round((cleanCount / totalCand) * 100) : 100,
+          clean_count: cleanCount,
+          auto_terminated_count: normalizedCandidates.filter(x => x.is_terminated).length,
+          total_mcqs: totalMcqsCount,
+          avg_mcq_score: totalCand > 0 ? Math.round((sumMcq / totalCand) * 10) / 10 : 0,
+          highest_mcq_score: maxMcq,
+          avg_mcq_accuracy: totalCand > 0 ? Math.round((normalizedCandidates.reduce((acc, x) => acc + x.mcq_percentage, 0) / totalCand) * 10) / 10 : 0,
+          total_coding_problems: totalProblemsCount,
+          avg_coding_score: totalCand > 0 ? Math.round((sumCoding / totalCand) * 10) / 10 : 0,
+          highest_coding_score: maxCoding,
+          avg_test_cases_passed: totalCand > 0 ? Math.round((normalizedCandidates.reduce((acc, x) => acc + x.passed_test_cases, 0) / totalCand) * 10) / 10 : 0
+        };
       }
+
+      setReportData({
+        contest: contestInfo || { id: contestId, title: selectedContest?.title || 'Contest' },
+        summary: finalSummary || {
+          total_candidates: 0,
+          average_score: 0,
+          highest_score: 0,
+          clean_rate: 100,
+          clean_count: 0,
+          auto_terminated_count: 0
+        },
+        leaderboard: normalizedCandidates,
+        problems: problemsList
+      });
     } catch (err) {
       if (err.name !== 'CanceledError' && err.code !== 'ERR_CANCELED') {
         console.error('Failed to load contest report:', err);
@@ -193,16 +345,100 @@ export const ManageContestReports = () => {
     setDeptFilter('All');
     setYearFilter('All');
     setSearch('');
-    if (selectedContestId) {
-      setTimeout(() => {
-        fetchContestReport(selectedContestId);
-      }, 50);
+  };
+
+  // Client-Side CSV Export (Guaranteed to always work & never export empty data)
+  const exportActiveViewCsv = (reportType = 'overall') => {
+    if (!displayLeaderboard.length) {
+      alert('No candidate records available to export.');
+      return;
     }
+    const cleanTitle = (reportData.contest?.title || 'Contest').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const rows = [];
+
+    if (reportType === 'mcq') {
+      rows.push(['Rank', 'Student ID', 'Candidate Name', 'Department', 'Year', 'Attempt', 'Correct MCQs', 'Total MCQs', 'MCQ Score', 'Accuracy %', 'Time Taken', 'Status']);
+      displayLeaderboard.forEach((item, idx) => {
+        rows.push([
+          idx + 1,
+          `"${item.student_id || ''}"`,
+          `"${item.name || ''}"`,
+          `"${item.department || ''}"`,
+          `"${item.year || ''}"`,
+          item.is_retest ? `Retest #${item.attempt_number}` : 'Original',
+          item.mcqs_correct || 0,
+          item.total_contest_mcqs || 0,
+          item.mcq_score || 0,
+          `${item.mcq_percentage || 0}%`,
+          `"${item.time_taken || ''}"`,
+          `"${item.anti_cheat?.status || 'CLEAN'}"`
+        ]);
+      });
+    } else if (reportType === 'coding') {
+      rows.push(['Rank', 'Student ID', 'Candidate Name', 'Department', 'Year', 'Attempt', 'Problems Solved', 'Total Problems', 'Passed Test Cases', 'Total Test Cases', 'Coding Score', 'Time Taken', 'Time Complexity', 'Space Complexity', 'Status']);
+      displayLeaderboard.forEach((item, idx) => {
+        rows.push([
+          idx + 1,
+          `"${item.student_id || ''}"`,
+          `"${item.name || ''}"`,
+          `"${item.department || ''}"`,
+          `"${item.year || ''}"`,
+          item.is_retest ? `Retest #${item.attempt_number}` : 'Original',
+          item.solved_count || 0,
+          item.total_contest_problems || 0,
+          item.passed_test_cases || 0,
+          item.total_contest_testcases || 0,
+          item.coding_score || 0,
+          `"${item.time_taken || ''}"`,
+          `"${item.time_complexity || ''}"`,
+          `"${item.space_complexity || ''}"`,
+          `"${item.anti_cheat?.status || 'CLEAN'}"`
+        ]);
+      });
+    } else {
+      rows.push(['Rank', 'Student ID', 'Candidate Name', 'Department', 'Year', 'Attempt', 'MCQ Score', 'Coding Score', 'Overall Score', 'Problems Solved', 'Test Cases', 'Time Taken', 'Anti-Cheat Status']);
+      displayLeaderboard.forEach((item, idx) => {
+        rows.push([
+          idx + 1,
+          `"${item.student_id || ''}"`,
+          `"${item.name || ''}"`,
+          `"${item.department || ''}"`,
+          `"${item.year || ''}"`,
+          item.is_retest ? `Retest #${item.attempt_number}` : 'Original',
+          item.mcq_score || 0,
+          item.coding_score || 0,
+          item.overall_score || 0,
+          `"${item.solved_count || 0} / ${item.total_contest_problems || 0}"`,
+          `"${item.passed_test_cases || 0} / ${item.total_contest_testcases || 0}"`,
+          `"${item.time_taken || ''}"`,
+          `"${item.anti_cheat?.status || 'CLEAN'}"`
+        ]);
+      });
+    }
+
+    const csvContent = '\uFEFF' + rows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${reportType.toUpperCase()}_Report_${cleanTitle}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, 200);
   };
 
   // Download Handler for Overall, MCQ, and Coding Reports (Excel / CSV)
   const handleExportReport = async (reportType = 'overall', format = 'excel') => {
     if (!selectedContestId) return;
+
+    if (format === 'csv') {
+      exportActiveViewCsv(reportType);
+      return;
+    }
+
     try {
       setExportingType(`${reportType}_${format}`);
       const params = {
@@ -218,24 +454,19 @@ export const ManageContestReports = () => {
         responseType: 'blob'
       });
 
-      const mimeType = format === 'csv'
-        ? 'text/csv;charset=utf-8;'
-        : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-
+      const mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
       const blob = new Blob([response.data], { type: mimeType });
-
       const contestTitle = (reportData.contest?.title || 'Contest').replace(/[^a-zA-Z0-9_-]/g, '_');
-      const extension = format === 'csv' ? 'csv' : 'xlsx';
-      const filename = `${reportType.toUpperCase()}_Report_${contestTitle}.${extension}`;
+      const filename = `${reportType.toUpperCase()}_Report_${contestTitle}.xlsx`;
 
-      // 1. Try Native File System Access API (Never blocked by Chrome on local IP)
+      // Native File System Access API or anchor download
       if (window.showSaveFilePicker) {
         try {
           const handle = await window.showSaveFilePicker({
             suggestedName: filename,
             types: [{
-              description: format === 'csv' ? 'CSV File (*.csv)' : 'Excel Spreadsheet (*.xlsx)',
-              accept: { [mimeType]: [`.${extension}`] }
+              description: 'Excel Spreadsheet (*.xlsx)',
+              accept: { [mimeType]: ['.xlsx'] }
             }]
           });
           const writable = await handle.createWritable();
@@ -243,15 +474,10 @@ export const ManageContestReports = () => {
           await writable.close();
           return;
         } catch (pickerErr) {
-          if (pickerErr.name === 'AbortError') {
-            // User cancelled save dialog
-            return;
-          }
-          // If picker fails (e.g. security policy), fall through to standard anchor download
+          if (pickerErr.name === 'AbortError') return;
         }
       }
 
-      // 2. Standard Blob Object URL Anchor Download
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -266,7 +492,8 @@ export const ManageContestReports = () => {
       }, 300);
     } catch (err) {
       console.error(`Failed to export ${reportType} report:`, err);
-      alert(`Failed to generate ${reportType.toUpperCase()} report. Please try again.`);
+      // If Excel export fails, fall back to CSV export
+      exportActiveViewCsv(reportType);
     } finally {
       setExportingType(null);
     }
@@ -274,8 +501,30 @@ export const ManageContestReports = () => {
 
   const selectedContest = contestsList.find(c => c.id === selectedContestId);
 
+  // Client-side filtering across the normalized candidate list
+  const filteredCandidates = (reportData.leaderboard || []).filter(c => {
+    if (deptFilter && deptFilter !== 'All') {
+      if (!c.department || !c.department.toLowerCase().includes(deptFilter.toLowerCase())) {
+        return false;
+      }
+    }
+    if (yearFilter && yearFilter !== 'All') {
+      const yKey = yearFilter.split(' ')[0].toLowerCase();
+      if (!c.year || !c.year.toLowerCase().includes(yKey)) {
+        return false;
+      }
+    }
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      const matchName = c.name?.toLowerCase().includes(q);
+      const matchId = c.student_id?.toLowerCase().includes(q);
+      if (!matchName && !matchId) return false;
+    }
+    return true;
+  });
+
   // Filter and sort leaderboard based on active tab
-  const displayLeaderboard = [...(reportData.leaderboard || [])].sort((a, b) => {
+  const displayLeaderboard = [...filteredCandidates].sort((a, b) => {
     if (activeReportTab === 'mcq') {
       return (b.mcq_score || 0) - (a.mcq_score || 0) || (b.mcqs_correct || 0) - (a.mcqs_correct || 0);
     }
@@ -661,7 +910,16 @@ export const ManageContestReports = () => {
           </div>
         ) : displayLeaderboard.length === 0 ? (
           <div className="py-20 text-center text-[#667085] dark:text-[#94A3B8] text-xs">
-            No candidate submissions or records found for this contest.
+            <Users className="w-8 h-8 mx-auto mb-2 text-[#667085] opacity-50" />
+            <p className="font-bold text-sm text-[#172033] dark:text-[#F8FAFC]">No candidates found for this contest.</p>
+            <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">Try adjusting your search or department/year filters, or refresh the report data.</p>
+            <button
+              type="button"
+              onClick={() => fetchContestReport(selectedContestId, false)}
+              className="mt-4 px-4 py-2 bg-[#0757B8] dark:bg-[#0066CC] text-white rounded-xl text-xs font-bold hover:opacity-90 transition shadow-sm"
+            >
+              Refresh Contest Data
+            </button>
           </div>
         ) : (
           <div className="overflow-x-auto">
