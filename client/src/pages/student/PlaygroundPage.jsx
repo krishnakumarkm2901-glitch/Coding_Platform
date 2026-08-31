@@ -13,21 +13,24 @@ import {
   ShieldAlert
 } from 'lucide-react';
 import { MonacoCodeEditor } from '../../components/editor/MonacoCodeEditor';
+import { DEFAULT_STARTER_CODE } from '../../utils/starterCode';
 
 const STARTER_CODE = {
+  python: `print("Hello, Playground!")`,
   c: `#include <stdio.h>\n\nint main() {\n    printf("Hello, Playground!\\n");\n    return 0;\n}`,
   cpp: `#include <iostream>\n\nint main() {\n    std::cout << "Hello, Playground!" << std::endl;\n    return 0;\n}`,
   java: `public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello, Playground!");\n    }\n}`,
-  python: `print("Hello, Playground!")`,
+  javascript: `console.log("Hello, Playground!");`,
   go: `package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, Playground!")\n}`,
   rust: `fn main() {\n    println!("Hello, Playground!");\n}`
 };
 
 const LANG_LABELS = {
+  python: 'Python',
   c: 'C',
   cpp: 'C++',
   java: 'Java',
-  python: 'Python',
+  javascript: 'JavaScript',
   go: 'Go',
   rust: 'Rust'
 };

@@ -113,7 +113,7 @@ class CompilerWorkerPool:
             exec_time = res.get("execution_time", 0)
             max_time_ms = max(max_time_ms, exec_time)
 
-            is_correct = bool(out == expected and not err and res.get("success", False))
+            is_correct = bool((out == expected or out.lower() == expected.lower()) and not err and res.get("success", False))
 
             if is_correct:
                 status = "Passed"

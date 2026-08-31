@@ -44,10 +44,15 @@ def _missing(language, executable, env_name):
 
 def _run(command, cwd, stdin_input, timeout):
     environment = os.environ.copy()
-    # Keep Go's build cache inside the disposable execution directory. This
-    # works for restricted service accounts and is removed with the run.
-    environment["GOCACHE"] = os.path.join(cwd, ".go-build-cache")
-    # Rust's GNU target invokes gcc by name, so expose the configured local
+    # Use persistent Go build cache so repeated runs do not recompile standard libraries
+    gocache_dir = os.path.join(tempfile.gettempdir(), "campus_coder_gocache")
+    try:
+        os.makedirs(gocache_dir, exist_ok=True)
+        environment["GOCACHE"] = gocache_dir
+    except Exception:
+        environment["GOCACHE"] = os.path.join(cwd, ".go-build-cache")
+
+    # Rust's GNU target and C/C++ invoke gcc by name, so expose the configured local
     # MinGW directory to child processes without changing the machine PATH.
     gcc = _tool("GCC_PATH", "gcc")
     if gcc:

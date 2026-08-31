@@ -210,7 +210,7 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
         
         # Compare actual output with expected output
         actual_output = normalize_output(res["output"])
-        if actual_output == expected_output:
+        if actual_output == expected_output or actual_output.lower() == expected_output.lower():
             passed_test_cases += 1
         else:
             final_status = "Wrong Answer"

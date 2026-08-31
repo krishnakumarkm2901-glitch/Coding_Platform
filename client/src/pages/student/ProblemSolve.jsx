@@ -17,6 +17,7 @@ import { MonacoCodeEditor } from '../../components/editor/MonacoCodeEditor';
 import { OutputPanel } from '../../components/editor/OutputPanel';
 import { DifficultyBadge, TopicTag } from '../../components/common/Badge';
 import { PageLoader } from '../../components/common/Loader';
+import { DEFAULT_STARTER_CODE } from '../../utils/starterCode';
 
 export const ProblemSolve = () => {
   const { id } = useParams();
@@ -28,6 +29,7 @@ export const ProblemSolve = () => {
   const [language, setLanguage] = useState('python');
   const [code, setCode] = useState('');
   const [customInput, setCustomInput] = useState('');
+  const [selectedCaseIndex, setSelectedCaseIndex] = useState(0);
 
   // Execution states
   const [activeTab, setActiveTab] = useState('testcases');
@@ -56,13 +58,24 @@ export const ProblemSolve = () => {
       const res = await api.get(`/problems/${id}`);
       if (res.data.success) {
         const prob = res.data.problem;
+        
+        let sampleCases = prob.sample_test_cases || [];
+        if (sampleCases.length === 0 && (prob.sample_input || prob.sample_output)) {
+          sampleCases = [{
+            input: prob.sample_input || '',
+            expected_output: prob.sample_output || '',
+            explanation: ''
+          }];
+          prob.sample_test_cases = sampleCases;
+        }
+
         setProblem(prob);
         
-        if (prob.starter_code && prob.starter_code[language]) {
-          setCode(prob.starter_code[language]);
-        }
-        if (prob.sample_test_cases && prob.sample_test_cases.length > 0) {
-          setCustomInput(prob.sample_test_cases[0].input || '');
+        const initialCode = prob.starter_code?.[language] || DEFAULT_STARTER_CODE[language] || '';
+        setCode(initialCode);
+
+        if (sampleCases.length > 0) {
+          setCustomInput(sampleCases[0].input !== undefined ? sampleCases[0].input : '');
         }
       }
     } catch (err) {
@@ -74,24 +87,50 @@ export const ProblemSolve = () => {
 
   const handleLanguageChange = (newLang) => {
     setLanguage(newLang);
-    if (problem?.starter_code && problem.starter_code[newLang]) {
-      setCode(problem.starter_code[newLang]);
-    }
+    const newCode = problem?.starter_code?.[newLang] || DEFAULT_STARTER_CODE[newLang] || '';
+    setCode(newCode);
   };
 
   const handleResetCode = () => {
-    if (problem?.starter_code && problem.starter_code[language]) {
-      setCode(problem.starter_code[language]);
-    }
+    const resetCode = problem?.starter_code?.[language] || DEFAULT_STARTER_CODE[language] || '';
+    setCode(resetCode);
   };
 
   const handleRunCode = async () => {
+    if (!code.trim()) {
+      setRunResult({
+        status: 'Error',
+        error: 'Code cannot be empty. Please write your solution before running.',
+        output: '',
+        execution_time: 0,
+        input: '',
+      });
+      setActiveTab('result');
+      return;
+    }
+
     try {
       setIsRunning(true);
       setSubmitResult(null);
       setActiveTab('result');
       
-      const inputToUse = customInput || (problem?.sample_test_cases?.[0]?.input) || '';
+      let inputToUse = '';
+      let expectedOutputToUse = '';
+      
+      if (activeTab === 'custom') {
+        inputToUse = customInput;
+      } else {
+        const cases = problem?.sample_test_cases || [];
+        const activeCase = cases[selectedCaseIndex] || cases[0];
+        if (activeCase) {
+          inputToUse = activeCase.input !== undefined && activeCase.input !== null ? activeCase.input : '';
+          expectedOutputToUse = activeCase.expected_output || '';
+        } else {
+          inputToUse = customInput || problem?.sample_input || '';
+          expectedOutputToUse = problem?.sample_output || '';
+        }
+      }
+
       const res = await api.post('/submissions/run', {
         language,
         code,
@@ -99,7 +138,11 @@ export const ProblemSolve = () => {
       });
 
       if (res.data.success) {
-        setRunResult(res.data);
+        setRunResult({
+          ...res.data,
+          input: inputToUse,
+          expected_output: expectedOutputToUse,
+        });
       }
     } catch (err) {
       setRunResult({
@@ -107,6 +150,7 @@ export const ProblemSolve = () => {
         error: err.response?.data?.error || 'Failed to connect to execution engine.',
         output: '',
         execution_time: 0,
+        input: customInput,
       });
     } finally {
       setIsRunning(false);
@@ -114,6 +158,18 @@ export const ProblemSolve = () => {
   };
 
   const handleSubmitSolution = async () => {
+    if (!code.trim()) {
+      setSubmitResult({
+        status: 'Submission Failed',
+        error_message: 'Code cannot be empty.',
+        passed_test_cases: 0,
+        total_test_cases: 0,
+        runtime: 0,
+      });
+      setActiveTab('result');
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       setRunResult(null);
@@ -198,6 +254,8 @@ export const ProblemSolve = () => {
     );
   }
 
+  const supportedLangs = problem.supported_languages || ['python', 'c', 'cpp', 'java', 'javascript', 'go', 'rust'];
+
   return (
     <div className="space-y-4 animate-fadeIn">
       {/* Top Header / Back Navigation */}
@@ -216,8 +274,8 @@ export const ProblemSolve = () => {
             </div>
             <div className="flex items-center gap-3 text-xs text-[#667085] dark:text-[#94A3B8] mt-0.5">
               <TopicTag topic={problem.topic} />
-              <span>Time Limit: {problem.time_limit}s</span>
-              <span>Memory: {problem.memory_limit}MB</span>
+              <span>Time Limit: {problem.time_limit || 2}s</span>
+              <span>Memory: {problem.memory_limit || 128}MB</span>
             </div>
           </div>
         </div>
@@ -228,11 +286,11 @@ export const ProblemSolve = () => {
           <select
             value={language}
             onChange={(e) => handleLanguageChange(e.target.value)}
-            className="py-1.5 px-3 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] text-xs font-bold uppercase tracking-wide focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC] transition shadow-sm"
+            className="py-1.5 px-3 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] text-xs font-bold uppercase tracking-wide focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC] transition shadow-sm cursor-pointer"
           >
-            {problem.supported_languages?.map((lang) => (
+            {supportedLangs.map((lang) => (
               <option key={lang} value={lang}>
-                {lang === 'cpp' ? 'C++' : lang.toUpperCase()}
+                {lang === 'cpp' ? 'C++' : lang === 'javascript' ? 'JavaScript' : lang.toUpperCase()}
               </option>
             ))}
           </select>
@@ -327,24 +385,26 @@ export const ProblemSolve = () => {
           <div className="flex items-center justify-between p-3 rounded-2xl bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] shadow-sm">
             <div className="flex items-center gap-2">
               <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-medium hidden sm:inline">
-                Execution Engine: <strong className="text-[#22B573] font-semibold">Active</strong>
+                Execution Engine: <strong className="text-[#22B573] font-semibold">Active (Local)</strong>
               </span>
             </div>
 
             <div className="flex items-center gap-3">
               <button
+                type="button"
                 onClick={handleRunCode}
                 disabled={isRunning || isSubmitting}
-                className="px-4 py-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#172033] dark:text-[#F8FAFC] border border-[#D9E0E8] dark:border-[#30363D] text-xs font-bold flex items-center gap-2 transition disabled:opacity-50"
+                className="px-4 py-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#172033] dark:text-[#F8FAFC] border border-[#D9E0E8] dark:border-[#30363D] text-xs font-bold flex items-center gap-2 transition disabled:opacity-50 cursor-pointer"
               >
                 <Play className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA] fill-current" />
                 <span>{isRunning ? 'Running...' : 'Run Code'}</span>
               </button>
 
               <button
+                type="button"
                 onClick={handleSubmitSolution}
                 disabled={isRunning || isSubmitting}
-                className="px-5 py-2.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white text-xs font-bold flex items-center gap-2 shadow-md shadow-emerald-500/20 transition disabled:opacity-50"
+                className="px-5 py-2.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white text-xs font-bold flex items-center gap-2 shadow-md shadow-emerald-500/20 transition disabled:opacity-50 cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>{isSubmitting ? 'Evaluating...' : 'Submit Solution'}</span>
@@ -353,10 +413,12 @@ export const ProblemSolve = () => {
           </div>
 
           {/* Output & Testcase Results Panel */}
-          <div className="min-h-[220px]" ref={outputPanelRef}>
+          <div className="min-h-[240px]" ref={outputPanelRef}>
             <OutputPanel
               activeTab={activeTab}
               setActiveTab={setActiveTab}
+              selectedCaseIndex={selectedCaseIndex}
+              setSelectedCaseIndex={setSelectedCaseIndex}
               customInput={customInput}
               setCustomInput={setCustomInput}
               sampleTestCases={problem.sample_test_cases || []}

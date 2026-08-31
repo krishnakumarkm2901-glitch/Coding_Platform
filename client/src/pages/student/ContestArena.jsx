@@ -28,6 +28,7 @@ import { Modal } from '../../components/common/Modal';
 import { PageLoader } from '../../components/common/Loader';
 import { ScientificCalculator } from '../../components/common/ScientificCalculator';
 import { formatISTDateTime as formatDateTime } from '../../utils/date';
+import { DEFAULT_STARTER_CODE } from '../../utils/starterCode';
 
 export const ContestArena = () => {
   const { id } = useParams();
@@ -514,7 +515,7 @@ export const ContestArena = () => {
 
     setSelectedProblemIdx(idx);
     const newProb = contest.problems[idx];
-    const saved = codeSolutions[newProb.id]?.[currentLanguage] || newProb.starter_code?.[currentLanguage] || '';
+    const saved = codeSolutions[newProb.id]?.[currentLanguage] || newProb.starter_code?.[currentLanguage] || DEFAULT_STARTER_CODE[currentLanguage] || '';
     setCurrentCode(saved);
     setRunResult(null);
   };
@@ -532,7 +533,7 @@ export const ContestArena = () => {
     }));
 
     setCurrentLanguage(newLang);
-    const savedCode = codeSolutions[currentProblem.id]?.[newLang] || currentProblem.starter_code?.[newLang] || '';
+    const savedCode = codeSolutions[currentProblem.id]?.[newLang] || currentProblem.starter_code?.[newLang] || DEFAULT_STARTER_CODE[newLang] || '';
     setCurrentCode(savedCode);
     setRunResult(null);
   };
@@ -540,6 +541,18 @@ export const ContestArena = () => {
   const handleRunCurrentCode = async () => {
     const currentProblem = contest?.problems?.[selectedProblemIdx];
     if (!currentProblem) return;
+
+    if (!currentCode.trim()) {
+      setRunResult({
+        status: 'Error',
+        output: '',
+        error: 'Code cannot be empty. Please write your solution before running.',
+        execution_time: 0,
+        input: '',
+      });
+      setActiveOutputTab('result');
+      return;
+    }
 
     try {
       setIsRunning(true);
@@ -551,13 +564,19 @@ export const ContestArena = () => {
         custom_input: inputToUse,
       });
       if (res.data.success) {
-        setRunResult(res.data);
+        setRunResult({
+          ...res.data,
+          input: inputToUse,
+          expected_output: currentProblem.sample_output || '',
+        });
       }
     } catch (err) {
       setRunResult({
         status: 'Runtime Error',
         output: '',
-        stderr: err.response?.data?.error || 'Execution service failed.',
+        error: err.response?.data?.error || 'Execution service failed.',
+        execution_time: 0,
+        input: customInput || (currentProblem.sample_input || ''),
       });
     } finally {
       setIsRunning(false);
@@ -1282,19 +1301,29 @@ export const ContestArena = () => {
               <div className="flex-1 overflow-hidden relative">
                 <MonacoCodeEditor
                   language={currentLanguage}
+                  code={currentCode}
                   value={currentCode}
                   onChange={(val) => setCurrentCode(val || '')}
+                  onReset={() => {
+                    const currentProblem = contest?.problems?.[selectedProblemIdx];
+                    const resetCode = currentProblem?.starter_code?.[currentLanguage] || DEFAULT_STARTER_CODE[currentLanguage] || '';
+                    setCurrentCode(resetCode);
+                  }}
                 />
               </div>
 
               {/* Bottom Output Panel */}
-              <div className="h-44 border-t border-[#D9E0E8] dark:border-[#30363D] shrink-0 bg-[#FFFFFF] dark:bg-[#151A21]" ref={outputPanelRef}>
+              <div className="h-52 border-t border-[#D9E0E8] dark:border-[#30363D] shrink-0 bg-[#FFFFFF] dark:bg-[#151A21]" ref={outputPanelRef}>
                 <OutputPanel
                   activeTab={activeOutputTab}
+                  setActiveTab={setActiveOutputTab}
                   onTabChange={setActiveOutputTab}
+                  runResult={runResult}
                   result={runResult}
+                  isRunning={isRunning}
                   isLoading={isRunning}
                   customInput={customInput}
+                  setCustomInput={setCustomInput}
                   onCustomInputChange={setCustomInput}
                   sampleTestCases={currentProblem ? [{
                     input: currentProblem.sample_input || '',

@@ -1,18 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { 
   CheckCircle2, 
   XCircle, 
   Clock, 
   Terminal, 
+  AlertCircle,
   Code2, 
   Zap,
 } from 'lucide-react';
-import { StatusBadge } from '../common/Badge';
 
 export const OutputPanel = ({
   activeTab = 'testcases',
   setActiveTab,
   onTabChange, // fallback
+  selectedCaseIndex = 0,
+  setSelectedCaseIndex,
   customInput = '',
   setCustomInput,
   onCustomInputChange, // fallback
@@ -24,64 +26,64 @@ export const OutputPanel = ({
   isLoading = false, // fallback
   isSubmitting = false,
 }) => {
-  // Normalize params
-  const actualSetActiveTab = setActiveTab || onTabChange;
-  const actualSetCustomInput = setCustomInput || onCustomInputChange;
+  const actualSetActiveTab = setActiveTab || onTabChange || (() => {});
+  const actualSetCustomInput = setCustomInput || onCustomInputChange || (() => {});
   const actualRunResult = runResult || result;
   const actualIsRunning = isRunning || isLoading;
 
-  const [selectedCaseIndex, setSelectedCaseIndex] = useState(0);
-
-  useEffect(() => {
-    setSelectedCaseIndex(0);
-  }, [actualRunResult, submitResult]);
+  const handleSelectCase = (idx) => {
+    if (setSelectedCaseIndex) {
+      setSelectedCaseIndex(idx);
+    }
+    if (sampleTestCases[idx] && actualSetCustomInput) {
+      actualSetCustomInput(sampleTestCases[idx].input || '');
+    }
+  };
 
   return (
     <div className="flex flex-col h-full rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] overflow-hidden shadow-sm transition-colors">
       {/* Tabs Header */}
       <div className="flex items-center justify-between px-5 bg-[#F5F7FA] dark:bg-[#151A21] border-b border-[#D9E0E8] dark:border-[#30363D] text-xs">
-        <div className="flex items-center gap-3 overflow-x-auto py-3">
+        <div className="flex items-center gap-3 overflow-x-auto py-2.5">
           <button
+            type="button"
             onClick={() => actualSetActiveTab('testcases')}
-            className={`font-bold transition flex items-center gap-1.5 ${
+            className={`font-bold transition flex items-center gap-1.5 py-1 px-2 rounded-lg ${
               activeTab === 'testcases'
-                ? 'text-[#172033] dark:text-[#F8FAFC]'
+                ? 'bg-[#FFFFFF] dark:bg-[#20252C] text-[#172033] dark:text-[#F8FAFC] shadow-sm border border-[#D9E0E8] dark:border-[#30363D]'
                 : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC]'
             }`}
           >
             <CheckCircle2 className={`w-3.5 h-3.5 ${activeTab === 'testcases' ? 'text-[#22B573]' : 'text-[#667085]'}`} />
-            Testcase
+            <span>Testcase</span>
           </button>
 
-          <span className="text-[#D9E0E8] dark:text-[#30363D]">|</span>
-
           <button
+            type="button"
             onClick={() => actualSetActiveTab('custom')}
-            className={`font-bold transition flex items-center gap-1.5 ${
+            className={`font-bold transition flex items-center gap-1.5 py-1 px-2 rounded-lg ${
               activeTab === 'custom'
-                ? 'text-[#172033] dark:text-[#F8FAFC]'
+                ? 'bg-[#FFFFFF] dark:bg-[#20252C] text-[#172033] dark:text-[#F8FAFC] shadow-sm border border-[#D9E0E8] dark:border-[#30363D]'
                 : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC]'
             }`}
           >
             <Terminal className="w-3.5 h-3.5 text-[#667085] dark:text-[#94A3B8]" />
-            Custom Input
+            <span>Custom Input</span>
           </button>
 
           {(actualRunResult || submitResult) && (
-            <>
-              <span className="text-[#D9E0E8] dark:text-[#30363D]">|</span>
-              <button
-                onClick={() => actualSetActiveTab('result')}
-                className={`font-bold transition flex items-center gap-1.5 ${
-                  activeTab === 'result'
-                    ? 'text-[#172033] dark:text-[#F8FAFC]'
-                    : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC]'
-                }`}
-              >
-                <Terminal className={`w-3.5 h-3.5 ${activeTab === 'result' ? 'text-[#22B573]' : 'text-[#667085]'}`} />
-                Test Result
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => actualSetActiveTab('result')}
+              className={`font-bold transition flex items-center gap-1.5 py-1 px-2 rounded-lg ${
+                activeTab === 'result'
+                  ? 'bg-[#FFFFFF] dark:bg-[#20252C] text-[#172033] dark:text-[#F8FAFC] shadow-sm border border-[#D9E0E8] dark:border-[#30363D]'
+                  : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC]'
+              }`}
+            >
+              <Zap className={`w-3.5 h-3.5 ${activeTab === 'result' ? 'text-[#22B573]' : 'text-[#667085]'}`} />
+              <span>Test Result</span>
+            </button>
           )}
         </div>
       </div>
@@ -91,46 +93,57 @@ export const OutputPanel = ({
         {/* TAB 1: Test Cases */}
         {activeTab === 'testcases' && (
           <div className="space-y-4">
-            <div className="flex items-center gap-2 overflow-x-auto pb-1">
-              {sampleTestCases.map((_, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => setSelectedCaseIndex(idx)}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
-                    selectedCaseIndex === idx
-                      ? 'bg-[#0757B8] dark:bg-[#0066CC] text-white shadow-sm'
-                      : 'bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] border border-[#D9E0E8] dark:border-[#30363D]'
-                  }`}
-                >
-                  Case {idx + 1}
-                </button>
-              ))}
-            </div>
-
-            {sampleTestCases[selectedCaseIndex] && (
-              <div className="space-y-3 font-mono text-xs">
-                <div>
-                  <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans font-medium">Input:</div>
-                  <pre className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
-                    {sampleTestCases[selectedCaseIndex].input || '(empty)'}
-                  </pre>
+            {sampleTestCases && sampleTestCases.length > 0 ? (
+              <>
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  {sampleTestCases.map((_, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => handleSelectCase(idx)}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                        selectedCaseIndex === idx
+                          ? 'bg-[#0757B8] dark:bg-[#0066CC] text-white shadow-sm'
+                          : 'bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] border border-[#D9E0E8] dark:border-[#30363D]'
+                      }`}
+                    >
+                      Case {idx + 1}
+                    </button>
+                  ))}
                 </div>
 
-                <div>
-                  <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans font-medium">Expected Output:</div>
-                  <pre className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] overflow-x-auto whitespace-pre-wrap font-bold">
-                    {sampleTestCases[selectedCaseIndex].expected_output || '(empty)'}
-                  </pre>
-                </div>
-
-                {sampleTestCases[selectedCaseIndex].explanation && (
-                  <div>
-                    <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans font-medium">Explanation:</div>
-                    <div className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] font-sans text-xs">
-                      {sampleTestCases[selectedCaseIndex].explanation}
+                {sampleTestCases[selectedCaseIndex] && (
+                  <div className="space-y-3 font-mono text-xs">
+                    <div>
+                      <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans font-bold">Input:</div>
+                      <pre className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
+                        {sampleTestCases[selectedCaseIndex].input !== undefined && sampleTestCases[selectedCaseIndex].input !== null && sampleTestCases[selectedCaseIndex].input !== ''
+                          ? sampleTestCases[selectedCaseIndex].input
+                          : '(empty)'}
+                      </pre>
                     </div>
+
+                    <div>
+                      <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans font-bold">Expected Output:</div>
+                      <pre className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] overflow-x-auto whitespace-pre-wrap font-bold">
+                        {sampleTestCases[selectedCaseIndex].expected_output || sampleTestCases[selectedCaseIndex].output || '(empty)'}
+                      </pre>
+                    </div>
+
+                    {sampleTestCases[selectedCaseIndex].explanation && (
+                      <div>
+                        <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans font-bold">Explanation:</div>
+                        <div className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] font-sans text-xs">
+                          {sampleTestCases[selectedCaseIndex].explanation}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
+              </>
+            ) : (
+              <div className="py-8 text-center text-[#667085] dark:text-[#94A3B8] text-xs">
+                No predefined sample testcases for this problem. Use Custom Input tab to test code.
               </div>
             )}
           </div>
@@ -139,14 +152,19 @@ export const OutputPanel = ({
         {/* TAB 2: Custom Input */}
         {activeTab === 'custom' && (
           <div className="flex flex-col h-full space-y-2">
-            <label className="text-xs text-[#667085] dark:text-[#94A3B8] font-semibold">
-              Standard Input (stdin):
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-[#667085] dark:text-[#94A3B8] font-bold">
+                Standard Input (stdin):
+              </label>
+              <span className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                Runs when you click "Run Code"
+              </span>
+            </div>
             <textarea
               value={customInput}
               onChange={(e) => actualSetCustomInput(e.target.value)}
-              placeholder="Enter custom test input..."
-              rows={5}
+              placeholder="Enter custom input here..."
+              rows={4}
               className="w-full p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] font-mono text-xs focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC] transition resize-none"
             />
           </div>
@@ -155,12 +173,12 @@ export const OutputPanel = ({
         {/* TAB 3: Test Result */}
         {activeTab === 'result' && (
           <div className="space-y-4 animate-fadeIn">
-            {/* Loading States */}
+            {/* Loading / Evaluating Spinner */}
             {(actualIsRunning || isSubmitting) && (
               <div className="flex flex-col items-center justify-center py-10 space-y-3">
                 <div className="w-8 h-8 border-4 border-[#0757B8] dark:border-[#60A5FA] border-t-transparent rounded-full animate-spin"></div>
                 <div className="text-xs text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wider animate-pulse">
-                  {isSubmitting ? 'Evaluating Submission...' : 'Running Code...'}
+                  {isSubmitting ? 'Evaluating Submission Against Test Cases...' : 'Executing Code Locally...'}
                 </div>
               </div>
             )}
@@ -168,179 +186,130 @@ export const OutputPanel = ({
             {/* Verdict Display */}
             {!(actualIsRunning || isSubmitting) && (
               <>
-                {/* 1. COMPILATION ERROR CASE */}
-                {((submitResult && submitResult.status === 'Compilation Error') || (actualRunResult && actualRunResult.status === 'Compilation Error')) ? (
+                {/* 1. SUBMISSION RESULT VIEW */}
+                {submitResult && (
                   <div className="space-y-3">
-                    <div className="text-lg font-bold text-[#EF4444] flex items-center gap-2">
-                      Compilation Error
-                    </div>
-                    <pre className="p-3.5 rounded-xl bg-red-500/5 dark:bg-red-950/15 border border-red-500/20 text-[#EF4444] font-mono text-xs overflow-x-auto whitespace-pre-wrap">
-                      {submitResult?.error_message || actualRunResult?.error || 'Compilation failed.'}
-                    </pre>
-                  </div>
-                ) : (
-                  /* 2. GENERAL VERDICT (Accepted, WA, RE, TLE, etc.) */
-                  (submitResult || actualRunResult) && (
-                    <div className="space-y-4">
-                      {/* Verdict Header */}
+                    <div className="flex items-center justify-between flex-wrap gap-2">
                       <div className="flex items-center gap-3">
                         <span className={`text-xl font-extrabold tracking-tight ${
-                          (submitResult?.status === 'Accepted' || actualRunResult?.status === 'Success' || actualRunResult?.status === 'Accepted')
+                          submitResult.status === 'Accepted' ? 'text-[#22B573]' : 'text-[#EF4444]'
+                        }`}>
+                          {submitResult.status}
+                        </span>
+                        <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-bold font-mono bg-[#F5F7FA] dark:bg-[#151A21] px-2.5 py-1 rounded-lg border border-[#D9E0E8] dark:border-[#30363D]">
+                          Passed: {submitResult.passed_test_cases} / {submitResult.total_test_cases}
+                        </span>
+                      </div>
+                      <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-mono">
+                        Runtime: {submitResult.runtime || 0} ms
+                      </span>
+                    </div>
+
+                    {submitResult.status === 'Compilation Error' && (
+                      <div className="space-y-2">
+                        <div className="text-xs font-bold text-[#EF4444]">Compiler Output:</div>
+                        <pre className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-[#EF4444] font-mono text-xs overflow-x-auto whitespace-pre-wrap">
+                          {submitResult.error_message || 'Compilation failed.'}
+                        </pre>
+                      </div>
+                    )}
+
+                    {submitResult.failed_case && submitResult.status !== 'Compilation Error' && (
+                      <div className="space-y-2 pt-2 border-t border-[#D9E0E8] dark:border-[#30363D]">
+                        <div className="text-xs font-bold text-[#EF4444] flex items-center gap-1.5">
+                          <XCircle className="w-4 h-4" />
+                          <span>Failed on Test Case #{submitResult.failed_case.test_case_index || 1}</span>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 font-mono text-xs">
+                          <div>
+                            <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-semibold mb-1">Input:</div>
+                            <pre className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
+                              {submitResult.failed_case.input || '(empty)'}
+                            </pre>
+                          </div>
+                          <div>
+                            <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-semibold mb-1">Your Output:</div>
+                            <pre className="p-2.5 rounded-xl bg-red-500/5 dark:bg-red-950/20 border border-red-500/30 text-[#EF4444] overflow-x-auto whitespace-pre-wrap">
+                              {submitResult.failed_case.actual || submitResult.error_message || '(No output)'}
+                            </pre>
+                          </div>
+                          {submitResult.failed_case.expected && (
+                            <div>
+                              <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-semibold mb-1">Expected Output:</div>
+                              <pre className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] font-bold overflow-x-auto whitespace-pre-wrap">
+                                {submitResult.failed_case.expected}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 2. RUN RESULT VIEW */}
+                {!submitResult && actualRunResult && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-3">
+                        <span className={`text-xl font-extrabold tracking-tight ${
+                          (actualRunResult.status === 'OK' || actualRunResult.status === 'Success' || actualRunResult.status === 'Accepted')
                             ? 'text-[#22B573]'
                             : 'text-[#EF4444]'
                         }`}>
-                          {submitResult ? submitResult.status : (actualRunResult.status === 'Success' ? 'Accepted' : actualRunResult.status)}
-                        </span>
-                        <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-medium font-mono bg-[#F5F7FA] dark:bg-[#151A21] px-2 py-1 rounded-md border border-[#D9E0E8] dark:border-[#30363D]">
-                          Runtime: {submitResult ? submitResult.runtime : actualRunResult.execution_time} ms
+                          {actualRunResult.status === 'OK' ? 'Executed Successfully' : actualRunResult.status}
                         </span>
                       </div>
-
-                      {/* Case Selection Buttons */}
-                      {(() => {
-                        // Build cases to show
-                        const casesToShow = actualRunResult 
-                          ? [{
-                              input: customInput || (sampleTestCases[0]?.input) || '',
-                              expected_output: sampleTestCases[0]?.expected_output || '',
-                              is_custom: true
-                            }]
-                          : [...sampleTestCases];
-                        
-                        if (submitResult && submitResult.failed_case) {
-                          const failedIdx = submitResult.failed_case.test_case_index;
-                          if (failedIdx > sampleTestCases.length) {
-                            casesToShow.push({
-                              input: submitResult.failed_case.input || '(Hidden Test Case)',
-                              expected_output: submitResult.failed_case.expected || '(Hidden)',
-                              is_hidden: true,
-                              test_case_index: failedIdx
-                            });
-                          }
-                        }
-
-                        if (casesToShow.length === 0) return null;
-
-                        const selectedCase = casesToShow[selectedCaseIndex] || casesToShow[0];
-                        
-                        // Helper to get status of each case
-                        const getCaseStatus = (idx, item) => {
-                          if (submitResult) {
-                            if (submitResult.status === 'Accepted') return 'passed';
-                            if (submitResult.failed_case) {
-                              const failedIdx = submitResult.failed_case.test_case_index;
-                              const currentIdx = item.is_hidden ? item.test_case_index : (idx + 1);
-                              if (currentIdx < failedIdx) return 'passed';
-                              if (currentIdx === failedIdx) return 'failed';
-                              return 'skipped';
-                            }
-                          }
-                          if (actualRunResult) {
-                            const isSuccess = actualRunResult.status === 'Success' || actualRunResult.status === 'Accepted';
-                            return isSuccess ? 'passed' : 'failed';
-                          }
-                          return 'skipped';
-                        };
-
-                        // Helper to extract case values
-                        const getCaseValues = () => {
-                          if (!selectedCase) return { input: '', expected: '', actual: '', isError: false };
-                          
-                          const status = getCaseStatus(selectedCaseIndex, selectedCase);
-                          let inputVal = selectedCase.input;
-                          let expectedVal = selectedCase.expected_output;
-                          let actualVal = '';
-                          let isErr = false;
-
-                          if (submitResult) {
-                            if (status === 'passed') {
-                              actualVal = selectedCase.expected_output;
-                            } else if (status === 'failed') {
-                              actualVal = submitResult.failed_case?.actual || submitResult.error_message || 'Execution error';
-                              isErr = true;
-                            } else {
-                              actualVal = '(Not executed)';
-                            }
-                          } else if (actualRunResult) {
-                            actualVal = actualRunResult.output || '';
-                            if (actualRunResult.error) {
-                              actualVal = actualRunResult.error;
-                              isErr = true;
-                            }
-                          }
-
-                          return { input: inputVal, expected: expectedVal, actual: actualVal, isError: isErr };
-                        };
-
-                        const { input, expected, actual, isError } = getCaseValues();
-
-                        return (
-                          <div className="space-y-4">
-                            {/* Case Tabs Row */}
-                            <div className="flex items-center gap-2 overflow-x-auto pb-1.5 border-b border-[#D9E0E8] dark:border-[#30363D]">
-                              {casesToShow.map((item, idx) => {
-                                const status = getCaseStatus(idx, item);
-                                const isActive = selectedCaseIndex === idx;
-                                return (
-                                  <button
-                                    key={idx}
-                                    onClick={() => setSelectedCaseIndex(idx)}
-                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border ${
-                                      isActive
-                                        ? 'bg-[#F5F7FA] dark:bg-[#151A21] text-[#172033] dark:text-[#F8FAFC] border-[#D9E0E8] dark:border-[#30363D] shadow-sm'
-                                        : 'bg-transparent text-[#667085] dark:text-[#94A3B8] border-transparent hover:text-[#172033] dark:hover:text-[#F8FAFC]'
-                                    }`}
-                                  >
-                                    {status === 'passed' && (
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-[#22B573]" />
-                                    )}
-                                    {status === 'failed' && (
-                                      <XCircle className="w-3.5 h-3.5 text-[#EF4444]" />
-                                    )}
-                                    {status === 'skipped' && (
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-[#667085]" />
-                                    )}
-                                    <span>{item.is_hidden ? `Hidden Case` : `Case ${idx + 1}`}</span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-
-                            {/* Case Execution Details */}
-                            <div className="space-y-3 font-mono text-xs">
-                              {/* 1. INPUT */}
-                              <div className="space-y-1">
-                                <div className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] font-sans">Input</div>
-                                <pre className="p-3.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
-                                  {input || '(empty)'}
-                                </pre>
-                              </div>
-
-                              {/* 2. OUTPUT */}
-                              <div className="space-y-1">
-                                <div className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] font-sans">Output</div>
-                                <pre className={`p-3.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] overflow-x-auto whitespace-pre-wrap ${
-                                  isError ? 'text-[#EF4444] bg-[#EF4444]/5' : 'text-[#172033] dark:text-[#F8FAFC]'
-                                }`}>
-                                  {actual || '(No output)'}
-                                </pre>
-                              </div>
-
-                              {/* 3. EXPECTED OUTPUT */}
-                              {expected && (
-                                <div className="space-y-1">
-                                  <div className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] font-sans">Expected Output</div>
-                                  <pre className="p-3.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] overflow-x-auto whitespace-pre-wrap font-bold">
-                                    {expected}
-                                  </pre>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-mono bg-[#F5F7FA] dark:bg-[#151A21] px-2.5 py-1 rounded-lg border border-[#D9E0E8] dark:border-[#30363D]">
+                        Runtime: {actualRunResult.execution_time || 0} ms
+                      </span>
                     </div>
-                  )
+
+                    {actualRunResult.status === 'Compilation Error' ? (
+                      <div className="space-y-2">
+                        <div className="text-xs font-bold text-[#EF4444]">Compiler Error:</div>
+                        <pre className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-[#EF4444] font-mono text-xs overflow-x-auto whitespace-pre-wrap">
+                          {actualRunResult.error || actualRunResult.stderr || 'Compilation failed.'}
+                        </pre>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 font-mono text-xs">
+                        {/* INPUT */}
+                        <div>
+                          <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Input:</div>
+                          <pre className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
+                            {actualRunResult.input !== undefined && actualRunResult.input !== null && actualRunResult.input !== ''
+                              ? actualRunResult.input
+                              : '(empty)'}
+                          </pre>
+                        </div>
+
+                        {/* OUTPUT */}
+                        <div>
+                          <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">
+                            {actualRunResult.status === 'Runtime Error' ? 'Runtime Error Message:' : 'Output:'}
+                          </div>
+                          <pre className={`p-3 rounded-xl border overflow-x-auto whitespace-pre-wrap ${
+                            actualRunResult.status === 'Runtime Error' || actualRunResult.status === 'Error'
+                              ? 'bg-red-500/10 border-red-500/30 text-[#EF4444]'
+                              : 'bg-[#F5F7FA] dark:bg-[#151A21] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
+                          }`}>
+                            {actualRunResult.error || actualRunResult.output || '(No output)'}
+                          </pre>
+                        </div>
+
+                        {/* EXPECTED OUTPUT (if available) */}
+                        {actualRunResult.expected_output && (
+                          <div>
+                            <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Expected Output:</div>
+                            <pre className="p-3 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] font-bold overflow-x-auto whitespace-pre-wrap">
+                              {actualRunResult.expected_output}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </>
             )}
@@ -350,4 +319,3 @@ export const OutputPanel = ({
     </div>
   );
 };
-
