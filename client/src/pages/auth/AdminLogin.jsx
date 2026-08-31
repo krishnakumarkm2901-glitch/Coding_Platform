@@ -16,17 +16,60 @@ export const AdminLogin = () => {
     ? location.state.from.pathname 
     : '/admin/dashboard';
 
+  const formatErrorMessage = (err) => {
+    if (!err) return 'Admin login failed. Please try again.';
+    
+    // Check for Axios / network timeout
+    const isTimeout = err.code === 'ECONNABORTED' || (err.message && err.message.toLowerCase().includes('timeout'));
+    if (isTimeout) {
+      return 'Server is taking too long to respond. Please try again.';
+    }
+
+    // Check for network disconnect / CORS / unreachable server
+    if (!err.response) {
+      return 'Unable to connect to the server. Please verify your connection.';
+    }
+
+    const status = err.response.status;
+    const serverError = err.response.data?.error;
+
+    if (status === 401) {
+      return 'Invalid username or password.';
+    }
+    if (status === 403) {
+      return 'You are not authorized to access the admin portal.';
+    }
+    if (status === 429) {
+      return 'Too many login attempts. Please wait a moment before trying again.';
+    }
+    if (status >= 500) {
+      return 'Server error. Please try again shortly.';
+    }
+
+    return serverError || 'Admin login failed. Please try again.';
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (loading) return; // Prevent double submission
+
+    const cleanIdentifier = identifier.trim();
+    const cleanPassword = password.trim();
+
+    if (!cleanIdentifier || !cleanPassword) {
+      setError('Please enter both username and password.');
+      return;
+    }
+
     setError('');
     setLoading(true);
 
     try {
-      await loginAdmin(identifier, password);
+      await loginAdmin(cleanIdentifier, cleanPassword);
       // Navigate to intended admin page or admin dashboard with replace: true
       navigate(from, { replace: true });
     } catch (err) {
-      setError(err.response?.data?.error || err.message || 'Admin login failed.');
+      setError(formatErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -112,7 +155,10 @@ export const AdminLogin = () => {
               className="w-full py-3.5 px-4 rounded-2xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition disabled:opacity-50 group"
             >
               {loading ? (
-                <span>Verifying Access...</span>
+                <div className="flex items-center gap-2">
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                  <span>Signing in...</span>
+                </div>
               ) : (
                 <>
                   <span>Sign In as Admin</span>

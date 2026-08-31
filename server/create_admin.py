@@ -11,16 +11,15 @@ from dotenv import load_dotenv
 load_dotenv()
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from config import Config
 from pymongo import MongoClient
 from utils.security import hash_password
 
-# Accept URI from command line or env
-mongo_uri = sys.argv[1] if len(sys.argv) > 1 else os.getenv("MONGO_URI")
+# Accept URI from command line or env or Config
+mongo_uri = sys.argv[1] if len(sys.argv) > 1 else os.getenv("MONGO_URI", Config.MONGO_URI)
 
 if not mongo_uri:
-    print("ERROR: Provide your MongoDB Atlas URI as an argument:")
-    print('  python create_admin.py "mongodb+srv://user:pass@cluster.mongodb.net/dbname"')
-    sys.exit(1)
+    mongo_uri = "mongodb://localhost:27017/college_coding_db"
 
 print(f"Connecting to: {mongo_uri[:30]}...")
 

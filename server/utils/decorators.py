@@ -21,22 +21,36 @@ def _get_cached_user(user_id_str):
     if db is None:
         return None
 
-    query_list = [{"id": str(user_id_str)}, {"student_id": str(user_id_str)}, {"email": str(user_id_str).lower()}]
-    if ObjectId.is_valid(str(user_id_str)):
-        query_list.insert(0, {"_id": ObjectId(str(user_id_str))})
-    else:
-        query_list.insert(0, {"_id": str(user_id_str)})
-
     try:
-        user = db.users.find_one({"$or": query_list})
+        if ObjectId.is_valid(str(user_id_str)):
+            user = db.users.find_one({"_id": ObjectId(str(user_id_str))})
+        else:
+            user = db.users.find_one({"$or": [
+                {"_id": str(user_id_str)},
+                {"id": str(user_id_str)},
+                {"student_id": str(user_id_str)},
+                {"email": str(user_id_str).lower()}
+            ]})
+
         if not user:
             return None
-        user["_id"] = str(user.get("_id") or user.get("id"))
-        user.pop("password", None)
+
+        clean_user = {
+            "_id": str(user.get("_id") or user.get("id")),
+            "id": str(user.get("_id") or user.get("id")),
+            "role": user.get("role", "STUDENT"),
+            "student_id": user.get("student_id", ""),
+            "email": user.get("email", ""),
+            "username": user.get("username", ""),
+            "name": user.get("name", "User"),
+            "department": user.get("department", ""),
+            "year": user.get("year", ""),
+            "status": user.get("status", "active")
+        }
         
         # Cache active user for 60 seconds
-        cache.set(cache_key, user, ttl=60)
-        return user
+        cache.set(cache_key, clean_user, ttl=60)
+        return clean_user
     except Exception as e:
         logger.warning(f"Error looking up user in database: {e}")
         return None

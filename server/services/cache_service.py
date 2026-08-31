@@ -97,8 +97,8 @@ class CacheService:
             try:
                 client = redis.from_url(
                     redis_url,
-                    socket_timeout=1.0,
-                    socket_connect_timeout=1.0,
+                    socket_timeout=0.2,
+                    socket_connect_timeout=0.2,
                     decode_responses=True
                 )
                 client.ping()

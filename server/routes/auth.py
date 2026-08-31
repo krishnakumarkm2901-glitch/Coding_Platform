@@ -90,14 +90,26 @@ def admin_login():
     if not login_id or not password:
         return jsonify({"error": "Email/Username and password are required", "success": False}), 400
 
-    db = get_db()
-    user = db.users.find_one({
-        "$or": [
-            {"email": login_id},
-            {"username": login_id}
-        ],
-        "role": "ADMIN"
-    })
+    try:
+        db = get_db()
+        if db is None:
+            raise RuntimeError("Database connection not available")
+        
+        # High-speed indexed query
+        if "@" in login_id:
+            user = db.users.find_one({"email": login_id, "role": "ADMIN"})
+            if not user:
+                user = db.users.find_one({"$or": [{"email": login_id}, {"username": login_id}], "role": "ADMIN"})
+        else:
+            user = db.users.find_one({"username": login_id, "role": "ADMIN"})
+            if not user:
+                user = db.users.find_one({"$or": [{"email": login_id}, {"username": login_id}], "role": "ADMIN"})
+    except Exception:
+        logger.exception("Admin login database lookup failed")
+        return jsonify({
+            "error": "Login service is temporarily unavailable. Please try again.",
+            "success": False
+        }), 503
 
     if not user:
         return jsonify({"error": "Invalid admin credentials", "success": False}), 401
@@ -110,10 +122,14 @@ def admin_login():
 
     token = generate_token(user)
 
-    db.users.update_one(
-        {"_id": user["_id"]},
-        {"$set": {"last_login": datetime.now(timezone.utc)}}
-    )
+    # Non-blocking last_login audit update
+    try:
+        db.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"last_login": datetime.now(timezone.utc)}}
+        )
+    except Exception:
+        logger.exception("Could not update last_login for admin %s", login_id)
 
     user_info = {
         "id": str(user["_id"]),

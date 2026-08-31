@@ -6,12 +6,15 @@ logger = logging.getLogger(__name__)
 
 client = None
 db = None
+_indexes_initialized = False
 
 def init_db(app=None):
-    global client, db
+    global client, db, _indexes_initialized
+    if db is not None:
+        return db
     try:
         uri = Config.MONGO_URI
-        # Connect to MongoDB with production connection pooling
+        # Connect to MongoDB with production connection pooling for 3000+ users
         client = MongoClient(
             uri,
             maxPoolSize=100,
@@ -33,8 +36,10 @@ def init_db(app=None):
         client.admin.command('ping')
         logger.info(f"Connected successfully to MongoDB database: {db_name} (Pool size: min=10, max=100)")
         
-        # Ensure indexes for query performance & uniqueness
-        setup_indexes(db)
+        # Ensure indexes once on startup
+        if not _indexes_initialized:
+            setup_indexes(db)
+            _indexes_initialized = True
         return db
     except Exception as e:
         logger.warning(f"MongoDB connection warning: {e}. If MongoDB is not running locally, make sure to set MONGO_URI in .env")
@@ -43,21 +48,25 @@ def init_db(app=None):
         return db
 
 def setup_indexes(database):
-    """Setup high-performance single and compound indexes for high concurrency (1,000+ users)."""
+    """Setup high-performance single and compound indexes for high concurrency (3,000+ users)."""
     try:
-        # Users indexes
-        database.users.create_index([("student_id", ASCENDING)], unique=True, sparse=True)
-        database.users.create_index([("email", ASCENDING)], unique=True, sparse=True)
-        database.users.create_index([("role", ASCENDING)])
+        # Users indexes for high-speed authentication lookups (<1ms)
+        database.users.create_index([("student_id", ASCENDING)], unique=True, sparse=True, background=True)
+        database.users.create_index([("email", ASCENDING)], unique=True, sparse=True, background=True)
+        database.users.create_index([("username", ASCENDING)], unique=True, sparse=True, background=True)
+        database.users.create_index([("role", ASCENDING)], background=True)
+        database.users.create_index([("email", ASCENDING), ("role", ASCENDING)], background=True)
+        database.users.create_index([("username", ASCENDING), ("role", ASCENDING)], background=True)
+        database.users.create_index([("student_id", ASCENDING), ("role", ASCENDING)], background=True)
         
         # Problems indexes
-        database.problems.create_index([("slug", ASCENDING)], unique=True, sparse=True)
-        database.problems.create_index([("difficulty", ASCENDING)])
-        database.problems.create_index([("topic", ASCENDING)])
+        database.problems.create_index([("slug", ASCENDING)], unique=True, sparse=True, background=True)
+        database.problems.create_index([("difficulty", ASCENDING)], background=True)
+        database.problems.create_index([("topic", ASCENDING)], background=True)
         
         # Submissions indexes
-        database.submissions.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
-        database.submissions.create_index([("user_id", ASCENDING), ("problem_id", ASCENDING), ("status", ASCENDING)])
+        database.submissions.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)], background=True)
+        database.submissions.create_index([("user_id", ASCENDING), ("problem_id", ASCENDING), ("status", ASCENDING)], background=True)
         database.submissions.create_index([("problem_id", ASCENDING), ("status", ASCENDING)])
         # Queue-related indexes: fast polling for QUEUED/PROCESSING submissions
         database.submissions.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
