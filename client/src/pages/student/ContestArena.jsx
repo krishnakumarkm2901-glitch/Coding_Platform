@@ -29,6 +29,7 @@ import { PageLoader } from '../../components/common/Loader';
 import { ScientificCalculator } from '../../components/common/ScientificCalculator';
 import { formatISTDateTime as formatDateTime } from '../../utils/date';
 import { DEFAULT_STARTER_CODE } from '../../utils/starterCode';
+import { normalizeTestCases } from '../../utils/testcases';
 
 export const ContestArena = () => {
   const { id } = useParams();
@@ -548,6 +549,7 @@ export const ContestArena = () => {
         output: '',
         error: 'Code cannot be empty. Please write your solution before running.',
         execution_time: 0,
+        inputUsed: '',
         input: '',
       });
       setActiveOutputTab('result');
@@ -557,7 +559,17 @@ export const ContestArena = () => {
     try {
       setIsRunning(true);
       setActiveOutputTab('result');
-      const inputToUse = customInput || (currentProblem.sample_input || '');
+      const normalizedCases = normalizeTestCases(currentProblem);
+      let inputToUse = customInput;
+      let expectedOutputToUse = '';
+      if (activeOutputTab !== 'custom' && normalizedCases.length > 0) {
+        inputToUse = normalizedCases[0].input;
+        expectedOutputToUse = normalizedCases[0].expected_output || '';
+      } else if (!inputToUse && currentProblem.sample_input) {
+        inputToUse = currentProblem.sample_input;
+        expectedOutputToUse = currentProblem.sample_output || '';
+      }
+
       const res = await api.post('/submissions/run', {
         language: currentLanguage,
         code: currentCode,
@@ -566,8 +578,9 @@ export const ContestArena = () => {
       if (res.data.success) {
         setRunResult({
           ...res.data,
+          inputUsed: inputToUse,
           input: inputToUse,
-          expected_output: currentProblem.sample_output || '',
+          expected_output: expectedOutputToUse,
         });
       }
     } catch (err) {
@@ -576,7 +589,8 @@ export const ContestArena = () => {
         output: '',
         error: err.response?.data?.error || 'Execution service failed.',
         execution_time: 0,
-        input: customInput || (currentProblem.sample_input || ''),
+        inputUsed: customInput,
+        input: customInput,
       });
     } finally {
       setIsRunning(false);
@@ -1325,11 +1339,7 @@ export const ContestArena = () => {
                   customInput={customInput}
                   setCustomInput={setCustomInput}
                   onCustomInputChange={setCustomInput}
-                  sampleTestCases={currentProblem ? [{
-                    input: currentProblem.sample_input || '',
-                    expected_output: currentProblem.sample_output || '',
-                    explanation: ''
-                  }] : []}
+                  sampleTestCases={currentProblem ? normalizeTestCases(currentProblem) : []}
                 />
               </div>
 

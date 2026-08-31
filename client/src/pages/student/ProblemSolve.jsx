@@ -18,10 +18,12 @@ import { OutputPanel } from '../../components/editor/OutputPanel';
 import { DifficultyBadge, TopicTag } from '../../components/common/Badge';
 import { PageLoader } from '../../components/common/Loader';
 import { DEFAULT_STARTER_CODE } from '../../utils/starterCode';
+import { normalizeTestCases } from '../../utils/testcases';
 
 export const ProblemSolve = () => {
   const { id } = useParams();
   const [problem, setProblem] = useState(null);
+  const [testCases, setTestCases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -58,24 +60,19 @@ export const ProblemSolve = () => {
       const res = await api.get(`/problems/${id}`);
       if (res.data.success) {
         const prob = res.data.problem;
-        
-        let sampleCases = prob.sample_test_cases || [];
-        if (sampleCases.length === 0 && (prob.sample_input || prob.sample_output)) {
-          sampleCases = [{
-            input: prob.sample_input || '',
-            expected_output: prob.sample_output || '',
-            explanation: ''
-          }];
-          prob.sample_test_cases = sampleCases;
-        }
+        const normalized = normalizeTestCases(prob);
 
         setProblem(prob);
-        
+        setTestCases(normalized);
+        setSelectedCaseIndex(0);
+
         const initialCode = prob.starter_code?.[language] || DEFAULT_STARTER_CODE[language] || '';
         setCode(initialCode);
 
-        if (sampleCases.length > 0) {
-          setCustomInput(sampleCases[0].input !== undefined ? sampleCases[0].input : '');
+        if (normalized.length > 0) {
+          setCustomInput(normalized[0].input);
+        } else if (prob.sample_input) {
+          setCustomInput(prob.sample_input);
         }
       }
     } catch (err) {
@@ -103,6 +100,7 @@ export const ProblemSolve = () => {
         error: 'Code cannot be empty. Please write your solution before running.',
         output: '',
         execution_time: 0,
+        inputUsed: '',
         input: '',
       });
       setActiveTab('result');
@@ -120,8 +118,7 @@ export const ProblemSolve = () => {
       if (activeTab === 'custom') {
         inputToUse = customInput;
       } else {
-        const cases = problem?.sample_test_cases || [];
-        const activeCase = cases[selectedCaseIndex] || cases[0];
+        const activeCase = testCases[selectedCaseIndex] || testCases[0];
         if (activeCase) {
           inputToUse = activeCase.input !== undefined && activeCase.input !== null ? activeCase.input : '';
           expectedOutputToUse = activeCase.expected_output || '';
@@ -140,6 +137,7 @@ export const ProblemSolve = () => {
       if (res.data.success) {
         setRunResult({
           ...res.data,
+          inputUsed: inputToUse,
           input: inputToUse,
           expected_output: expectedOutputToUse,
         });
@@ -150,6 +148,7 @@ export const ProblemSolve = () => {
         error: err.response?.data?.error || 'Failed to connect to execution engine.',
         output: '',
         execution_time: 0,
+        inputUsed: customInput,
         input: customInput,
       });
     } finally {
@@ -345,22 +344,22 @@ export const ProblemSolve = () => {
           )}
 
           {/* Sample Input/Output */}
-          {(problem.sample_input || problem.sample_output) && (
+          {(problem.sample_input || problem.sample_output || (testCases.length > 0)) && (
             <div className="space-y-3 pt-4 border-t border-[#D9E0E8] dark:border-[#30363D] text-xs font-mono">
               <h4 className="font-bold text-[#172033] dark:text-[#F8FAFC] uppercase tracking-wide font-sans">Sample Case:</h4>
-              {problem.sample_input && (
+              {(problem.sample_input || testCases[0]?.input) && (
                 <div>
                   <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans">Sample Input:</div>
                   <pre className="p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
-                    {problem.sample_input}
+                    {problem.sample_input || testCases[0]?.input}
                   </pre>
                 </div>
               )}
-              {problem.sample_output && (
+              {(problem.sample_output || testCases[0]?.expected_output) && (
                 <div>
                   <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans">Sample Output:</div>
                   <pre className="p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] overflow-x-auto whitespace-pre-wrap font-bold">
-                    {problem.sample_output}
+                    {problem.sample_output || testCases[0]?.expected_output}
                   </pre>
                 </div>
               )}
@@ -421,7 +420,7 @@ export const ProblemSolve = () => {
               setSelectedCaseIndex={setSelectedCaseIndex}
               customInput={customInput}
               setCustomInput={setCustomInput}
-              sampleTestCases={problem.sample_test_cases || []}
+              sampleTestCases={testCases}
               runResult={runResult}
               submitResult={submitResult}
               isRunning={isRunning}
