@@ -109,9 +109,22 @@ Wishing you all the best! 🚀`;
 
 export const ManageContests = () => {
   const [contests, setContests] = useState([]);
-  const [allProblems, setAllProblems] = useState([]);
-  const [allMCQs, setAllMCQs] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Lazy-loaded Question & Problem Bank states (Empty on modal open)
+  const [availableProblems, setAvailableProblems] = useState([]);
+  const [availableMCQs, setAvailableMCQs] = useState([]);
+  const [selectedProblems, setSelectedProblems] = useState([]);
+  const [selectedMCQs, setSelectedMCQs] = useState([]);
+
+  const [isBrowsingProblems, setIsBrowsingProblems] = useState(false);
+  const [isBrowsingMCQs, setIsBrowsingMCQs] = useState(false);
+  const [loadingProblems, setLoadingProblems] = useState(false);
+  const [loadingMCQs, setLoadingMCQs] = useState(false);
+  const [problemsLoaded, setProblemsLoaded] = useState(false);
+  const [mcqsLoaded, setMcqsLoaded] = useState(false);
+  const [problemError, setProblemError] = useState('');
+  const [mcqError, setMcqError] = useState('');
 
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -333,19 +346,26 @@ export const ManageContests = () => {
 
       const res = await api.post('/admin/problems', problemFormData);
       if (res.data.success) {
-        const newProblemId = String(res.data.id);
-        
-        // Refresh local problems list
-        const pRes = await api.get('/admin/problems', { params: { limit: 100 } });
-        if (pRes.data.success) {
-          setAllProblems(pRes.data.problems || []);
-        }
+        const newProblemId = String(res.data.id || res.data.problem?.id || res.data.problem?._id);
+        const newProblemObj = res.data.problem || {
+          id: newProblemId,
+          _id: newProblemId,
+          title: problemFormData.title,
+          topic: problemFormData.topic,
+          difficulty: problemFormData.difficulty,
+        };
 
-        // Automatically select the newly created problem
+        // Add to selected problems and form data directly (no full bank fetch)
+        setSelectedProblems((prev) => [...prev.filter(p => String(p.id || p._id) !== newProblemId), newProblemObj]);
         setFormData((prev) => ({
           ...prev,
-          problem_ids: [...prev.problem_ids, newProblemId]
+          problem_ids: [...new Set([...prev.problem_ids, newProblemId])]
         }));
+
+        // If available bank is cached, append to available list as well
+        if (problemsLoaded) {
+          setAvailableProblems((prev) => [...prev.filter(p => String(p.id || p._id) !== newProblemId), newProblemObj]);
+        }
 
         setSuccessMsg('Coding problem created and assigned successfully!');
         setIsCreateProblemModalOpen(false);
@@ -379,19 +399,28 @@ export const ManageContests = () => {
 
       const res = await api.post('/admin/mcqs', mcqFormData);
       if (res.data.success) {
-        const newMCQId = String(res.data.id);
+        const newMCQId = String(res.data.id || res.data.mcq?.id || res.data.mcq?._id);
+        const newMCQObj = res.data.mcq || {
+          id: newMCQId,
+          _id: newMCQId,
+          question: mcqFormData.question,
+          topic: mcqFormData.topic,
+          difficulty: mcqFormData.difficulty,
+          options: mcqFormData.options,
+          correct_answer: mcqFormData.correct_answer,
+        };
 
-        // Refresh local MCQs list
-        const mRes = await api.get('/admin/mcqs', { params: { limit: 100 } });
-        if (mRes.data.success) {
-          setAllMCQs(mRes.data.mcqs || []);
-        }
-
-        // Automatically select the newly created MCQ
+        // Add to selected MCQs and form data directly (no full bank fetch)
+        setSelectedMCQs((prev) => [...prev.filter(m => String(m.id || m._id) !== newMCQId), newMCQObj]);
         setFormData((prev) => ({
           ...prev,
-          mcq_ids: [...prev.mcq_ids, newMCQId]
+          mcq_ids: [...new Set([...prev.mcq_ids, newMCQId])]
         }));
+
+        // If available bank is cached, append to available list as well
+        if (mcqsLoaded) {
+          setAvailableMCQs((prev) => [...prev.filter(m => String(m.id || m._id) !== newMCQId), newMCQObj]);
+        }
 
         setSuccessMsg('MCQ created and assigned successfully!');
         setIsCreateMCQModalOpen(false);
@@ -475,21 +504,30 @@ export const ManageContests = () => {
 
       if (res.data.success) {
         const importedIds = res.data.imported_ids || [];
+        const importedItems = (importMCQPreviewData.valid_rows || []).map((row, idx) => ({
+          id: String(importedIds[idx] || `imported-${idx}-${Date.now()}`),
+          _id: String(importedIds[idx] || `imported-${idx}-${Date.now()}`),
+          question: row.question,
+          topic: row.topic || 'CS',
+          difficulty: row.difficulty || 'Easy',
+          options: row.options || [],
+          correct_answer: row.options?.[row.correctOption - 1] || ''
+        }));
 
-        // Refresh local MCQs list
-        const mRes = await api.get('/admin/mcqs', { params: { limit: 500 } });
-        if (mRes.data.success) {
-          setAllMCQs(mRes.data.mcqs || []);
-        }
+        // Assign imported MCQs directly to selected MCQs and contest form data without loading global bank
+        setSelectedMCQs((prev) => {
+          const existingIds = new Set(prev.map(m => String(m.id || m._id)));
+          const newItems = importedItems.filter(m => !existingIds.has(String(m.id || m._id)));
+          return [...prev, ...newItems];
+        });
 
-        // Automatically assign all imported MCQs to current contest form
         setFormData((prev) => ({
           ...prev,
-          mcq_ids: importedIds
+          mcq_ids: Array.from(new Set([...prev.mcq_ids, ...importedIds.map(String)]))
         }));
 
         setIsImportMCQModalOpen(false);
-        setSuccessMsg(`Successfully imported and assigned ${res.data.imported_count} MCQs!`);
+        setSuccessMsg(`Successfully imported and assigned ${res.data.imported_count || importedIds.length} MCQs!`);
         setTimeout(() => setSuccessMsg(''), 5000);
       }
     } catch (err) {
@@ -526,20 +564,14 @@ export const ManageContests = () => {
     return () => clearInterval(pollInterval);
   }, []);
 
+  // Fetch ONLY contests on page mount — NO automatic loading of entire question/problem banks!
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      const [cRes, pRes, mRes] = await Promise.all([
-        api.get('/admin/contests'),
-        api.get('/admin/problems', { params: { limit: 200 } }),
-        api.get('/admin/mcqs', { params: { limit: 500 } }),
-      ]);
-
+      const cRes = await api.get('/admin/contests');
       if (cRes.data.success) setContests(cRes.data.contests || []);
-      if (pRes.data.success) setAllProblems(pRes.data.problems || []);
-      if (mRes.data.success) setAllMCQs(mRes.data.mcqs || []);
     } catch (err) {
-      console.error('Failed to load admin contest initial data:', err);
+      console.error('Failed to load admin contests:', err);
     } finally {
       setLoading(false);
     }
@@ -556,10 +588,61 @@ export const ManageContests = () => {
     }
   };
 
+  // Lazy loaders for browsing existing Question / Problem banks
+  const handleBrowseProblems = async () => {
+    if (isBrowsingProblems) {
+      setIsBrowsingProblems(false);
+      return;
+    }
+    setIsBrowsingProblems(true);
+    if (!problemsLoaded) {
+      try {
+        setLoadingProblems(true);
+        setProblemError('');
+        const res = await api.get('/admin/problems', { params: { limit: 200 } });
+        if (res.data.success) {
+          setAvailableProblems(res.data.problems || []);
+          setProblemsLoaded(true);
+        }
+      } catch (err) {
+        setProblemError('Unable to load coding problems. Please try again.');
+      } finally {
+        setLoadingProblems(false);
+      }
+    }
+  };
+
+  const handleBrowseMCQs = async () => {
+    if (isBrowsingMCQs) {
+      setIsBrowsingMCQs(false);
+      return;
+    }
+    setIsBrowsingMCQs(true);
+    if (!mcqsLoaded) {
+      try {
+        setLoadingMCQs(true);
+        setMcqError('');
+        const res = await api.get('/admin/mcqs', { params: { limit: 500 } });
+        if (res.data.success) {
+          setAvailableMCQs(res.data.mcqs || []);
+          setMcqsLoaded(true);
+        }
+      } catch (err) {
+        setMcqError('Unable to load questions. Please try again.');
+      } finally {
+        setLoadingMCQs(false);
+      }
+    }
+  };
+
   const handleOpenAdd = () => {
     setEditingId(null);
     setProblemSearch('');
     setMcqSearch('');
+    setIsBrowsingProblems(false);
+    setIsBrowsingMCQs(false);
+    setSelectedProblems([]);
+    setSelectedMCQs([]);
     setHasCoding(true);
     setHasMCQ(true);
     const now = new Date();
@@ -586,8 +669,37 @@ export const ManageContests = () => {
     setEditingId(contest.id);
     setProblemSearch('');
     setMcqSearch('');
+    setIsBrowsingProblems(false);
+    setIsBrowsingMCQs(false);
     const probIds = (contest.problem_ids || contest.codingProblemIds || []).map(id => String(id));
     const mcqIds = (contest.mcq_ids || contest.mcqIds || []).map(id => String(id));
+
+    // Load only assigned question objects without fetching entire 500+ bank
+    const contestProbs = (contest.problems || []).map(p => ({
+      id: String(p.id || p._id),
+      _id: String(p.id || p._id),
+      title: p.title || `Problem #${p.id || p._id}`,
+      topic: p.topic || 'General',
+      difficulty: p.difficulty || 'Easy'
+    }));
+    const contestMCQs = (contest.mcqs || []).map(m => ({
+      id: String(m.id || m._id),
+      _id: String(m.id || m._id),
+      question: m.question || `MCQ #${m.id || m._id}`,
+      topic: m.topic || 'CS',
+      difficulty: m.difficulty || 'Easy'
+    }));
+
+    setSelectedProblems(
+      contestProbs.length > 0
+        ? contestProbs
+        : probIds.map(id => ({ id, _id: id, title: `Problem #${id}`, topic: 'Assigned', difficulty: 'Medium' }))
+    );
+    setSelectedMCQs(
+      contestMCQs.length > 0
+        ? contestMCQs
+        : mcqIds.map(id => ({ id, _id: id, question: `MCQ #${id}`, topic: 'Assigned' }))
+    );
 
     const cType = contest.contestType || contest.contest_type;
     if (cType === 'CODING') {
@@ -621,8 +733,8 @@ export const ManageContests = () => {
     setIsModalOpen(true);
   };
 
-  const handleToggleProblemSelect = (pId) => {
-    const idStr = String(pId);
+  const handleToggleProblemSelect = (problem) => {
+    const idStr = String(problem.id || problem._id || problem);
     setFormData((prev) => {
       const exists = prev.problem_ids.includes(idStr);
       return {
@@ -632,10 +744,22 @@ export const ManageContests = () => {
           : [...prev.problem_ids, idStr],
       };
     });
+
+    setSelectedProblems((prev) => {
+      const exists = prev.some((p) => String(p.id || p._id) === idStr);
+      if (exists) {
+        return prev.filter((p) => String(p.id || p._id) !== idStr);
+      } else {
+        const fullObj = typeof problem === 'object'
+          ? problem
+          : availableProblems.find(p => String(p.id || p._id) === idStr) || { id: idStr, _id: idStr, title: `Problem #${idStr}` };
+        return [...prev, fullObj];
+      }
+    });
   };
 
-  const handleToggleMCQSelect = (mId) => {
-    const idStr = String(mId);
+  const handleToggleMCQSelect = (mcq) => {
+    const idStr = String(mcq.id || mcq._id || mcq);
     setFormData((prev) => {
       const exists = prev.mcq_ids.includes(idStr);
       return {
@@ -645,30 +769,47 @@ export const ManageContests = () => {
           : [...prev.mcq_ids, idStr],
       };
     });
+
+    setSelectedMCQs((prev) => {
+      const exists = prev.some((m) => String(m.id || m._id) === idStr);
+      if (exists) {
+        return prev.filter((m) => String(m.id || m._id) !== idStr);
+      } else {
+        const fullObj = typeof mcq === 'object'
+          ? mcq
+          : availableMCQs.find(m => String(m.id || m._id) === idStr) || { id: idStr, _id: idStr, question: `MCQ #${idStr}` };
+        return [...prev, fullObj];
+      }
+    });
+  };
+
+  const handleDeleteSingleProblem = (pId) => {
+    const idStr = String(pId);
+    setFormData((prev) => ({
+      ...prev,
+      problem_ids: prev.problem_ids.filter((id) => id !== idStr)
+    }));
+    setSelectedProblems((prev) => prev.filter((p) => String(p.id || p._id) !== idStr));
   };
 
   const handleDeleteSingleMCQ = (mId) => {
     const idStr = String(mId);
-    const confirmDelete = window.confirm("Are you sure you want to remove this question from this contest?");
-    if (confirmDelete) {
-      setFormData((prev) => ({
-        ...prev,
-        mcq_ids: prev.mcq_ids.filter((id) => id !== idStr)
-      }));
-      setCheckedMcqIds((prev) => prev.filter((id) => id !== idStr));
-    }
+    setFormData((prev) => ({
+      ...prev,
+      mcq_ids: prev.mcq_ids.filter((id) => id !== idStr)
+    }));
+    setSelectedMCQs((prev) => prev.filter((m) => String(m.id || m._id) !== idStr));
+    setCheckedMcqIds((prev) => prev.filter((id) => id !== idStr));
   };
 
   const handleDeleteSelectedMCQs = () => {
     if (checkedMcqIds.length === 0) return;
-    const confirmDelete = window.confirm(`Are you sure you want to remove the ${checkedMcqIds.length} selected questions from this contest?`);
-    if (confirmDelete) {
-      setFormData((prev) => ({
-        ...prev,
-        mcq_ids: prev.mcq_ids.filter((id) => !checkedMcqIds.includes(id))
-      }));
-      setCheckedMcqIds([]);
-    }
+    setFormData((prev) => ({
+      ...prev,
+      mcq_ids: prev.mcq_ids.filter((id) => !checkedMcqIds.includes(id))
+    }));
+    setSelectedMCQs((prev) => prev.filter((m) => !checkedMcqIds.includes(String(m.id || m._id))));
+    setCheckedMcqIds([]);
   };
 
   const handleTogglePublish = async (contest) => {
@@ -774,14 +915,14 @@ export const ManageContests = () => {
     }
   };
 
-  // Filtered problems & MCQs for modal selection
-  const filteredProblems = allProblems.filter(p => 
+  // Filtered problems & MCQs for lazy browser
+  const filteredProblems = availableProblems.filter(p => 
     !problemSearch || 
     p.title?.toLowerCase().includes(problemSearch.toLowerCase()) ||
     p.topic?.toLowerCase().includes(problemSearch.toLowerCase())
   );
 
-  const filteredMCQs = allMCQs.filter(m => 
+  const filteredMCQs = availableMCQs.filter(m => 
     !mcqSearch || 
     m.question?.toLowerCase().includes(mcqSearch.toLowerCase()) ||
     m.topic?.toLowerCase().includes(mcqSearch.toLowerCase())
@@ -883,7 +1024,7 @@ export const ManageContests = () => {
                     </div>
                     <div>
                       <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">MCQs</div>
-                      <div className="font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">{mcqCount} MCQs Available & {c.mcqs_per_student || 20} Questions/Student</div>
+                      <div className="font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">{mcqCount} MCQs Assigned & {c.mcqs_per_student || 20} Questions/Student</div>
                     </div>
                     <div>
                       <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Duration</div>
@@ -1073,76 +1214,163 @@ export const ManageContests = () => {
 
           {/* Coding Problem Selector */}
           {hasCoding && (
-            <div className="animate-fadeIn">
-              <div className="flex items-center justify-between mb-1.5">
+            <div className="animate-fadeIn space-y-3">
+              <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
                 <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
-                  Assign Coding Problems ({formData.problem_ids.length} Selected)
+                  ASSIGN CODING PROBLEMS ({formData.problem_ids.length} SELECTED)
                 </label>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={handleOpenCreateProblemModal}
-                    className="px-2 py-1 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold text-[10px] flex items-center gap-1 border border-[#22B573]/20 shadow-sm transition"
+                    className="px-2.5 py-1 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold text-[10px] flex items-center gap-1 border border-[#22B573]/20 shadow-sm transition"
                   >
                     <Plus className="w-3 h-3" />
-                    <span>Create Coding Problem</span>
+                    <span>+ Create Coding Problem</span>
                   </button>
-                  <span className="text-[#0757B8] dark:text-[#60A5FA] font-bold">Total: {allProblems.length} available</span>
+                  <button
+                    type="button"
+                    onClick={handleBrowseProblems}
+                    className={`px-2.5 py-1 rounded-xl font-bold text-[10px] flex items-center gap-1 border shadow-sm transition ${
+                      isBrowsingProblems
+                        ? 'bg-[#0757B8] text-white border-[#0757B8]'
+                        : 'bg-[#FFFFFF] dark:bg-[#20252C] text-[#0757B8] dark:text-[#60A5FA] border-[#D9E0E8] dark:border-[#30363D] hover:bg-[#F5F7FA] dark:hover:bg-[#151A21]'
+                    }`}
+                  >
+                    <Search className="w-3 h-3" />
+                    <span>{isBrowsingProblems ? 'Close Problem Browser' : 'Browse Coding Problems'}</span>
+                  </button>
                 </div>
               </div>
 
-              <div className="relative mb-2">
-                <input
-                  type="text"
-                  value={problemSearch}
-                  onChange={(e) => setProblemSearch(e.target.value)}
-                  placeholder="Filter problems by title or topic..."
-                  className="w-full pl-8 pr-3 py-1.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs"
-                />
-                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
-              </div>
+              {/* Currently Selected Coding Problems List (Rendered ONLY if selected) */}
+              {formData.problem_ids.length > 0 && (
+                <div className="space-y-1.5 p-3 rounded-2xl bg-[#DDF2FF]/40 dark:bg-[#142A43]/40 border border-[#0757B8]/20">
+                  <div className="text-[11px] font-bold text-[#0757B8] dark:text-[#60A5FA] mb-1">
+                    Assigned Problems in Contest ({formData.problem_ids.length})
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+                    {selectedProblems.map((p) => {
+                      const pIdStr = String(p.id || p._id);
+                      return (
+                        <div
+                          key={pIdStr}
+                          className="p-2.5 rounded-xl border bg-[#FFFFFF] dark:bg-[#20252C] border-[#0757B8]/40 text-[#0757B8] dark:text-[#60A5FA] flex items-center justify-between shadow-sm"
+                        >
+                          <div className="truncate pr-2">
+                            <div className="truncate font-bold text-xs">{p.title || `Problem #${pIdStr}`}</div>
+                            <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {p.difficulty && (
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                                p.difficulty === 'Easy' ? 'bg-[#22B573]/15 text-[#22B573]' : p.difficulty === 'Medium' ? 'bg-[#F2B705]/15 text-[#F2B705]' : 'bg-[#EF4444]/15 text-[#EF4444]'
+                              }`}>
+                                {p.difficulty}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSingleProblem(pIdStr)}
+                              title="Remove from contest"
+                              className="p-1 rounded-lg text-red-500 hover:bg-red-500/10 transition"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl">
-                {filteredProblems.map((p) => {
-                  const pIdStr = String(p.id || p._id);
-                  const isSelected = formData.problem_ids.includes(pIdStr);
+              {/* Lazy-Loaded Coding Problem Browser Panel */}
+              {isBrowsingProblems && (
+                <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-2.5 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <div className="relative flex-1 mr-2">
+                      <input
+                        type="text"
+                        value={problemSearch}
+                        onChange={(e) => setProblemSearch(e.target.value)}
+                        placeholder="Filter coding problems by title or topic..."
+                        className="w-full pl-8 pr-3 py-1.5 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs focus:outline-none focus:border-[#0757B8]"
+                      />
+                      <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
+                    </div>
+                    {problemsLoaded && (
+                      <span className="text-[11px] font-bold text-[#0757B8] dark:text-[#60A5FA] whitespace-nowrap">
+                        {availableProblems.length} available
+                      </span>
+                    )}
+                  </div>
 
-                  return (
-                    <button
-                      key={pIdStr}
-                      type="button"
-                      onClick={() => handleToggleProblemSelect(pIdStr)}
-                      className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
-                        isSelected
-                          ? 'bg-[#DDF2FF] dark:bg-[#142A43] border-[#0757B8] text-[#0757B8] dark:text-[#60A5FA] font-bold shadow-sm'
-                          : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
-                      }`}
-                    >
-                      <div className="truncate pr-2">
-                        <div className="truncate font-semibold">{p.title}</div>
-                        <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
-                          p.difficulty === 'Easy' ? 'bg-[#22B573]/15 text-[#22B573]' : p.difficulty === 'Medium' ? 'bg-[#F2B705]/15 text-[#F2B705]' : 'bg-[#EF4444]/15 text-[#EF4444]'
-                        }`}>
-                          {p.difficulty}
-                        </span>
-                        {isSelected && <Check className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                  {loadingProblems ? (
+                    <div className="py-8 text-center text-[#667085] dark:text-[#94A3B8] flex items-center justify-center gap-2">
+                      <div className="w-4 h-4 border-2 border-[#0757B8] border-t-transparent rounded-full animate-spin"></div>
+                      <span>Loading coding problems...</span>
+                    </div>
+                  ) : problemError ? (
+                    <div className="py-4 text-center text-red-500 space-y-2">
+                      <div>{problemError}</div>
+                      <button
+                        type="button"
+                        onClick={handleBrowseProblems}
+                        className="px-3 py-1 bg-red-500 text-white rounded-lg text-xs font-bold"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : filteredProblems.length === 0 ? (
+                    <div className="py-6 text-center text-[#667085] dark:text-[#94A3B8] text-xs">
+                      {problemSearch ? 'No coding problems matched your search.' : 'No coding problems available.'}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                      {filteredProblems.map((p) => {
+                        const pIdStr = String(p.id || p._id);
+                        const isSelected = formData.problem_ids.includes(pIdStr);
+
+                        return (
+                          <button
+                            key={pIdStr}
+                            type="button"
+                            onClick={() => handleToggleProblemSelect(p)}
+                            className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
+                              isSelected
+                                ? 'bg-[#DDF2FF] dark:bg-[#142A43] border-[#0757B8] text-[#0757B8] dark:text-[#60A5FA] font-bold shadow-sm'
+                                : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
+                            }`}
+                          >
+                            <div className="truncate pr-2">
+                              <div className="truncate font-semibold">{p.title}</div>
+                              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                                p.difficulty === 'Easy' ? 'bg-[#22B573]/15 text-[#22B573]' : p.difficulty === 'Medium' ? 'bg-[#F2B705]/15 text-[#F2B705]' : 'bg-[#EF4444]/15 text-[#EF4444]'
+                              }`}>
+                                {p.difficulty}
+                              </span>
+                              {isSelected && <Check className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
           {/* Technical MCQ Selector */}
           {hasMCQ && (
-            <div className="animate-fadeIn">
-              <div className="flex items-center justify-between mb-1.5">
+            <div className="animate-fadeIn space-y-3">
+              <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
                 <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
-                  Assign Technical MCQs ({formData.mcq_ids.length} Selected)
+                  ASSIGN TECHNICAL MCQs ({formData.mcq_ids.length} SELECTED)
                 </label>
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
@@ -1159,121 +1387,174 @@ export const ManageContests = () => {
                     className="px-2.5 py-1 rounded-xl bg-purple-600 hover:opacity-95 text-white font-bold text-[10px] flex items-center gap-1 border border-purple-600/20 shadow-sm transition"
                   >
                     <Plus className="w-3 h-3" />
-                    <span>Create MCQ</span>
+                    <span>+ Create MCQ</span>
                   </button>
-                  <span className="text-purple-600 dark:text-purple-400 font-bold">Total: {allMCQs.length} available</span>
+                  <button
+                    type="button"
+                    onClick={handleBrowseMCQs}
+                    className={`px-2.5 py-1 rounded-xl font-bold text-[10px] flex items-center gap-1 border shadow-sm transition ${
+                      isBrowsingMCQs
+                        ? 'bg-purple-600 text-white border-purple-600'
+                        : 'bg-[#FFFFFF] dark:bg-[#20252C] text-purple-600 dark:text-purple-400 border-[#D9E0E8] dark:border-[#30363D] hover:bg-[#F5F7FA] dark:hover:bg-[#151A21]'
+                    }`}
+                  >
+                    <Search className="w-3 h-3" />
+                    <span>{isBrowsingMCQs ? 'Close MCQ Browser' : 'Browse Existing MCQs'}</span>
+                  </button>
                 </div>
               </div>
 
-              <div className="relative mb-2">
-                <input
-                  type="text"
-                  value={mcqSearch}
-                  onChange={(e) => setMcqSearch(e.target.value)}
-                  placeholder="Filter MCQs by question or topic..."
-                  className="w-full pl-8 pr-3 py-1.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs"
-                />
-                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
-              </div>
-
+              {/* Currently Selected MCQs List (Rendered ONLY if selected) */}
               {formData.mcq_ids.length > 0 && (
-                <div className="flex items-center justify-between px-3.5 py-2 mb-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs">
-                  <label className="flex items-center gap-2 cursor-pointer select-none font-bold text-[#667085] dark:text-[#94A3B8]">
-                    <input
-                      type="checkbox"
-                      checked={
-                        filteredMCQs.filter(m => formData.mcq_ids.includes(String(m.id || m._id))).length > 0 &&
-                        filteredMCQs
-                          .filter(m => formData.mcq_ids.includes(String(m.id || m._id)))
-                          .every(m => checkedMcqIds.includes(String(m.id || m._id)))
-                      }
-                      onChange={(e) => {
-                        const eligibleIds = filteredMCQs
-                          .filter(m => formData.mcq_ids.includes(String(m.id || m._id)))
-                          .map(m => String(m.id || m._id));
-                        if (e.target.checked) {
-                          setCheckedMcqIds(prev => Array.from(new Set([...prev, ...eligibleIds])));
-                        } else {
-                          setCheckedMcqIds(prev => prev.filter(id => !eligibleIds.includes(id)));
+                <div className="space-y-2 p-3 rounded-2xl bg-purple-500/10 border border-purple-500/20">
+                  <div className="flex items-center justify-between px-1">
+                    <label className="flex items-center gap-2 cursor-pointer select-none font-bold text-purple-700 dark:text-purple-300">
+                      <input
+                        type="checkbox"
+                        checked={
+                          selectedMCQs.length > 0 &&
+                          selectedMCQs.every(m => checkedMcqIds.includes(String(m.id || m._id)))
                         }
-                      }}
-                      className="rounded text-purple-600 focus:ring-purple-600 dark:bg-[#20252C] dark:border-[#30363D]"
-                    />
-                    <span>Select All ({filteredMCQs.filter(m => formData.mcq_ids.includes(String(m.id || m._id))).length} in Contest)</span>
-                  </label>
+                        onChange={(e) => {
+                          const allSelectedIds = selectedMCQs.map(m => String(m.id || m._id));
+                          if (e.target.checked) {
+                            setCheckedMcqIds(allSelectedIds);
+                          } else {
+                            setCheckedMcqIds([]);
+                          }
+                        }}
+                        className="rounded text-purple-600 focus:ring-purple-600 dark:bg-[#20252C] dark:border-[#30363D]"
+                      />
+                      <span>Assigned MCQs in Contest ({selectedMCQs.length})</span>
+                    </label>
 
-                  {checkedMcqIds.length > 0 && (
-                    <div className="flex items-center gap-2 animate-fadeIn">
-                      <span className="font-bold text-purple-600 dark:text-purple-400">{checkedMcqIds.length} Selected</span>
+                    {checkedMcqIds.length > 0 && (
+                      <div className="flex items-center gap-2 animate-fadeIn">
+                        <span className="font-bold text-purple-600 dark:text-purple-400 text-[11px]">{checkedMcqIds.length} Selected</span>
+                        <button
+                          type="button"
+                          onClick={handleDeleteSelectedMCQs}
+                          className="px-2 py-0.5 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold text-[10px] transition shadow-sm"
+                        >
+                          Delete Selected
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                    {selectedMCQs.map((m) => {
+                      const mIdStr = String(m.id || m._id);
+                      return (
+                        <div
+                          key={mIdStr}
+                          className="p-2.5 rounded-xl border bg-[#FFFFFF] dark:bg-[#20252C] border-purple-500/30 text-purple-700 dark:text-purple-300 flex items-center justify-between shadow-sm"
+                        >
+                          <div className="flex items-center gap-2 truncate pr-2">
+                            <input
+                              type="checkbox"
+                              checked={checkedMcqIds.includes(mIdStr)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setCheckedMcqIds(prev => [...prev, mIdStr]);
+                                } else {
+                                  setCheckedMcqIds(prev => prev.filter(id => id !== mIdStr));
+                                }
+                              }}
+                              className="w-3.5 h-3.5 rounded text-purple-600 focus:ring-purple-600 dark:bg-[#151A21] dark:border-[#30363D] shrink-0"
+                            />
+                            <div className="truncate">
+                              <div className="truncate font-semibold">{m.question || `MCQ #${mIdStr}`}</div>
+                              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            title="Remove Question from Contest"
+                            onClick={() => handleDeleteSingleMCQ(mIdStr)}
+                            className="p-1 rounded-lg text-red-500 hover:bg-red-500/10 transition shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Lazy-Loaded MCQ Browser Panel */}
+              {isBrowsingMCQs && (
+                <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-2.5 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <div className="relative flex-1 mr-2">
+                      <input
+                        type="text"
+                        value={mcqSearch}
+                        onChange={(e) => setMcqSearch(e.target.value)}
+                        placeholder="Filter MCQs by question or topic..."
+                        className="w-full pl-8 pr-3 py-1.5 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-xs focus:outline-none focus:border-purple-600"
+                      />
+                      <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
+                    </div>
+                    {mcqsLoaded && (
+                      <span className="text-[11px] font-bold text-purple-600 dark:text-purple-400 whitespace-nowrap">
+                        {availableMCQs.length} available
+                      </span>
+                    )}
+                  </div>
+
+                  {loadingMCQs ? (
+                    <div className="py-8 text-center text-[#667085] dark:text-[#94A3B8] flex items-center justify-center gap-2">
+                      <div className="w-4 h-4 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+                      <span>Loading MCQs...</span>
+                    </div>
+                  ) : mcqError ? (
+                    <div className="py-4 text-center text-red-500 space-y-2">
+                      <div>{mcqError}</div>
                       <button
                         type="button"
-                        onClick={handleDeleteSelectedMCQs}
-                        className="px-2.5 py-1 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold text-[10px] transition shadow-sm"
+                        onClick={handleBrowseMCQs}
+                        className="px-3 py-1 bg-red-500 text-white rounded-lg text-xs font-bold"
                       >
-                        Delete Selected
+                        Retry
                       </button>
+                    </div>
+                  ) : filteredMCQs.length === 0 ? (
+                    <div className="py-6 text-center text-[#667085] dark:text-[#94A3B8] text-xs">
+                      {mcqSearch ? 'No MCQs matched your search.' : 'No MCQs available in question bank.'}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                      {filteredMCQs.map((m) => {
+                        const mIdStr = String(m.id || m._id);
+                        const isSelected = formData.mcq_ids.includes(mIdStr);
+
+                        return (
+                          <button
+                            key={mIdStr}
+                            type="button"
+                            onClick={() => handleToggleMCQSelect(m)}
+                            className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
+                              isSelected
+                                ? 'bg-purple-500/15 border-purple-500 text-purple-600 dark:text-purple-400 font-bold shadow-sm'
+                                : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
+                            }`}
+                          >
+                            <div className="truncate pr-2">
+                              <div className="truncate font-semibold">{m.question}</div>
+                              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {isSelected && <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />}
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
               )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl">
-                {filteredMCQs.map((m) => {
-                  const mIdStr = String(m.id || m._id);
-                  const isSelected = formData.mcq_ids.includes(mIdStr);
-
-                  return (
-                    <button
-                      key={mIdStr}
-                      type="button"
-                      onClick={() => handleToggleMCQSelect(mIdStr)}
-                      className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
-                        isSelected
-                          ? 'bg-purple-500/15 border-purple-500 text-purple-600 dark:text-purple-400 font-bold shadow-sm'
-                          : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 truncate pr-2">
-                        {isSelected && (
-                          <input
-                            type="checkbox"
-                            checked={checkedMcqIds.includes(mIdStr)}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setCheckedMcqIds(prev => [...prev, mIdStr]);
-                              } else {
-                                setCheckedMcqIds(prev => prev.filter(id => id !== mIdStr));
-                              }
-                            }}
-                            className="w-3.5 h-3.5 rounded text-purple-600 focus:ring-purple-600 dark:bg-[#151A21] dark:border-[#30363D] shrink-0"
-                          />
-                        )}
-                        <div className="truncate">
-                          <div className="truncate font-semibold">{m.question}</div>
-                          <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
-                        </div>
-                      </div>
-                      {isSelected && (
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            title="Remove Question from Contest"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteSingleMCQ(mIdStr);
-                            }}
-                            className="p-1 rounded-lg text-red-500 hover:bg-red-500/10 transition"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                          <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
             </div>
           )}
 
