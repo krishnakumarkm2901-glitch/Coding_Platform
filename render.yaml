@@ -1,14 +1,15 @@
 services:
   # ─── API Server ─────────────────────────────────────
-  # Handles HTTP requests only (auth, CRUD, cache).
-  # Code execution is offloaded to the worker service.
+  # Handles HTTP requests, auth, CRUD, cache, AND code execution.
+  # JDK is auto-installed during build via build.sh.
   - type: web
     name: nit-campus-coder-api
-    env: docker
+    env: python
     region: oregon
     plan: starter
-    dockerContext: server
-    dockerfilePath: server/Dockerfile
+    rootDir: server
+    buildCommand: chmod +x build.sh && ./build.sh
+    startCommand: bash -c 'source .jdk_env.sh 2>/dev/null; exec gunicorn -c gunicorn.conf.py app:app'
     envVars:
       - key: MONGO_URI
         sync: false
@@ -23,7 +24,7 @@ services:
       - key: REDIS_URL
         sync: false
       - key: EXECUTION_MODE
-        value: queue
+        value: sync
 
   # ─── Code Execution Worker ──────────────────────────
   # Separate process that pulls submissions from Redis
@@ -35,7 +36,7 @@ services:
     plan: starter
     rootDir: server
     buildCommand: chmod +x build.sh && ./build.sh
-    startCommand: python worker.py
+    startCommand: bash -c 'source .jdk_env.sh 2>/dev/null; exec python worker.py'
     envVars:
       - key: MONGO_URI
         sync: false
