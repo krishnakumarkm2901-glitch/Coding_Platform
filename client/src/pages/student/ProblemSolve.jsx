@@ -275,7 +275,8 @@ export const ProblemSolve = () => {
     );
   }
 
-  const supportedLangs = problem.supported_languages || ['python', 'c', 'cpp', 'java', 'javascript', 'go', 'rust'];
+  const supportedLangs = (problem.supported_languages || ['python', 'c', 'cpp', 'java', 'rust'])
+    .filter(lang => lang !== 'go' && lang !== 'javascript' && lang !== 'js');
 
   return (
     <div className="space-y-4 animate-fadeIn">
@@ -311,7 +312,7 @@ export const ProblemSolve = () => {
           >
             {supportedLangs.map((lang) => (
               <option key={lang} value={lang}>
-                {lang === 'cpp' ? 'C++' : lang === 'javascript' ? 'JavaScript' : lang.toUpperCase()}
+                {lang === 'cpp' ? 'C++' : lang.toUpperCase()}
               </option>
             ))}
           </select>

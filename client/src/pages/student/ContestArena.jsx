@@ -1371,23 +1371,15 @@ export const ContestArena = () => {
                   <select
                     value={currentLanguage}
                     onChange={(e) => handleLanguageChange(e.target.value)}
-                    className="py-1 px-2.5 rounded-lg bg-[#FFFFFF] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs font-bold text-[#172033] dark:text-[#F8FAFC] uppercase"
+                    className="py-1 px-2.5 rounded-lg bg-[#FFFFFF] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs font-bold text-[#172033] dark:text-[#F8FAFC] uppercase cursor-pointer"
                   >
-                    {currentProblem?.supported_languages?.map((lang) => (
-                      <option key={lang} value={lang}>
-                        {lang === 'cpp' ? 'C++' : lang === 'javascript' ? 'JavaScript' : lang}
-                      </option>
-                    )) || (
-                      <>
-                        <option value="python">Python</option>
-                        <option value="cpp">C++</option>
-                        <option value="c">C</option>
-                        <option value="java">Java</option>
-                        <option value="javascript">JavaScript</option>
-                        <option value="go">Go</option>
-                        <option value="rust">Rust</option>
-                      </>
-                    )}
+                    {(currentProblem?.supported_languages || ['python', 'cpp', 'c', 'java', 'rust'])
+                      .filter(lang => lang !== 'go' && lang !== 'javascript' && lang !== 'js')
+                      .map((lang) => (
+                        <option key={lang} value={lang}>
+                          {lang === 'cpp' ? 'C++' : lang.toUpperCase()}
+                        </option>
+                      ))}
                   </select>
                 </div>
 

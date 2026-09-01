@@ -20,8 +20,6 @@ const STARTER_CODE = {
   c: `#include <stdio.h>\n\nint main() {\n    printf("Hello, Playground!\\n");\n    return 0;\n}`,
   cpp: `#include <iostream>\n\nint main() {\n    std::cout << "Hello, Playground!" << std::endl;\n    return 0;\n}`,
   java: `public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello, Playground!");\n    }\n}`,
-  javascript: `console.log("Hello, Playground!");`,
-  go: `package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, Playground!")\n}`,
   rust: `fn main() {\n    println!("Hello, Playground!");\n}`
 };
 
@@ -30,8 +28,6 @@ const LANG_LABELS = {
   c: 'C',
   cpp: 'C++',
   java: 'Java',
-  javascript: 'JavaScript',
-  go: 'Go',
   rust: 'Rust'
 };
 
