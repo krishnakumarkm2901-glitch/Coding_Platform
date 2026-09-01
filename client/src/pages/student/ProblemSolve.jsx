@@ -39,6 +39,10 @@ export const ProblemSolve = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [runResult, setRunResult] = useState(null);
   const [submitResult, setSubmitResult] = useState(null);
+  const [verifiedCodeHash, setVerifiedCodeHash] = useState(null);
+
+  const currentCodeHash = `${problem?.id || ''}_${language}_${code}`;
+  const isSubmitAllowed = Boolean(verifiedCodeHash && verifiedCodeHash === currentCodeHash);
 
   const outputPanelRef = useRef(null);
   const editorRef = useRef(null);
