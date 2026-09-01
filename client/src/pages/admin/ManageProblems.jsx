@@ -11,7 +11,9 @@ import {
   ChevronRight, 
   PlusCircle, 
   X,
-  Code2
+  Code2,
+  CheckCircle2,
+  AlertTriangle
 } from 'lucide-react';
 import { DifficultyBadge, TopicTag } from '../../components/common/Badge';
 import { Modal } from '../../components/common/Modal';
@@ -22,8 +24,17 @@ export const ManageProblems = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [difficultyFilter, setDifficultyFilter] = useState('All');
+  const [topicFilter, setTopicFilter] = useState('All');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ total: 0, pages: 1 });
+
+  // Selection & Bulk Delete states
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteModalType, setDeleteModalType] = useState('selected'); // 'selected' | 'all' | 'single'
+  const [targetSingleId, setTargetSingleId] = useState(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [globalSuccessMsg, setGlobalSuccessMsg] = useState('');
 
   // Modal create/edit states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -62,7 +73,7 @@ export const ManageProblems = () => {
 
   useEffect(() => {
     fetchProblems();
-  }, [search, difficultyFilter, page]);
+  }, [search, difficultyFilter, topicFilter, page]);
 
   const fetchProblems = async () => {
     try {
@@ -70,8 +81,9 @@ export const ManageProblems = () => {
       const params = {
         page,
         limit: 12,
-        search: search.trim(),
+        search: search.trim() || undefined,
         difficulty: difficultyFilter !== 'All' ? difficultyFilter : undefined,
+        topic: topicFilter !== 'All' ? topicFilter : undefined,
       };
       const res = await api.get('/admin/problems', { params });
       if (res.data.success) {
@@ -84,6 +96,86 @@ export const ManageProblems = () => {
       setLoading(false);
     }
   };
+
+  // ----------------- SELECTION HANDLERS -----------------
+
+  const handleSelectAll = (e) => {
+    if (e.target.checked) {
+      const visibleIds = problems.map((p) => p.id);
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+    } else {
+      const visibleIds = problems.map((p) => p.id);
+      setSelectedIds((prev) => prev.filter((id) => !visibleIds.includes(id)));
+    }
+  };
+
+  const handleToggleSelect = (id) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedIds([]);
+  };
+
+  // ----------------- DELETE HANDLERS -----------------
+
+  const handleOpenDeleteSingle = (probId) => {
+    setTargetSingleId(probId);
+    setDeleteModalType('single');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleOpenDeleteSelected = () => {
+    if (selectedIds.length === 0) return;
+    setDeleteModalType('selected');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleOpenDeleteAll = () => {
+    setDeleteModalType('all');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    try {
+      setDeleteLoading(true);
+
+      if (deleteModalType === 'single') {
+        const res = await api.delete(`/admin/problems/${targetSingleId}`);
+        if (res.data.success) {
+          setSelectedIds((prev) => prev.filter((id) => id !== targetSingleId));
+          setGlobalSuccessMsg('Problem deleted successfully.');
+        }
+      } else if (deleteModalType === 'selected') {
+        const res = await api.post('/admin/problems/bulk-delete', { ids: selectedIds });
+        if (res.data.success) {
+          setGlobalSuccessMsg(res.data.message || `Deleted ${selectedIds.length} problems.`);
+          setSelectedIds([]);
+        }
+      } else if (deleteModalType === 'all') {
+        const res = await api.post('/admin/problems/delete-all', {
+          difficulty: difficultyFilter !== 'All' ? difficultyFilter : undefined,
+          topic: topicFilter !== 'All' ? topicFilter : undefined,
+        });
+        if (res.data.success) {
+          setGlobalSuccessMsg(res.data.message || 'All problems deleted successfully.');
+          setSelectedIds([]);
+        }
+      }
+
+      setIsDeleteModalOpen(false);
+      setTimeout(() => setGlobalSuccessMsg(''), 4000);
+      fetchProblems();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to delete problem(s).');
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  // ----------------- CREATE / EDIT HANDLERS -----------------
 
   const handleOpenAdd = () => {
     setEditingId(null);
@@ -121,12 +213,12 @@ export const ManageProblems = () => {
       const res = await api.get(`/problems/${probId}`);
       if (res.data.success) {
         const p = res.data.problem;
-        setEditingId(probId);
+        setEditingId(p.id);
         setFormData({
-          title: p.title,
-          difficulty: p.difficulty,
-          topic: p.topic,
-          description: p.description,
+          title: p.title || '',
+          difficulty: p.difficulty || 'Easy',
+          topic: p.topic || 'Arrays',
+          description: p.description || '',
           input_format: p.input_format || '',
           output_format: p.output_format || '',
           constraints: p.constraints || '',
@@ -178,12 +270,16 @@ export const ManageProblems = () => {
         const res = await api.put(`/admin/problems/${editingId}`, formData);
         if (res.data.success) {
           setIsModalOpen(false);
+          setGlobalSuccessMsg('Problem updated successfully!');
+          setTimeout(() => setGlobalSuccessMsg(''), 4000);
           fetchProblems();
         }
       } else {
         const res = await api.post('/admin/problems', formData);
         if (res.data.success) {
           setIsModalOpen(false);
+          setGlobalSuccessMsg('Problem created successfully!');
+          setTimeout(() => setGlobalSuccessMsg(''), 4000);
           fetchProblems();
         }
       }
@@ -194,17 +290,7 @@ export const ManageProblems = () => {
     }
   };
 
-  const handleDelete = async (probId) => {
-    if (!window.confirm('Are you sure you want to delete this problem and all its submissions?')) return;
-    try {
-      const res = await api.delete(`/admin/problems/${probId}`);
-      if (res.data.success) {
-        fetchProblems();
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
+  const allVisibleSelected = problems.length > 0 && problems.every((p) => selectedIds.includes(p.id));
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -216,18 +302,69 @@ export const ManageProblems = () => {
             Manage Coding Problems
           </h1>
           <p className="text-sm text-[#667085] dark:text-[#94A3B8] mt-1">
-            Author and maintain programming challenges, constraints, and test suites
+            Author and maintain programming challenges, constraints, and test suites ({pagination.total} total)
           </p>
         </div>
 
-        <button
-          onClick={handleOpenAdd}
-          className="px-4 py-2.5 rounded-2xl bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 transition"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Create Coding Problem</span>
-        </button>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Delete All Button */}
+          <button
+            onClick={handleOpenDeleteAll}
+            disabled={pagination.total === 0}
+            className="px-3.5 py-2.5 rounded-2xl bg-[#EF4444]/10 hover:bg-[#EF4444]/20 border border-[#EF4444]/30 text-[#EF4444] font-bold text-xs shadow-sm flex items-center gap-1.5 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Delete All Coding Problems"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Delete All</span>
+          </button>
+
+          <button
+            onClick={handleOpenAdd}
+            className="px-4 py-2.5 rounded-2xl bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 transition"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Create Coding Problem</span>
+          </button>
+        </div>
       </div>
+
+      {globalSuccessMsg && (
+        <div className="p-3.5 rounded-2xl bg-[#22B573]/15 border border-[#22B573]/30 text-[#22B573] text-xs flex items-center gap-2 font-bold animate-fadeIn">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{globalSuccessMsg}</span>
+        </div>
+      )}
+
+      {/* Bulk Delete Bar (When items checked) */}
+      {selectedIds.length > 0 && (
+        <div className="p-4 rounded-3xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between gap-4 shadow-sm animate-fadeIn">
+          <div className="flex items-center gap-3">
+            <span className="w-7 h-7 rounded-xl bg-[#22B573] text-white flex items-center justify-center font-mono font-bold text-xs shadow-sm">
+              {selectedIds.length}
+            </span>
+            <span className="text-xs font-bold text-[#172033] dark:text-[#F8FAFC]">
+              {selectedIds.length} problem{selectedIds.length > 1 ? 's' : ''} selected
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={handleDeselectAll}
+              className="px-3 py-1.5 rounded-xl bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] text-xs font-semibold transition"
+            >
+              Deselect All
+            </button>
+
+            <button
+              onClick={handleOpenDeleteSelected}
+              className="px-4 py-1.5 rounded-xl bg-[#EF4444] hover:bg-red-700 text-white text-xs font-bold shadow-md shadow-red-500/20 flex items-center gap-1.5 transition"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Selected ({selectedIds.length})</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
@@ -247,7 +384,21 @@ export const ManageProblems = () => {
           />
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
+          <select
+            value={topicFilter}
+            onChange={(e) => {
+              setTopicFilter(e.target.value);
+              setPage(1);
+            }}
+            className="py-2 px-3 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] text-xs font-bold"
+          >
+            <option value="All">All Topics</option>
+            {availableTopics.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+
           <select
             value={difficultyFilter}
             onChange={(e) => {
@@ -277,6 +428,15 @@ export const ManageProblems = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-[#303442] text-white font-bold uppercase tracking-wider">
                 <tr>
+                  <th className="py-4 px-4 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={handleSelectAll}
+                      className="w-4 h-4 rounded text-emerald-600 border-[#D9E0E8] dark:border-[#30363D] focus:ring-emerald-500 cursor-pointer"
+                      title="Select all problems on page"
+                    />
+                  </th>
                   <th className="py-4 px-4">Title</th>
                   <th className="py-4 px-4">Topic</th>
                   <th className="py-4 px-4">Difficulty</th>
@@ -285,40 +445,58 @@ export const ManageProblems = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#D9E0E8] dark:divide-[#30363D]/60 font-sans">
-                {problems.map((p) => (
-                  <tr key={p.id} className="hover:bg-[#F5F7FA] dark:hover:bg-[#151A21]/60 transition">
-                    <td className="py-3.5 px-4 font-bold text-[#172033] dark:text-[#F8FAFC]">
-                      {p.title}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <TopicTag topic={p.topic} />
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <DifficultyBadge difficulty={p.difficulty} />
-                    </td>
-                    <td className="py-3.5 px-4 text-center font-mono font-bold text-[#172033] dark:text-[#F8FAFC]">
-                      {p.total_submissions || 0}
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          onClick={() => handleOpenEdit(p.id)}
-                          title="Edit Problem"
-                          className="p-1.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
-                        >
-                          <Edit className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(p.id)}
-                          title="Delete Problem"
-                          className="p-1.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#EF4444]/20 text-[#EF4444] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {problems.map((p) => {
+                  const isChecked = selectedIds.includes(p.id);
+                  return (
+                    <tr
+                      key={p.id}
+                      className={`transition ${
+                        isChecked
+                          ? 'bg-emerald-500/10 dark:bg-emerald-500/15'
+                          : 'hover:bg-[#F5F7FA] dark:hover:bg-[#151A21]/60'
+                      }`}
+                    >
+                      <td className="py-3.5 px-4">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => handleToggleSelect(p.id)}
+                          className="w-4 h-4 rounded text-emerald-600 border-[#D9E0E8] dark:border-[#30363D] focus:ring-emerald-500 cursor-pointer"
+                        />
+                      </td>
+                      <td className="py-3.5 px-4 font-bold text-[#172033] dark:text-[#F8FAFC]">
+                        {p.title}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <TopicTag topic={p.topic} />
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <DifficultyBadge difficulty={p.difficulty} />
+                      </td>
+                      <td className="py-3.5 px-4 text-center font-mono font-bold text-[#172033] dark:text-[#F8FAFC]">
+                        {p.total_submissions || 0}
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => handleOpenEdit(p.id)}
+                            title="Edit Problem"
+                            className="p-1.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleOpenDeleteSingle(p.id)}
+                            title="Delete Problem"
+                            className="p-1.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#EF4444]/20 text-[#EF4444] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -366,25 +544,24 @@ export const ManageProblems = () => {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="md:col-span-2">
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Problem Title *</label>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="sm:col-span-2">
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Problem Title *</label>
               <input
                 type="text"
                 required
                 value={formData.title}
                 onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                placeholder="e.g. Reverse Linked List"
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC]"
+                placeholder="e.g. Invert Binary Tree"
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
               />
             </div>
-
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Difficulty</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Difficulty *</label>
               <select
                 value={formData.difficulty}
                 onChange={(e) => setFormData({ ...formData, difficulty: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-bold"
               >
                 <option value="Easy">Easy</option>
                 <option value="Medium">Medium</option>
@@ -393,194 +570,251 @@ export const ManageProblems = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Topic</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Topic *</label>
               <select
                 value={formData.topic}
                 onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-bold"
               >
                 {availableTopics.map((t) => (
                   <option key={t} value={t}>{t}</option>
                 ))}
               </select>
             </div>
-
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Time Limit (seconds)</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Time Limit (sec)</label>
               <input
                 type="number"
-                step="0.5"
+                step="0.1"
+                min="0.5"
+                max="10"
                 value={formData.time_limit}
-                onChange={(e) => setFormData({ ...formData, time_limit: parseFloat(e.target.value) })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                onChange={(e) => setFormData({ ...formData, time_limit: parseFloat(e.target.value) || 2.0 })}
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
               />
             </div>
-
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Memory Limit (MB)</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Memory Limit (MB)</label>
               <input
                 type="number"
+                min="64"
+                max="1024"
                 value={formData.memory_limit}
-                onChange={(e) => setFormData({ ...formData, memory_limit: parseInt(e.target.value) })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                onChange={(e) => setFormData({ ...formData, memory_limit: parseInt(e.target.value, 10) || 256 })}
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Problem Description *</label>
+            <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Problem Description *</label>
             <textarea
               required
               rows={4}
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              placeholder="Describe problem scenario, requirements..."
-              className="w-full p-3.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-sans"
+              placeholder="Detailed markdown problem statement..."
+              className="w-full p-3 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Input Format</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Input Format</label>
               <textarea
                 rows={2}
                 value={formData.input_format}
                 onChange={(e) => setFormData({ ...formData, input_format: e.target.value })}
                 placeholder="e.g. First line contains integer N..."
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+                className="w-full p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
               />
             </div>
-
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Output Format</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Output Format</label>
               <textarea
                 rows={2}
                 value={formData.output_format}
                 onChange={(e) => setFormData({ ...formData, output_format: e.target.value })}
-                placeholder="e.g. Print space-separated integers..."
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+                placeholder="e.g. Print single integer representing..."
+                className="w-full p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
+              />
+            </div>
+            <div>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Constraints</label>
+              <textarea
+                rows={2}
+                value={formData.constraints}
+                onChange={(e) => setFormData({ ...formData, constraints: e.target.value })}
+                placeholder="e.g. 1 <= N <= 10^5"
+                className="w-full p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
               />
             </div>
           </div>
 
-          <div>
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Constraints</label>
-            <textarea
-              rows={2}
-              value={formData.constraints}
-              onChange={(e) => setFormData({ ...formData, constraints: e.target.value })}
-              placeholder="1 <= N <= 10^5&#10;-10^9 <= nums[i] <= 10^9"
-              className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Sample Input</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Sample Input</label>
               <textarea
-                rows={2}
+                rows={3}
                 value={formData.sample_input}
                 onChange={(e) => setFormData({ ...formData, sample_input: e.target.value })}
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+                placeholder="Sample stdin input..."
+                className="w-full p-2.5 font-mono bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
               />
             </div>
-
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Sample Output</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Sample Output</label>
               <textarea
-                rows={2}
+                rows={3}
                 value={formData.sample_output}
                 onChange={(e) => setFormData({ ...formData, sample_output: e.target.value })}
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+                placeholder="Expected stdout output..."
+                className="w-full p-2.5 font-mono bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
               />
             </div>
           </div>
 
-          {/* Test Cases Builder */}
-          <div className="pt-4 border-t border-[#D9E0E8] dark:border-[#30363D] space-y-3">
+          {/* Test Cases Section */}
+          <div className="space-y-3 pt-2 border-t border-[#D9E0E8] dark:border-[#30363D]">
             <div className="flex items-center justify-between">
-              <h4 className="font-bold text-[#172033] dark:text-[#F8FAFC]">Evaluation Test Cases ({formData.test_cases.length})</h4>
+              <label className="font-bold text-[#172033] dark:text-[#F8FAFC]">
+                Judge Test Cases ({formData.test_cases.length}) *
+              </label>
               <button
                 type="button"
                 onClick={handleAddTestCase}
-                className="px-2.5 py-1 rounded-lg bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] font-bold text-[11px] flex items-center gap-1 border border-[#0757B8]/20 dark:border-[#0066CC]/40"
+                className="px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-500/30 flex items-center gap-1 hover:bg-emerald-500/20 transition"
               >
                 <PlusCircle className="w-3.5 h-3.5" />
-                Add Test Case
+                <span>Add Test Case</span>
               </button>
             </div>
 
-            {formData.test_cases.map((tc, idx) => (
-              <div key={idx} className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-2 relative">
-                <div className="flex items-center justify-between text-[11px] font-bold text-[#667085] dark:text-[#94A3B8]">
-                  <span>Test Case #{idx + 1}</span>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-1.5 cursor-pointer text-[#172033] dark:text-[#F8FAFC]">
-                      <input
-                        type="checkbox"
-                        checked={tc.is_sample || false}
-                        onChange={(e) => handleTestCaseChange(idx, 'is_sample', e.target.checked)}
-                        className="rounded"
-                      />
-                      <span>Sample Case</span>
-                    </label>
-                    {formData.test_cases.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveTestCase(idx)}
-                        className="text-[#EF4444] hover:opacity-80"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
+            <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+              {formData.test_cases.map((tc, idx) => (
+                <div key={idx} className="p-3.5 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#F5F7FA] dark:bg-[#151A21] space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-[#172033] dark:text-[#F8FAFC] text-[11px] font-mono">
+                      Test Case #{idx + 1} {tc.is_sample && '(Sample Preview)'}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                        <input
+                          type="checkbox"
+                          checked={tc.is_sample || false}
+                          onChange={(e) => handleTestCaseChange(idx, 'is_sample', e.target.checked)}
+                          className="rounded text-[#0757B8]"
+                        />
+                        <span>Is Sample</span>
+                      </label>
+                      {formData.test_cases.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveTestCase(idx)}
+                          className="text-[#EF4444] p-1 hover:bg-[#EF4444]/15 rounded-lg"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-2 font-mono">
-                  <div>
-                    <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-sans font-semibold">Input:</span>
-                    <textarea
-                      rows={2}
-                      value={tc.input}
-                      onChange={(e) => handleTestCaseChange(idx, 'input', e.target.value)}
-                      placeholder="stdin"
-                      className="w-full p-2 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-lg text-[#172033] dark:text-[#F8FAFC] text-xs font-semibold"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-sans font-semibold">Expected Output:</span>
-                    <textarea
-                      rows={2}
-                      value={tc.expected_output}
-                      onChange={(e) => handleTestCaseChange(idx, 'expected_output', e.target.value)}
-                      placeholder="expected stdout"
-                      className="w-full p-2 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-lg text-[#22B573] text-xs font-bold"
-                    />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8] mb-1 font-semibold">Input (stdin)</span>
+                      <textarea
+                        rows={2}
+                        required
+                        value={tc.input}
+                        onChange={(e) => handleTestCaseChange(idx, 'input', e.target.value)}
+                        className="w-full p-2 font-mono text-[11px] bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC]"
+                      />
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8] mb-1 font-semibold">Expected Output (stdout)</span>
+                      <textarea
+                        rows={2}
+                        required
+                        value={tc.expected_output}
+                        onChange={(e) => handleTestCaseChange(idx, 'expected_output', e.target.value)}
+                        className="w-full p-2 font-mono text-[11px] bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC]"
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
 
-          <div className="pt-4 flex items-center justify-end gap-2">
+          <div className="pt-3 border-t border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-end gap-2.5">
             <button
               type="button"
               onClick={() => setIsModalOpen(false)}
-              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] font-semibold"
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] font-semibold transition"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={actionLoading}
-              className="px-5 py-2.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold shadow-md shadow-emerald-500/20"
+              className="px-5 py-2 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold shadow-md shadow-emerald-600/20 disabled:opacity-50 transition"
             >
-              {actionLoading ? 'Saving...' : editingId ? 'Save Problem' : 'Create Problem'}
+              {actionLoading ? 'Saving...' : editingId ? 'Update Problem' : 'Create Problem'}
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* DELETE CONFIRMATION MODAL */}
+      <Modal
+        isOpen={isDeleteModalOpen}
+        onClose={() => !deleteLoading && setIsDeleteModalOpen(false)}
+        title="Confirm Delete"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4 text-xs">
+          <div className="p-4 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-[#EF4444] shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-[#EF4444]">
+                {deleteModalType === 'all'
+                  ? 'Delete Entire Coding Problems Catalog?'
+                  : deleteModalType === 'selected'
+                  ? `Delete ${selectedIds.length} Selected Problems?`
+                  : 'Delete this Coding Problem?'}
+              </p>
+              <p className="text-[#667085] dark:text-[#94A3B8]">
+                {deleteModalType === 'all'
+                  ? `You are about to permanently delete all ${pagination.total} coding challenges and test cases. This action cannot be undone.`
+                  : deleteModalType === 'selected'
+                  ? `You are about to permanently delete ${selectedIds.length} selected challenges. This action cannot be undone.`
+                  : 'Are you sure you want to delete this coding challenge and its test cases? This action cannot be undone.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-2 flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              disabled={deleteLoading}
+              onClick={() => setIsDeleteModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] font-semibold transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={deleteLoading}
+              onClick={handleConfirmDelete}
+              className="px-5 py-2 rounded-xl bg-[#EF4444] hover:bg-red-700 text-white font-bold shadow-md shadow-red-500/20 disabled:opacity-50 flex items-center gap-1.5 transition"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{deleteLoading ? 'Deleting...' : 'Yes, Delete'}</span>
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

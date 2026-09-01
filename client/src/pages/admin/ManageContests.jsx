@@ -116,6 +116,7 @@ export const ManageContests = () => {
   const [availableMCQs, setAvailableMCQs] = useState([]);
   const [selectedProblems, setSelectedProblems] = useState([]);
   const [selectedMCQs, setSelectedMCQs] = useState([]);
+  const [checkedProblemIds, setCheckedProblemIds] = useState([]);
 
   const [isBrowsingProblems, setIsBrowsingProblems] = useState(false);
   const [isBrowsingMCQs, setIsBrowsingMCQs] = useState(false);
@@ -790,6 +791,17 @@ export const ManageContests = () => {
       problem_ids: prev.problem_ids.filter((id) => id !== idStr)
     }));
     setSelectedProblems((prev) => prev.filter((p) => String(p.id || p._id) !== idStr));
+    setCheckedProblemIds((prev) => prev.filter((id) => id !== idStr));
+  };
+
+  const handleDeleteSelectedProblems = () => {
+    if (checkedProblemIds.length === 0) return;
+    setFormData((prev) => ({
+      ...prev,
+      problem_ids: prev.problem_ids.filter((id) => !checkedProblemIds.includes(id))
+    }));
+    setSelectedProblems((prev) => prev.filter((p) => !checkedProblemIds.includes(String(p.id || p._id))));
+    setCheckedProblemIds([]);
   };
 
   const handleDeleteSingleMCQ = (mId) => {
@@ -1245,11 +1257,43 @@ export const ManageContests = () => {
 
               {/* Currently Selected Coding Problems List (Rendered ONLY if selected) */}
               {formData.problem_ids.length > 0 && (
-                <div className="space-y-1.5 p-3 rounded-2xl bg-[#DDF2FF]/40 dark:bg-[#142A43]/40 border border-[#0757B8]/20">
-                  <div className="text-[11px] font-bold text-[#0757B8] dark:text-[#60A5FA] mb-1">
-                    Assigned Problems in Contest ({formData.problem_ids.length})
+                <div className="space-y-2 p-3 rounded-2xl bg-[#DDF2FF]/40 dark:bg-[#142A43]/40 border border-[#0757B8]/20">
+                  <div className="flex items-center justify-between px-1">
+                    <label className="flex items-center gap-2 cursor-pointer select-none font-bold text-[#0757B8] dark:text-[#60A5FA] text-[11px]">
+                      <input
+                        type="checkbox"
+                        checked={
+                          selectedProblems.length > 0 &&
+                          selectedProblems.every(p => checkedProblemIds.includes(String(p.id || p._id)))
+                        }
+                        onChange={(e) => {
+                          const allSelectedIds = selectedProblems.map(p => String(p.id || p._id));
+                          if (e.target.checked) {
+                            setCheckedProblemIds(allSelectedIds);
+                          } else {
+                            setCheckedProblemIds([]);
+                          }
+                        }}
+                        className="rounded text-[#0757B8] focus:ring-[#0757B8] dark:bg-[#20252C] dark:border-[#30363D]"
+                      />
+                      <span>Assigned Problems in Contest ({formData.problem_ids.length})</span>
+                    </label>
+
+                    {checkedProblemIds.length > 0 && (
+                      <div className="flex items-center gap-2 animate-fadeIn">
+                        <span className="font-bold text-[#0757B8] dark:text-[#60A5FA] text-[11px]">{checkedProblemIds.length} Selected</span>
+                        <button
+                          type="button"
+                          onClick={handleDeleteSelectedProblems}
+                          className="px-2 py-0.5 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold text-[10px] transition shadow-sm"
+                        >
+                          Delete Selected
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
                     {selectedProblems.map((p) => {
                       const pIdStr = String(p.id || p._id);
                       return (
@@ -1257,9 +1301,23 @@ export const ManageContests = () => {
                           key={pIdStr}
                           className="p-2.5 rounded-xl border bg-[#FFFFFF] dark:bg-[#20252C] border-[#0757B8]/40 text-[#0757B8] dark:text-[#60A5FA] flex items-center justify-between shadow-sm"
                         >
-                          <div className="truncate pr-2">
-                            <div className="truncate font-bold text-xs">{p.title || `Problem #${pIdStr}`}</div>
-                            <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
+                          <div className="flex items-center gap-2 truncate pr-2">
+                            <input
+                              type="checkbox"
+                              checked={checkedProblemIds.includes(pIdStr)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setCheckedProblemIds(prev => [...prev, pIdStr]);
+                                } else {
+                                  setCheckedProblemIds(prev => prev.filter(id => id !== pIdStr));
+                                }
+                              }}
+                              className="w-3.5 h-3.5 rounded text-[#0757B8] focus:ring-[#0757B8] dark:bg-[#151A21] dark:border-[#30363D] shrink-0"
+                            />
+                            <div className="truncate">
+                              <div className="truncate font-bold text-xs">{p.title || `Problem #${pIdStr}`}</div>
+                              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
+                            </div>
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0">
                             {p.difficulty && (

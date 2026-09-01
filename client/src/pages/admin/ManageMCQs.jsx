@@ -14,7 +14,8 @@ import {
   Download,
   CheckCircle2,
   X,
-  HelpCircle
+  HelpCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { DifficultyBadge, TopicTag } from '../../components/common/Badge';
 import { Modal } from '../../components/common/Modal';
@@ -27,6 +28,13 @@ export const ManageMCQs = () => {
   const [topicFilter, setTopicFilter] = useState('All');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ total: 0, pages: 1 });
+
+  // Selection & Bulk Delete states
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteModalType, setDeleteModalType] = useState('selected'); // 'selected' | 'all' | 'single'
+  const [targetSingleId, setTargetSingleId] = useState(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Modal create/edit states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -69,14 +77,15 @@ export const ManageMCQs = () => {
       const params = {
         page,
         limit: 15,
+        search: search.trim() || undefined,
         topic: topicFilter !== 'All' ? topicFilter : undefined,
       };
-      const res = await api.get('/mcqs', { params });
+      const res = await api.get('/admin/mcqs', { params });
       if (res.data.success) {
         setMcqs(res.data.mcqs);
         setPagination({
-          total: res.data.total,
-          pages: Math.ceil(res.data.total / 15) || 1,
+          total: res.data.pagination?.total || res.data.total || 0,
+          pages: res.data.pagination?.pages || Math.ceil(res.data.total / 15) || 1,
         });
       }
     } catch (err) {
@@ -85,6 +94,85 @@ export const ManageMCQs = () => {
       setLoading(false);
     }
   };
+
+  // ----------------- SELECTION HANDLERS -----------------
+
+  const handleSelectAll = (e) => {
+    if (e.target.checked) {
+      const visibleIds = mcqs.map((m) => m.id);
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+    } else {
+      const visibleIds = mcqs.map((m) => m.id);
+      setSelectedIds((prev) => prev.filter((id) => !visibleIds.includes(id)));
+    }
+  };
+
+  const handleToggleSelect = (id) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedIds([]);
+  };
+
+  // ----------------- DELETE MODAL HANDLERS -----------------
+
+  const handleOpenDeleteSingle = (mcqId) => {
+    setTargetSingleId(mcqId);
+    setDeleteModalType('single');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleOpenDeleteSelected = () => {
+    if (selectedIds.length === 0) return;
+    setDeleteModalType('selected');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleOpenDeleteAll = () => {
+    setDeleteModalType('all');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    try {
+      setDeleteLoading(true);
+
+      if (deleteModalType === 'single') {
+        const res = await api.delete(`/admin/mcqs/${targetSingleId}`);
+        if (res.data.success) {
+          setSelectedIds((prev) => prev.filter((id) => id !== targetSingleId));
+          setGlobalSuccessMsg('MCQ deleted successfully.');
+        }
+      } else if (deleteModalType === 'selected') {
+        const res = await api.post('/admin/mcqs/bulk-delete', { ids: selectedIds });
+        if (res.data.success) {
+          setGlobalSuccessMsg(res.data.message || `Deleted ${selectedIds.length} MCQs.`);
+          setSelectedIds([]);
+        }
+      } else if (deleteModalType === 'all') {
+        const res = await api.post('/admin/mcqs/delete-all', {
+          topic: topicFilter !== 'All' ? topicFilter : undefined,
+        });
+        if (res.data.success) {
+          setGlobalSuccessMsg(res.data.message || 'All MCQs deleted successfully.');
+          setSelectedIds([]);
+        }
+      }
+
+      setIsDeleteModalOpen(false);
+      setTimeout(() => setGlobalSuccessMsg(''), 4000);
+      fetchMCQs();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to delete MCQs.');
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  // ----------------- CREATE / EDIT HANDLERS -----------------
 
   const handleOpenAdd = () => {
     setEditingId(null);
@@ -154,20 +242,6 @@ export const ManageMCQs = () => {
       setErrorMsg(err.response?.data?.error || 'Failed to save MCQ.');
     } finally {
       setActionLoading(false);
-    }
-  };
-
-  const handleDelete = async (mcqId) => {
-    if (!window.confirm('Are you sure you want to delete this question?')) return;
-    try {
-      const res = await api.delete(`/admin/mcqs/${mcqId}`);
-      if (res.data.success) {
-        setGlobalSuccessMsg('MCQ deleted successfully.');
-        setTimeout(() => setGlobalSuccessMsg(''), 4000);
-        fetchMCQs();
-      }
-    } catch (err) {
-      console.error(err);
     }
   };
 
@@ -253,6 +327,8 @@ export const ManageMCQs = () => {
     }
   };
 
+  const allVisibleSelected = mcqs.length > 0 && mcqs.every((m) => selectedIds.includes(m.id));
+
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* Header */}
@@ -260,14 +336,25 @@ export const ManageMCQs = () => {
         <div>
           <h1 className="text-2xl font-extrabold text-[#172033] dark:text-[#F8FAFC] tracking-tight flex items-center gap-2.5">
             <CheckSquare className="w-6 h-6 text-purple-600 dark:text-purple-400" />
-            Manage Technical MCQs
+            Manage Technical MCQs / Quiz Bank
           </h1>
           <p className="text-sm text-[#667085] dark:text-[#94A3B8] mt-1">
-            Question bank across Computer Science domains and engineering subjects
+            Question bank across Computer Science domains and engineering subjects ({pagination.total} total)
           </p>
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Delete All Button */}
+          <button
+            onClick={handleOpenDeleteAll}
+            disabled={pagination.total === 0}
+            className="px-3.5 py-2.5 rounded-2xl bg-[#EF4444]/10 hover:bg-[#EF4444]/20 border border-[#EF4444]/30 text-[#EF4444] font-bold text-xs shadow-sm flex items-center gap-1.5 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Delete All MCQs in database"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Delete All</span>
+          </button>
+
           <button
             onClick={handleDownloadTemplate}
             className="px-3.5 py-2.5 rounded-2xl bg-[#FFFFFF] dark:bg-[#20252C] hover:bg-[#F5F7FA] dark:hover:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] font-bold text-xs shadow-sm flex items-center gap-1.5 transition"
@@ -282,7 +369,7 @@ export const ManageMCQs = () => {
             className="px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition"
           >
             <FileSpreadsheet className="w-4 h-4" />
-            <span>Import MCQs from Excel</span>
+            <span>Import MCQs</span>
           </button>
 
           <button
@@ -302,22 +389,68 @@ export const ManageMCQs = () => {
         </div>
       )}
 
+      {/* Bulk Delete Bar (When items checked) */}
+      {selectedIds.length > 0 && (
+        <div className="p-4 rounded-3xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-between gap-4 shadow-sm animate-fadeIn">
+          <div className="flex items-center gap-3">
+            <span className="w-7 h-7 rounded-xl bg-purple-600 text-white flex items-center justify-center font-mono font-bold text-xs shadow-sm">
+              {selectedIds.length}
+            </span>
+            <span className="text-xs font-bold text-[#172033] dark:text-[#F8FAFC]">
+              {selectedIds.length} question{selectedIds.length > 1 ? 's' : ''} selected
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={handleDeselectAll}
+              className="px-3 py-1.5 rounded-xl bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] text-xs font-semibold transition"
+            >
+              Deselect All
+            </button>
+
+            <button
+              onClick={handleOpenDeleteSelected}
+              className="px-4 py-1.5 rounded-xl bg-[#EF4444] hover:bg-red-700 text-white text-xs font-bold shadow-md shadow-red-500/20 flex items-center gap-1.5 transition"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Selected ({selectedIds.length})</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Filter Bar */}
       <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
-        <div className="relative flex-1 w-full sm:max-w-md">
-          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#667085] dark:text-[#94A3B8]">
-            <Search className="w-4 h-4" />
+        <div className="flex items-center gap-3 w-full sm:w-auto flex-1">
+          {/* Select All Checkbox */}
+          <label className="flex items-center gap-2 cursor-pointer select-none px-2 py-1 rounded-xl hover:bg-[#F5F7FA] dark:hover:bg-[#151A21] transition">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={handleSelectAll}
+              className="w-4 h-4 rounded text-purple-600 border-[#D9E0E8] dark:border-[#30363D] focus:ring-purple-500 cursor-pointer"
+            />
+            <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8]">
+              Select All on Page
+            </span>
+          </label>
+
+          <div className="relative flex-1 w-full sm:max-w-md">
+            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#667085] dark:text-[#94A3B8]">
+              <Search className="w-4 h-4" />
+            </div>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search questions..."
+              className="w-full pl-10 pr-4 py-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] placeholder-[#667085] dark:placeholder-[#94A3B8] text-xs font-semibold focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC]"
+            />
           </div>
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-            placeholder="Search questions..."
-            className="w-full pl-10 pr-4 py-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] placeholder-[#667085] dark:placeholder-[#94A3B8] text-xs font-semibold focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC]"
-          />
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -346,70 +479,87 @@ export const ManageMCQs = () => {
             No questions found.
           </div>
         ) : (
-          mcqs.map((m, idx) => (
-            <div
-              key={m.id}
-              className="p-5 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] hover:border-purple-500/40 transition space-y-3 shadow-sm"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-start gap-3">
-                  <span className="w-6 h-6 rounded-lg bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold text-xs shrink-0 font-mono mt-0.5 border border-purple-500/30">
-                    {(page - 1) * 15 + idx + 1}
-                  </span>
-                  <div>
-                    <h3 className="text-sm font-bold text-[#172033] dark:text-[#F8FAFC]">{m.question}</h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <TopicTag topic={m.topic} />
-                      <DifficultyBadge difficulty={m.difficulty} />
+          mcqs.map((m, idx) => {
+            const isChecked = selectedIds.includes(m.id);
+            return (
+              <div
+                key={m.id}
+                className={`p-5 rounded-3xl border transition space-y-3 shadow-sm ${
+                  isChecked
+                    ? 'border-purple-500/60 bg-purple-500/5 dark:bg-purple-500/10'
+                    : 'border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] hover:border-purple-500/40'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    {/* Item Checkbox */}
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => handleToggleSelect(m.id)}
+                      className="w-4 h-4 mt-1 rounded text-purple-600 border-[#D9E0E8] dark:border-[#30363D] focus:ring-purple-500 cursor-pointer shrink-0"
+                    />
+
+                    <span className="w-6 h-6 rounded-lg bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center font-bold text-xs shrink-0 font-mono mt-0.5 border border-purple-500/30">
+                      {(page - 1) * 15 + idx + 1}
+                    </span>
+                    <div>
+                      <h3 className="text-sm font-bold text-[#172033] dark:text-[#F8FAFC]">{m.question}</h3>
+                      <div className="flex items-center gap-2 mt-1">
+                        <TopicTag topic={m.topic} />
+                        <DifficultyBadge difficulty={m.difficulty} />
+                      </div>
                     </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => handleOpenEdit(m)}
+                      title="Edit MCQ"
+                      className="p-1.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleOpenDeleteSingle(m.id)}
+                      title="Delete MCQ"
+                      className="p-1.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#EF4444]/20 text-[#EF4444] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    onClick={() => handleOpenEdit(m)}
-                    className="p-1.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
-                  >
-                    <Edit className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(m.id)}
-                    className="p-1.5 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#EF4444]/20 text-[#EF4444] border border-[#D9E0E8] dark:border-[#30363D] transition shadow-sm"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                {/* Options pills */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pl-7">
+                  {m.options?.map((opt, optIdx) => {
+                    const isCorrect = opt === m.correct_answer;
+                    return (
+                      <div
+                        key={optIdx}
+                        className={`p-3 rounded-2xl border flex items-center gap-2 font-semibold ${
+                          isCorrect
+                            ? 'bg-[#22B573]/15 border-[#22B573] text-[#22B573]'
+                            : 'bg-[#F5F7FA] dark:bg-[#151A21] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
+                        }`}
+                      >
+                        <span className="w-5 h-5 rounded-full border border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-center text-[10px] shrink-0 font-bold">
+                          {String.fromCharCode(65 + optIdx)}
+                        </span>
+                        <span>{opt}</span>
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
 
-              {/* Options pills */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                {m.options?.map((opt, optIdx) => {
-                  const isCorrect = opt === m.correct_answer;
-                  return (
-                    <div
-                      key={optIdx}
-                      className={`p-3 rounded-2xl border flex items-center gap-2 font-semibold ${
-                        isCorrect
-                          ? 'bg-[#22B573]/15 border-[#22B573] text-[#22B573]'
-                          : 'bg-[#F5F7FA] dark:bg-[#151A21] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
-                      }`}
-                    >
-                      <span className="w-5 h-5 rounded-full border border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-center text-[10px] shrink-0 font-bold">
-                        {String.fromCharCode(65 + optIdx)}
-                      </span>
-                      <span>{opt}</span>
-                    </div>
-                  );
-                })}
+                {m.explanation && (
+                  <div className="text-[11px] text-[#667085] dark:text-[#94A3B8] bg-[#F5F7FA] dark:bg-[#151A21] p-3 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] ml-7">
+                    <strong className="text-[#172033] dark:text-[#F8FAFC]">Explanation:</strong> {m.explanation}
+                  </div>
+                )}
               </div>
-
-              {m.explanation && (
-                <div className="text-[11px] text-[#667085] dark:text-[#94A3B8] bg-[#F5F7FA] dark:bg-[#151A21] p-3 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D]">
-                  <strong className="text-[#172033] dark:text-[#F8FAFC]">Explanation:</strong> {m.explanation}
-                </div>
-              )}
-            </div>
-          ))
+            );
+          })
         )}
 
         {/* Pagination */}
@@ -455,24 +605,24 @@ export const ManageMCQs = () => {
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           <div>
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Question Text *</label>
+            <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Question Statement *</label>
             <textarea
               required
               rows={3}
               value={formData.question}
               onChange={(e) => setFormData({ ...formData, question: e.target.value })}
-              placeholder="e.g. Which normal form eliminates transitive functional dependencies?"
-              className="w-full p-3.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+              placeholder="e.g. Which data structure follows the LIFO (Last In First Out) principle?"
+              className="w-full p-3 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Topic</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Topic Domain *</label>
               <select
                 value={formData.topic}
                 onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-bold"
               >
                 {mcqTopics.map((t) => (
                   <option key={t} value={t}>{t}</option>
@@ -481,11 +631,11 @@ export const ManageMCQs = () => {
             </div>
 
             <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Difficulty</label>
+              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Difficulty Level *</label>
               <select
                 value={formData.difficulty}
                 onChange={(e) => setFormData({ ...formData, difficulty: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-bold"
               >
                 <option value="Easy">Easy</option>
                 <option value="Medium">Medium</option>
@@ -494,157 +644,193 @@ export const ManageMCQs = () => {
             </div>
           </div>
 
-          {/* 4 Options Input */}
-          <div className="space-y-2.5">
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">4 Options *</label>
+          <div className="space-y-2">
+            <label className="block font-bold text-[#172033] dark:text-[#F8FAFC]">
+              Options & Correct Answer (Select the radio of the correct choice) *
+            </label>
             {formData.options.map((opt, idx) => (
               <div key={idx} className="flex items-center gap-2">
-                <span className="w-7 h-7 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-center font-bold text-[#0757B8] dark:text-[#60A5FA] shrink-0">
+                <input
+                  type="radio"
+                  name="correct_answer"
+                  checked={formData.correct_answer === opt && opt !== ''}
+                  onChange={() => setFormData({ ...formData, correct_answer: opt })}
+                  disabled={!opt}
+                  className="w-4 h-4 text-purple-600 border-[#D9E0E8] dark:border-[#30363D] focus:ring-purple-500 cursor-pointer"
+                  title="Mark as correct answer"
+                />
+                <span className="w-6 h-6 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-center font-mono font-bold text-xs shrink-0">
                   {String.fromCharCode(65 + idx)}
                 </span>
                 <input
                   type="text"
                   required
                   value={opt}
-                  onChange={(e) => handleOptionChange(idx, e.target.value)}
-                  placeholder={`Option ${String.fromCharCode(65 + idx)}`}
-                  className="flex-1 px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                  onChange={(e) => {
+                    handleOptionChange(idx, e.target.value);
+                    if (formData.correct_answer === opt) {
+                      setFormData((prev) => ({ ...prev, correct_answer: e.target.value }));
+                    }
+                  }}
+                  placeholder={`Option ${String.fromCharCode(65 + idx)} text`}
+                  className="flex-1 p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
                 />
               </div>
             ))}
           </div>
 
           <div>
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Select Correct Answer *</label>
-            <select
-              value={formData.correct_answer}
-              onChange={(e) => setFormData({ ...formData, correct_answer: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#22B573] font-bold"
-            >
-              <option value="">-- Select Correct Option --</option>
-              {formData.options.map((opt, idx) => (
-                <option key={idx} value={opt}>
-                  {String.fromCharCode(65 + idx)}: {opt || `(Empty Option ${String.fromCharCode(65 + idx)})`}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Answer Explanation</label>
+            <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Explanation (Optional)</label>
             <textarea
               rows={2}
               value={formData.explanation}
               onChange={(e) => setFormData({ ...formData, explanation: e.target.value })}
-              placeholder="Why is this answer correct?"
-              className="w-full p-3 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC]"
+              placeholder="Explain why the selected option is correct..."
+              className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
             />
           </div>
 
-          <div className="pt-3 flex items-center justify-end gap-2">
+          <div className="pt-3 border-t border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-end gap-2.5">
             <button
               type="button"
               onClick={() => setIsModalOpen(false)}
-              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] font-semibold"
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] font-semibold transition"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={actionLoading}
-              className="px-5 py-2.5 rounded-xl bg-purple-600 hover:opacity-95 text-white font-bold shadow-md shadow-purple-600/20"
+              className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold shadow-md shadow-purple-600/20 disabled:opacity-50 transition"
             >
-              {actionLoading ? 'Saving...' : editingId ? 'Save MCQ' : 'Create MCQ'}
+              {actionLoading ? 'Saving...' : editingId ? 'Update MCQ' : 'Create MCQ'}
             </button>
           </div>
         </form>
       </Modal>
 
-      {/* EXCEL IMPORT MCQ MODAL */}
+      {/* DELETE CONFIRMATION MODAL */}
       <Modal
-        isOpen={isImportModalOpen}
-        onClose={() => setIsImportModalOpen(false)}
-        title="Import MCQs from Excel"
-        maxWidth="max-w-4xl"
+        isOpen={isDeleteModalOpen}
+        onClose={() => !deleteLoading && setIsDeleteModalOpen(false)}
+        title="Confirm Delete"
+        maxWidth="max-w-md"
       >
-        <div className="space-y-5 text-xs">
-          {/* Instructions Box */}
-          <div className="p-4 rounded-2xl bg-[#0757B8]/10 border border-[#0757B8]/20 flex items-start gap-3">
-            <HelpCircle className="w-5 h-5 text-[#0757B8] dark:text-[#60A5FA] shrink-0 mt-0.5" />
+        <div className="space-y-4 text-xs">
+          <div className="p-4 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-[#EF4444] shrink-0 mt-0.5" />
             <div className="space-y-1">
-              <div className="font-bold text-[#0757B8] dark:text-[#60A5FA]">Required Excel Format (.xlsx)</div>
-              <p className="text-[#667085] dark:text-[#94A3B8] leading-relaxed">
-                Your spreadsheet must include columns: <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 text-purple-600 dark:text-purple-400 font-bold">Question</code>, <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">Option 1</code>, <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">Option 2</code>, <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">Option 3</code>, <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">Option 4</code>, and <code className="font-mono px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 text-emerald-600 dark:text-emerald-400 font-bold">Correct Option</code> (must be 1, 2, 3, or 4).
+              <p className="font-bold text-[#EF4444]">
+                {deleteModalType === 'all'
+                  ? 'Delete Entire MCQ Bank?'
+                  : deleteModalType === 'selected'
+                  ? `Delete ${selectedIds.length} Selected MCQs?`
+                  : 'Delete this MCQ?'}
+              </p>
+              <p className="text-[#667085] dark:text-[#94A3B8]">
+                {deleteModalType === 'all'
+                  ? `You are about to permanently delete all ${pagination.total} questions from the MCQ bank. This action cannot be undone.`
+                  : deleteModalType === 'selected'
+                  ? `You are about to permanently delete ${selectedIds.length} selected questions. This action cannot be undone.`
+                  : 'Are you sure you want to delete this question? This action cannot be undone.'}
               </p>
             </div>
           </div>
 
-          {/* File Upload / Selection Area */}
-          <div className="p-6 rounded-2xl border-2 border-dashed border-[#D9E0E8] dark:border-[#30363D] bg-[#F5F7FA] dark:bg-[#151A21] flex flex-col items-center justify-center text-center space-y-3">
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept=".xlsx,.xls"
-              onChange={handleFileSelect}
-              className="hidden"
-              id="mcq-excel-file-input"
-            />
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-              <Upload className="w-6 h-6" />
-            </div>
-            <div>
-              <label
-                htmlFor="mcq-excel-file-input"
-                className="cursor-pointer px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-sm transition"
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>{importFile ? 'Choose Different File' : 'Select Excel File (.xlsx)'}</span>
-              </label>
-              {importFile && (
-                <div className="mt-2 text-xs font-bold text-[#172033] dark:text-[#F8FAFC]">
-                  Selected: <span className="text-[#0757B8] dark:text-[#60A5FA] font-mono">{importFile.name}</span> ({(importFile.size / 1024).toFixed(1)} KB)
-                </div>
-              )}
-            </div>
+          <div className="pt-2 flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              disabled={deleteLoading}
+              onClick={() => setIsDeleteModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] font-semibold transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={deleteLoading}
+              onClick={handleConfirmDelete}
+              className="px-5 py-2 rounded-xl bg-[#EF4444] hover:bg-red-700 text-white font-bold shadow-md shadow-red-500/20 disabled:opacity-50 flex items-center gap-1.5 transition"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{deleteLoading ? 'Deleting...' : 'Yes, Delete'}</span>
+            </button>
           </div>
+        </div>
+      </Modal>
 
+      {/* EXCEL IMPORT MODAL */}
+      <Modal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        title="Import MCQs from Excel Spreadsheet"
+        maxWidth="max-w-3xl"
+      >
+        <div className="space-y-4 text-xs">
           {importErrorMsg && (
-            <div className="p-3.5 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs flex items-center gap-2 font-bold">
+            <div className="p-3 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs flex items-center gap-2 font-bold">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{importErrorMsg}</span>
             </div>
           )}
 
-          {importLoading && (
-            <div className="p-8 text-center space-y-2">
-              <PageLoader text="Reading and validating Excel rows..." />
+          <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 flex items-start gap-3">
+            <HelpCircle className="w-5 h-5 text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-[#172033] dark:text-[#F8FAFC]">Excel File Formatting Guide</p>
+              <p className="text-[#667085] dark:text-[#94A3B8]">
+                Columns required: <strong>Question, Option 1, Option 2, Option 3, Option 4, Correct Option (1-4 or A-D), Topic, Difficulty</strong>.
+              </p>
+            </div>
+          </div>
+
+          {/* File Upload Box */}
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            className="border-2 border-dashed border-[#D9E0E8] dark:border-[#30363D] hover:border-purple-500 dark:hover:border-purple-400 rounded-3xl p-8 text-center cursor-pointer transition bg-[#F5F7FA] dark:bg-[#151A21]"
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx, .xls, .csv"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            <Upload className="w-8 h-8 text-purple-600 dark:text-purple-400 mx-auto mb-2" />
+            <p className="font-bold text-sm text-[#172033] dark:text-[#F8FAFC]">
+              Click to select Excel (.xlsx, .xls) file
+            </p>
+            <p className="text-[#667085] dark:text-[#94A3B8] mt-1 text-xs">
+              Supports bulk upload of multiple choice questions
+            </p>
+          </div>
+
+          {importFile && (
+            <div className="p-3 rounded-2xl bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                <span className="font-bold text-[#172033] dark:text-[#F8FAFC]">{importFile.name}</span>
+                <span className="text-[#667085] dark:text-[#94A3B8]">({(importFile.size / 1024).toFixed(1)} KB)</span>
+              </div>
+              {importLoading && <span className="text-purple-600 font-bold">Parsing...</span>}
             </div>
           )}
 
-          {/* PREVIEW & VALIDATION SUMMARY */}
+          {/* Preview Results */}
           {importPreviewData && (
-            <div className="space-y-4">
-              {/* Summary Cards */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="p-3.5 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] text-center">
-                  <div className="text-[10px] uppercase font-bold text-[#667085] dark:text-[#94A3B8]">Total Rows</div>
-                  <div className="text-xl font-extrabold text-[#172033] dark:text-[#F8FAFC] font-mono mt-0.5">
-                    {importPreviewData.total_rows}
-                  </div>
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-center">
+                  <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-bold uppercase">Total Rows</div>
+                  <div className="text-lg font-mono font-extrabold text-[#172033] dark:text-[#F8FAFC]">{importPreviewData.total_rows}</div>
                 </div>
-                <div className="p-3.5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 text-center">
-                  <div className="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400">Valid</div>
-                  <div className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">
-                    {importPreviewData.valid_count}
-                  </div>
+                <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-center">
+                  <div className="text-[10px] text-emerald-600 font-bold uppercase">Valid Questions</div>
+                  <div className="text-lg font-mono font-extrabold text-emerald-600">{importPreviewData.valid_count}</div>
                 </div>
-                <div className={`p-3.5 rounded-2xl border text-center ${importPreviewData.invalid_count > 0 ? 'border-red-500/30 bg-red-500/10' : 'border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C]'}`}>
-                  <div className={`text-[10px] uppercase font-bold ${importPreviewData.invalid_count > 0 ? 'text-[#EF4444]' : 'text-[#667085] dark:text-[#94A3B8]'}`}>
-                    Invalid
-                  </div>
-                  <div className={`text-xl font-extrabold font-mono mt-0.5 ${importPreviewData.invalid_count > 0 ? 'text-[#EF4444]' : 'text-[#172033] dark:text-[#F8FAFC]'}`}>
-                    {importPreviewData.invalid_count}
-                  </div>
+                <div className="p-3 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 text-center">
+                  <div className="text-[10px] text-[#EF4444] font-bold uppercase">Errors</div>
+                  <div className="text-lg font-mono font-extrabold text-[#EF4444]">{importPreviewData.invalid_count}</div>
                 </div>
               </div>
 

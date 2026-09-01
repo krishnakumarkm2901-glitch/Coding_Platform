@@ -1024,6 +1024,51 @@ def delete_problem(problem_id):
     db.problems.delete_one({"_id": ObjectId(problem_id)})
     return jsonify({"success": True, "message": "Problem deleted successfully"}), 200
 
+@admin_bp.route("/problems/bulk-delete", methods=["POST"])
+@admin_required
+def bulk_delete_problems():
+    """Delete multiple problems in bulk by IDs."""
+    db = get_db()
+    data = request.get_json() or {}
+    problem_ids = data.get("ids", [])
+
+    if not problem_ids:
+        return jsonify({"error": "No problem IDs provided", "success": False}), 400
+
+    invalid_ids = [pid for pid in problem_ids if not ObjectId.is_valid(pid)]
+    if invalid_ids:
+        return jsonify({"error": f"Invalid problem ID format: {', '.join(invalid_ids)}", "success": False}), 400
+
+    object_ids = [ObjectId(pid) for pid in problem_ids]
+    result = db.problems.delete_many({"_id": {"$in": object_ids}})
+    return jsonify({
+        "success": True,
+        "message": f"Successfully deleted {result.deleted_count} coding problems",
+        "deleted_count": result.deleted_count
+    }), 200
+
+@admin_bp.route("/problems/delete-all", methods=["DELETE", "POST"])
+@admin_required
+def delete_all_problems():
+    """Delete all coding problems or filtered coding problems."""
+    db = get_db()
+    data = request.get_json() or {}
+    difficulty = data.get("difficulty")
+    topic = data.get("topic")
+
+    query = {}
+    if difficulty and difficulty.lower() != "all":
+        query["difficulty"] = difficulty.capitalize()
+    if topic and topic.lower() != "all":
+        query["topic"] = topic
+
+    result = db.problems.delete_many(query)
+    return jsonify({
+        "success": True,
+        "message": f"Successfully deleted {result.deleted_count} coding problems",
+        "deleted_count": result.deleted_count
+    }), 200
+
 # ----------------- MCQ MANAGEMENT -----------------
 
 @admin_bp.route("/mcqs", methods=["GET"])
@@ -1125,6 +1170,51 @@ def delete_mcq(mcq_id):
 
     db.mcqs.delete_one({"_id": ObjectId(mcq_id)})
     return jsonify({"success": True, "message": "MCQ deleted successfully"}), 200
+
+@admin_bp.route("/mcqs/bulk-delete", methods=["POST"])
+@admin_required
+def bulk_delete_mcqs():
+    """Delete multiple MCQs in bulk by IDs."""
+    db = get_db()
+    data = request.get_json() or {}
+    mcq_ids = data.get("ids", [])
+
+    if not mcq_ids:
+        return jsonify({"error": "No MCQ IDs provided", "success": False}), 400
+
+    invalid_ids = [mid for mid in mcq_ids if not ObjectId.is_valid(mid)]
+    if invalid_ids:
+        return jsonify({"error": f"Invalid MCQ ID format: {', '.join(invalid_ids)}", "success": False}), 400
+
+    object_ids = [ObjectId(mid) for mid in mcq_ids]
+    result = db.mcqs.delete_many({"_id": {"$in": object_ids}})
+    return jsonify({
+        "success": True,
+        "message": f"Successfully deleted {result.deleted_count} MCQs",
+        "deleted_count": result.deleted_count
+    }), 200
+
+@admin_bp.route("/mcqs/delete-all", methods=["DELETE", "POST"])
+@admin_required
+def delete_all_mcqs():
+    """Delete all MCQs or filtered MCQs."""
+    db = get_db()
+    data = request.get_json() or {}
+    topic = data.get("topic")
+    difficulty = data.get("difficulty")
+
+    query = {}
+    if topic and topic.lower() != "all":
+        query["topic"] = topic
+    if difficulty and difficulty.lower() != "all":
+        query["difficulty"] = difficulty.capitalize()
+
+    result = db.mcqs.delete_many(query)
+    return jsonify({
+        "success": True,
+        "message": f"Successfully deleted {result.deleted_count} MCQs",
+        "deleted_count": result.deleted_count
+    }), 200
 
 # ----------------- EXCEL MCQ IMPORT -----------------
 
