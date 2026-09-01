@@ -26,12 +26,44 @@ def get_language_details(language):
     value = LANGUAGE_CONFIG[key]
     return {"language": value[0], "version": value[1], "aliases": value[2], "filename": value[3]}
 
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+
 def _tool(env_name, command):
+    # 1. Environment variable
     configured = os.getenv(env_name, "").strip().strip('"')
     if configured:
         path = os.path.abspath(os.path.expandvars(os.path.expanduser(configured)))
-        return path if os.path.isfile(path) else None
-    return shutil.which(command)
+        if os.path.isfile(path):
+            return path
+
+    # 2. System PATH
+    found = shutil.which(command)
+    if found:
+        return found
+
+    # 3. Auto-discover inside server/toolchains/
+    server_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    toolchains_dir = os.path.join(server_dir, "toolchains")
+    
+    candidates = [
+        os.path.join(toolchains_dir, "jdk", "jdk-21.0.12+8", "bin", f"{command}.exe"),
+        os.path.join(toolchains_dir, "winlibs", "mingw64", "bin", f"{command}.exe"),
+        os.path.join(toolchains_dir, "go", "go", "bin", f"{command}.exe"),
+        os.path.expanduser(os.path.join("~", ".cargo", "bin", f"{command}.exe")),
+        os.path.join("C:\\Program Files\\nodejs", f"{command}.exe"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+
+    # 4. Search recursively in server/toolchains if still not found
+    if os.path.isdir(toolchains_dir):
+        for root, _, files in os.walk(toolchains_dir):
+            if f"{command}.exe" in files:
+                return os.path.join(root, f"{command}.exe")
+
+    return None
 
 def _result(success, status, output="", stderr="", elapsed=0, error_type=None, diagnostics=None, memory=14.2):
     sanitized_output = sanitize_text(output)
