@@ -56,15 +56,56 @@ export const OutputPanel = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const normalizeText = (text) => {
+    if (text === null || text === undefined) return '';
+    return String(text)
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .trim()
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .join('\n')
+      .trim();
+  };
+
   const activeResult = submitResult || actualRunResult;
   const diagnostics = activeResult?.diagnostics || [];
-  const status = activeResult?.status || '';
-  const verdict = activeResult?.verdict || status.toUpperCase().replace(/\s+/g, '_');
-  const isCompileOrSyntaxError = status === 'Compilation Error' || status === 'Syntax Error' || verdict === 'COMPILATION_ERROR' || verdict === 'SYNTAX_ERROR';
-  const isRuntimeError = status === 'Runtime Error' || verdict === 'RUNTIME_ERROR';
-  const isTLE = status === 'Time Limit Exceeded' || verdict === 'TIME_LIMIT_EXCEEDED';
-  const isMLE = status === 'Memory Limit Exceeded' || verdict === 'MEMORY_LIMIT_EXCEEDED';
-  const isAccepted = status === 'Accepted' || verdict === 'ACCEPTED' || status === 'OK' || status === 'Success';
+  const rawStatus = activeResult?.status || '';
+  const rawVerdict = activeResult?.verdict || rawStatus.toUpperCase().replace(/\s+/g, '_');
+
+  const outputVal = activeResult?.output !== undefined ? activeResult.output : (activeResult?.actual || '');
+  const expectedVal = activeResult?.expected_output !== undefined ? activeResult.expected_output : (activeResult?.expected || '');
+  const hasExpected = expectedVal !== '' && expectedVal !== null && expectedVal !== undefined;
+
+  const outputMatches = hasExpected && (
+    normalizeText(outputVal) === normalizeText(expectedVal) ||
+    normalizeText(outputVal).toLowerCase() === normalizeText(expectedVal).toLowerCase()
+  );
+
+  const isCompileOrSyntaxError = rawStatus === 'Compilation Error' || rawStatus === 'Syntax Error' || rawVerdict === 'COMPILATION_ERROR' || rawVerdict === 'SYNTAX_ERROR';
+  const isRuntimeError = rawStatus === 'Runtime Error' || rawVerdict === 'RUNTIME_ERROR';
+  const isTLE = rawStatus === 'Time Limit Exceeded' || rawVerdict === 'TIME_LIMIT_EXCEEDED';
+  const isMLE = rawStatus === 'Memory Limit Exceeded' || rawVerdict === 'MEMORY_LIMIT_EXCEEDED';
+
+  let status = rawStatus;
+  let verdict = rawVerdict;
+
+  if (!isCompileOrSyntaxError && !isRuntimeError && !isTLE && !isMLE) {
+    if (hasExpected) {
+      if (outputMatches) {
+        status = 'Accepted';
+        verdict = 'ACCEPTED';
+      } else {
+        status = 'Wrong Answer';
+        verdict = 'WRONG_ANSWER';
+      }
+    } else if (rawStatus === 'OK' || rawStatus === 'Success') {
+      status = 'Executed Successfully';
+      verdict = 'OK';
+    }
+  }
+
+  const isAccepted = status === 'Accepted' || verdict === 'ACCEPTED' || status === 'Executed Successfully';
   const isWrongAnswer = status === 'Wrong Answer' || verdict === 'WRONG_ANSWER';
 
   return (

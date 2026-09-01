@@ -591,6 +591,7 @@ export const ContestArena = () => {
         language: currentLanguage,
         code: currentCode,
         custom_input: inputToUse,
+        expected_output: expectedOutputToUse,
       });
       if (res.data.success) {
         setRunResult({

@@ -22,22 +22,38 @@ submissions_bp = Blueprint("submissions", __name__)
 @submissions_bp.route("/run", methods=["POST"])
 @rate_limit(max_requests=10, window_seconds=60, key_func=lambda: request.remote_addr)
 def run_code_custom():
-    """Run code against custom input with full LeetCode-style compiler diagnostics."""
+    """Run code against custom input or testcase with full LeetCode-style judge comparison and diagnostics."""
     data = request.get_json() or {}
     language = data.get("language", "python").lower()
     code = data.get("code", "").strip()
     custom_input = data.get("custom_input", "")
+    expected_output = data.get("expected_output")
 
     if not code:
         return jsonify({"error": "Code cannot be empty", "success": False}), 400
 
     result = execute_code(language, code, custom_input, timeout=8)
-    
+    status = result["status"]
+    verdict = result.get("verdict", status.upper().replace(" ", "_"))
+
+    # If code ran to completion without crashing (status == "OK") and expected_output is provided, perform judge comparison!
+    if status == "OK" and expected_output is not None and str(expected_output).strip() != "":
+        actual_norm = normalize_output(result.get("output", ""))
+        expected_norm = normalize_output(expected_output)
+
+        if actual_norm == expected_norm or actual_norm.lower() == expected_norm.lower():
+            status = "Accepted"
+            verdict = "ACCEPTED"
+        else:
+            status = "Wrong Answer"
+            verdict = "WRONG_ANSWER"
+
     return jsonify({
         "success": True,
-        "status": result["status"],
-        "verdict": result.get("verdict", result["status"].upper().replace(" ", "_")),
+        "status": status,
+        "verdict": verdict,
         "output": result["output"],
+        "expected_output": expected_output,
         "error": result["error"],
         "stderr": result.get("stderr", ""),
         "execution_time": result["execution_time"],

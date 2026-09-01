@@ -141,6 +141,7 @@ export const ProblemSolve = () => {
         language,
         code,
         custom_input: inputToUse,
+        expected_output: expectedOutputToUse,
       });
 
       if (res.data.success) {
