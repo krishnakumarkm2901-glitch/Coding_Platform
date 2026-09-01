@@ -908,33 +908,36 @@ def submit_contest(contest_id):
         test_cases = prob.get("test_cases", [])
         if not test_cases:
             test_cases = list(db.test_cases.find({"problem_id": str(prob["_id"])}))
-        if not test_cases:
-            test_cases = [{"input": prob.get("sample_input", ""), "expected_output": prob.get("sample_output", "")}]
-
-        # Execute test cases in parallel across worker pool
-        eval_res = compiler_pool.evaluate_test_cases(lang, code, test_cases, timeout=5)
-        passed = eval_res["passed"]
-        total_tcs = eval_res["total"]
+        # Execute test cases using central OnlineJudgeEngine
+        from services.judge_engine import OnlineJudgeEngine
+        time_limit = float(prob.get("time_limit", prob.get("timeLimit", 5.0)))
+        eval_res = OnlineJudgeEngine.evaluate_solution(lang, code, test_cases, time_limit=time_limit)
+        passed = eval_res["passed_test_cases"]
+        total_tcs = eval_res["total_test_cases"]
         status = eval_res["status"]
 
-        if passed == total_tcs and total_tcs > 0:
+        if status == "Accepted" and passed == total_tcs and total_tcs > 0:
             problems_solved += 1
             total_score += 50 # 50 points per solved problem
             coding_results[pid] = {
                 "status": "Accepted",
+                "verdict": "ACCEPTED",
                 "passed": passed,
                 "total": total_tcs,
-                "time_ms": eval_res["total_time_ms"]
+                "time_ms": eval_res["runtime_ms"],
+                "complexity": eval_res.get("complexity")
             }
         else:
-            # Partial scoring
+            # Partial scoring based on real passed tests
             partial_points = int((passed / total_tcs) * 50) if total_tcs > 0 else 0
             total_score += partial_points
             coding_results[pid] = {
-                "status": status if status != "Accepted" else "Partial/Wrong",
+                "status": status,
+                "verdict": eval_res.get("verdict", "WRONG_ANSWER"),
                 "passed": passed,
                 "total": total_tcs,
-                "time_ms": eval_res["total_time_ms"]
+                "time_ms": eval_res["runtime_ms"],
+                "complexity": eval_res.get("complexity")
             }
 
     mcq_score = mcqs_correct * 10
@@ -1046,11 +1049,14 @@ def submit_contest_problem(contest_id, problem_id):
     if not test_cases:
         test_cases = [{"input": prob.get("sample_input", ""), "expected_output": prob.get("sample_output", "")}]
 
-    # Run evaluation across compiler worker pool
-    eval_res = compiler_pool.evaluate_test_cases(language, code, test_cases, timeout=5)
-    passed = eval_res["passed"]
-    total = eval_res["total"]
+    # Run evaluation across central OnlineJudgeEngine
+    from services.judge_engine import OnlineJudgeEngine
+    time_limit = float(prob.get("time_limit", prob.get("timeLimit", 5.0)))
+    eval_res = OnlineJudgeEngine.evaluate_solution(language, code, test_cases, time_limit=time_limit)
+    passed = eval_res["passed_test_cases"]
+    total = eval_res["total_test_cases"]
     status = eval_res["status"]
+    verdict = eval_res["verdict"]
 
     # Save student code and result to participant document
     prob_key = str(prob["_id"])
@@ -1061,9 +1067,11 @@ def submit_contest_problem(contest_id, problem_id):
                 f"code_solutions.{prob_key}": {"language": language, "code": code},
                 f"coding_results.{prob_key}": {
                     "status": status,
+                    "verdict": verdict,
                     "passed": passed,
                     "total": total,
-                    "time_ms": eval_res.get("total_time_ms", 0)
+                    "time_ms": eval_res.get("runtime_ms", 0),
+                    "complexity": eval_res.get("complexity")
                 }
             }
         }
@@ -1072,15 +1080,15 @@ def submit_contest_problem(contest_id, problem_id):
     return jsonify({
         "success": True,
         "status": status,
-        "verdict": eval_res.get("verdict", status.upper().replace(" ", "_")),
+        "verdict": verdict,
         "passed_test_cases": passed,
         "total_test_cases": total,
-        "runtime": eval_res.get("max_time_ms", 0),
-        "runtime_ms": eval_res.get("max_time_ms", 0),
+        "runtime": eval_res.get("runtime_ms", 0),
+        "runtime_ms": eval_res.get("runtime_ms", 0),
         "memory_mb": eval_res.get("memory_mb", 14.2),
-        "total_time_ms": eval_res.get("total_time_ms", 0),
+        "complexity": eval_res.get("complexity"),
         "diagnostics": eval_res.get("diagnostics", []),
-        "test_results": eval_res.get("results", []),
+        "test_results": eval_res.get("test_results", []),
         "error_message": eval_res.get("error_message", "")
     }), 200
 

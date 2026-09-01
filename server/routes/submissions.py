@@ -187,111 +187,30 @@ def submit_solution():
 
 
 def _submit_synchronous(db, user, problem, test_cases, language, code):
-    """Synchronous submission flow with full LeetCode-style diagnostics."""
+    """Synchronous submission flow using central OnlineJudgeEngine."""
+    from services.judge_engine import OnlineJudgeEngine
+
     user_id = user["_id"]
-    total_test_cases = len(test_cases)
-    passed_test_cases = 0
-    final_status = "Accepted"
-    first_error = ""
-    failed_test_case_info = None
-    diagnostics = []
-    max_runtime = 0.0
-    test_results = []
+    time_limit = float(problem.get("time_limit", problem.get("timeLimit", 5.0)))
 
-    for idx, tc in enumerate(test_cases):
-        tc_input = tc.get("input", "")
-        expected_output = normalize_output(tc.get("expected_output", tc.get("output", "")))
+    judge_res = OnlineJudgeEngine.evaluate_solution(
+        language=language,
+        code=code,
+        test_cases=test_cases,
+        time_limit=time_limit
+    )
 
-        res = execute_code(language, code, tc_input, timeout=6)
-        max_runtime = max(max_runtime, res.get("execution_time", 0.0))
-
-        # Check for compilation or runtime errors
-        if res["status"] in ["Compilation Error", "Syntax Error"]:
-            final_status = res["status"]
-            first_error = res["error"]
-            diagnostics = res.get("diagnostics", [])
-            test_results.append({
-                "test_case": idx + 1,
-                "status": final_status,
-                "passed": False,
-                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
-                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
-                "actual": res["error"],
-                "execution_time_ms": res.get("execution_time", 0)
-            })
-            break
-        elif res["status"] == "Time Limit Exceeded":
-            final_status = "Time Limit Exceeded"
-            first_error = res["error"]
-            failed_test_case_info = {
-                "test_case_index": idx + 1,
-                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
-                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
-                "actual": "Time Limit Exceeded"
-            }
-            test_results.append({
-                "test_case": idx + 1,
-                "status": "Time Limit Exceeded",
-                "passed": False,
-                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
-                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
-                "actual": "Time Limit Exceeded",
-                "execution_time_ms": res.get("execution_time", 0)
-            })
-            break
-        elif res["status"] == "Runtime Error":
-            final_status = "Runtime Error"
-            first_error = res["error"]
-            diagnostics = res.get("diagnostics", [])
-            failed_test_case_info = {
-                "test_case_index": idx + 1,
-                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
-                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
-                "actual": res["error"]
-            }
-            test_results.append({
-                "test_case": idx + 1,
-                "status": "Runtime Error",
-                "passed": False,
-                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
-                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
-                "actual": res["error"],
-                "execution_time_ms": res.get("execution_time", 0)
-            })
-            break
-        
-        # Compare actual output with expected output
-        actual_output = normalize_output(res["output"])
-        if actual_output == expected_output or actual_output.lower() == expected_output.lower():
-            passed_test_cases += 1
-            test_results.append({
-                "test_case": idx + 1,
-                "status": "Passed",
-                "passed": True,
-                "input": tc_input if tc.get("is_sample") else "(Hidden)",
-                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
-                "actual": actual_output if tc.get("is_sample") else "(Hidden)",
-                "execution_time_ms": res.get("execution_time", 0)
-            })
-        else:
-            final_status = "Wrong Answer"
-            first_error = f"Output mismatch on test case {idx + 1}"
-            failed_test_case_info = {
-                "test_case_index": idx + 1,
-                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
-                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
-                "actual": actual_output if tc.get("is_sample") else "(Hidden Output)"
-            }
-            test_results.append({
-                "test_case": idx + 1,
-                "status": "Wrong Answer",
-                "passed": False,
-                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
-                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
-                "actual": actual_output if tc.get("is_sample") else "(Hidden Output)",
-                "execution_time_ms": res.get("execution_time", 0)
-            })
-            break
+    final_status = judge_res["status"]
+    verdict = judge_res["verdict"]
+    passed_test_cases = judge_res["passed_test_cases"]
+    total_test_cases = judge_res["total_test_cases"]
+    runtime_ms = judge_res["runtime_ms"]
+    memory_mb = judge_res["memory_mb"]
+    complexity = judge_res.get("complexity", {"time": "O(1)", "space": "O(1)"})
+    first_error = judge_res.get("error_message", "")
+    failed_test_case_info = judge_res.get("failed_case")
+    diagnostics = judge_res.get("diagnostics", [])
+    test_results = judge_res.get("test_results", [])
 
     # Save submission record
     submission_doc = {
@@ -303,13 +222,14 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
         "language": language,
         "code": code,
         "status": final_status,
-        "verdict": final_status.upper().replace(" ", "_"),
-        "runtime": max_runtime,
-        "runtime_ms": max_runtime,
-        "memory": 14.2,
-        "memory_mb": 14.2,
+        "verdict": verdict,
+        "runtime": runtime_ms,
+        "runtime_ms": runtime_ms,
+        "memory": memory_mb,
+        "memory_mb": memory_mb,
         "passed_test_cases": passed_test_cases,
         "total_test_cases": total_test_cases,
+        "complexity": complexity,
         "error_message": first_error,
         "diagnostics": diagnostics,
         "created_at": datetime.now(timezone.utc)
@@ -317,7 +237,7 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
 
     sub_result = db.submissions.insert_one(submission_doc)
 
-    if final_status == "Accepted":
+    if final_status == "Accepted" and passed_test_cases == total_test_cases:
         from services.notification_service import create_notification
         # Check if user has already solved this problem before
         solved_before = db.submissions.find_one({

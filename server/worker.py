@@ -66,22 +66,9 @@ signal.signal(signal.SIGTERM, _handle_signal)
 # ---------------------------------------------------------------------------
 
 def _evaluate_test_cases(language, code, test_cases, timeout=5):
-    """Run student code against test cases.
-
-    Delegates to the compiler_pool when there are multiple test cases,
-    otherwise uses direct execute_code for a single test.
-    """
-    if not test_cases:
-        return {
-            "status": "Accepted",
-            "passed": 0,
-            "total": 0,
-            "total_time_ms": 0,
-            "max_time_ms": 0,
-            "results": [],
-        }
-
-    return compiler_pool.evaluate_test_cases(language, code, test_cases, timeout)
+    """Run student code against test cases using central OnlineJudgeEngine."""
+    from services.judge_engine import OnlineJudgeEngine
+    return OnlineJudgeEngine.evaluate_solution(language, code, test_cases, time_limit=float(timeout))
 
 
 def process_submission_job(job):

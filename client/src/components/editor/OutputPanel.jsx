@@ -276,13 +276,23 @@ export const OutputPanel = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs text-[#667085] dark:text-[#94A3B8] font-mono">
+                  <div className="flex items-center gap-2 text-xs text-[#667085] dark:text-[#94A3B8] font-mono flex-wrap">
                     <span className="px-2.5 py-1 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D]">
                       Runtime: {activeResult.runtime_ms || activeResult.runtime || activeResult.execution_time || 0} ms
                     </span>
                     {activeResult.memory_mb && (
                       <span className="px-2.5 py-1 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D]">
                         Memory: {activeResult.memory_mb} MB
+                      </span>
+                    )}
+                    {activeResult.complexity?.time && activeResult.complexity?.time !== 'Unable to determine automatically with high confidence' && (
+                      <span className="px-2.5 py-1 rounded-lg bg-purple-500/10 dark:bg-purple-950/20 border border-purple-500/30 text-purple-600 dark:text-purple-400 font-bold">
+                        Time: {activeResult.complexity.time}
+                      </span>
+                    )}
+                    {activeResult.complexity?.space && activeResult.complexity?.space !== 'Unable to determine automatically with high confidence' && (
+                      <span className="px-2.5 py-1 rounded-lg bg-indigo-500/10 dark:bg-indigo-950/20 border border-indigo-500/30 text-indigo-600 dark:text-indigo-400 font-bold">
+                        Space: {activeResult.complexity.space}
                       </span>
                     )}
                   </div>
