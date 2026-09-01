@@ -70,12 +70,16 @@ def create_app():
         except Exception:
             pass
 
+        from services.toolchain_resolver import get_toolchain_diagnostics
+        toolchains = get_toolchain_diagnostics()
+
         return jsonify({
             "status": "healthy" if db_healthy else "degraded",
             "database": "connected" if db_healthy else "disconnected",
             "cache": cache.get_stats(),
             "queue": get_queue_stats(),
             "compiler_workers": compiler_pool.get_metrics(),
+            "toolchains": toolchains,
             "server_time_utc": format_utc_iso(get_utc_now())
         }), 200 if db_healthy else 503
 
@@ -114,4 +118,7 @@ app = create_app()
 if __name__ == "__main__":
     port = Config.PORT
     print(f"Starting College Coding Platform API server on port {port}...")
-    app.run(host="0.0.0.0", port=port, debug=Config.DEBUG)
+    from services.toolchain_resolver import resolve_java_toolchain
+    javac, java = resolve_java_toolchain()
+    print(f"Java Toolchain: javac={javac}, java={java}")
+    app.run(host="0.0.0.0", port=port, debug=Config.DEBUG, use_reloader=False)
