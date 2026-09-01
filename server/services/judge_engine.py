@@ -266,13 +266,17 @@ class OnlineJudgeEngine:
         test_results = []
         diagnostics = []
 
+        from services.compiler_provider import get_compiler_provider
+        provider = get_compiler_provider()
+
         for idx, tc in enumerate(test_cases):
             # Raw string stdin input (preserved without any JSON modification)
             tc_input = str(tc.get("input", "")) if tc.get("input") is not None else ""
             tc_expected = str(tc.get("expected_output", tc.get("output", ""))) if tc.get("expected_output") is not None else ""
             is_sample = bool(tc.get("is_sample", False)) and not bool(tc.get("is_hidden", False))
 
-            res = execute_code(language, code, tc_input, timeout=int(time_limit))
+            exec_obj = provider.execute(language, code, tc_input, timeout=int(time_limit))
+            res = exec_obj.to_dict()
             exec_time = res.get("execution_time", 0.0)
             max_runtime_ms = max(max_runtime_ms, exec_time)
 
