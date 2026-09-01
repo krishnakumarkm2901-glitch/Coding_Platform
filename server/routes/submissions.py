@@ -10,6 +10,7 @@ from services.queue_service import (
 )
 from bson import ObjectId
 from datetime import datetime, timezone
+import uuid
 
 submissions_bp = Blueprint("submissions", __name__)
 
@@ -275,12 +276,13 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
         "success": True,
         "submission_id": str(sub_result.inserted_id),
         "status": final_status,
-        "verdict": final_status.upper().replace(" ", "_"),
+        "verdict": verdict,
         "passed_test_cases": passed_test_cases,
         "total_test_cases": total_test_cases,
-        "runtime": max_runtime,
-        "runtime_ms": max_runtime,
-        "memory_mb": 14.2,
+        "runtime": runtime_ms,
+        "runtime_ms": runtime_ms,
+        "memory_mb": memory_mb,
+        "complexity": complexity,
         "error_message": first_error,
         "failed_case": failed_test_case_info,
         "diagnostics": diagnostics,
