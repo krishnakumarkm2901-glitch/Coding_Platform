@@ -9,6 +9,7 @@ import {
   Clock, 
   Users, 
   AlertCircle, 
+  AlertTriangle,
   CheckCircle2, 
   ShieldAlert,
   Code2,
