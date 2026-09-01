@@ -22,6 +22,7 @@ def student_login():
     if not student_id or not password:
         return jsonify({"error": "Student ID and password are required", "success": False}), 400
 
+    user = None
     try:
         db = get_db()
         if db is None:
@@ -90,6 +91,7 @@ def admin_login():
     if not login_id or not password:
         return jsonify({"error": "Email/Username and password are required", "success": False}), 400
 
+    user = None
     try:
         db = get_db()
         if db is None:

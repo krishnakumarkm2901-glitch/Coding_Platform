@@ -10,7 +10,6 @@ from services.queue_service import (
 )
 from bson import ObjectId
 from datetime import datetime, timezone
-import uuid
 
 submissions_bp = Blueprint("submissions", __name__)
 
