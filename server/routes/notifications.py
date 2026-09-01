@@ -74,6 +74,48 @@ def mark_as_read(notif_id):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 400
 
+@notifications_bp.route("/bulk-delete", methods=["POST"])
+@token_required
+def bulk_delete_notifications():
+    """Bulk delete selected notifications for the current user."""
+    db = get_db()
+    user = request.current_user
+    user_id = str(user["_id"])
+    data = request.get_json() or {}
+    ids = data.get("ids", [])
+    
+    if not ids:
+        return jsonify({"success": False, "error": "No notification IDs provided"}), 400
+        
+    object_ids = []
+    for i in ids:
+        try:
+            object_ids.append(ObjectId(i))
+        except Exception:
+            pass
+            
+    res = db.notifications.delete_many({"_id": {"$in": object_ids}, "user_id": user_id})
+    return jsonify({
+        "success": True, 
+        "message": f"{res.deleted_count} notification{'s' if res.deleted_count != 1 else ''} deleted successfully",
+        "deleted_count": res.deleted_count
+    }), 200
+
+@notifications_bp.route("/delete-all", methods=["POST"])
+@token_required
+def delete_all_notifications():
+    """Delete all notifications for the current user."""
+    db = get_db()
+    user = request.current_user
+    user_id = str(user["_id"])
+    
+    res = db.notifications.delete_many({"user_id": user_id})
+    return jsonify({
+        "success": True, 
+        "message": "All notifications deleted successfully",
+        "deleted_count": res.deleted_count
+    }), 200
+
 @notifications_bp.route("/<notif_id>", methods=["DELETE"])
 @token_required
 def delete_notification(notif_id):

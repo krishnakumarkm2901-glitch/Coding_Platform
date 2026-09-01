@@ -20,6 +20,7 @@ import {
   Megaphone,
   Send,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2
 } from 'lucide-react';
 import { PageLoader } from '../../components/common/Loader';
@@ -56,6 +57,14 @@ export const NotificationsPage = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [globalSuccessMsg, setGlobalSuccessMsg] = useState('');
+
+  // Bulk selection & delete states
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteModalType, setDeleteModalType] = useState('selected'); // 'single' | 'selected' | 'all'
+  const [targetSingleId, setTargetSingleId] = useState(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Announcement modal state
   const [isAnnModalOpen, setIsAnnModalOpen] = useState(false);
@@ -91,6 +100,8 @@ export const NotificationsPage = () => {
       if (res.data.success) {
         setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
         setUnreadCount(0);
+        setGlobalSuccessMsg('All notifications marked as read.');
+        setTimeout(() => setGlobalSuccessMsg(''), 3000);
       }
     } catch (err) {
       alert('Failed to mark all notifications as read.');
@@ -111,20 +122,84 @@ export const NotificationsPage = () => {
     }
   };
 
-  const handleDeleteNotification = async (e, id, isRead) => {
-    e.stopPropagation();
-    if (!window.confirm('Delete this notification?')) return;
+  // ----------------- SELECTION HANDLERS -----------------
+  const allVisibleSelected = notifications.length > 0 && notifications.every((n) => selectedIds.includes(n.id));
 
+  const handleToggleSelect = (id) => {
+    setSelectedIds((prev) => 
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(notifications.map((n) => n.id));
+    }
+  };
+
+  // ----------------- DELETE MODAL HANDLERS -----------------
+  const handleOpenDeleteSingle = (e, id) => {
+    e.stopPropagation();
+    setTargetSingleId(id);
+    setDeleteModalType('single');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleOpenDeleteSelected = () => {
+    if (selectedIds.length === 0) return;
+    setDeleteModalType('selected');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleOpenDeleteAll = () => {
+    if (notifications.length === 0) return;
+    setDeleteModalType('all');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
     try {
-      const res = await api.delete(`/notifications/${id}`);
-      if (res.data.success) {
-        setNotifications((prev) => prev.filter((n) => n.id !== id));
-        if (!isRead) {
-          setUnreadCount((prev) => Math.max(0, prev - 1));
+      setDeleteLoading(true);
+
+      if (deleteModalType === 'single') {
+        const notifToDelete = notifications.find((n) => n.id === targetSingleId);
+        const res = await api.delete(`/notifications/${targetSingleId}`);
+        if (res.data.success) {
+          setNotifications((prev) => prev.filter((n) => n.id !== targetSingleId));
+          setSelectedIds((prev) => prev.filter((id) => id !== targetSingleId));
+          if (notifToDelete && !notifToDelete.is_read) {
+            setUnreadCount((prev) => Math.max(0, prev - 1));
+          }
+          setGlobalSuccessMsg('Notification deleted successfully.');
+        }
+      } else if (deleteModalType === 'selected') {
+        const count = selectedIds.length;
+        const res = await api.post('/notifications/bulk-delete', { ids: selectedIds });
+        if (res.data.success) {
+          const unreadDeleted = notifications.filter((n) => selectedIds.includes(n.id) && !n.is_read).length;
+          setNotifications((prev) => prev.filter((n) => !selectedIds.includes(n.id)));
+          setUnreadCount((prev) => Math.max(0, prev - unreadDeleted));
+          setSelectedIds([]);
+          setGlobalSuccessMsg(`${count} notification${count > 1 ? 's' : ''} deleted successfully.`);
+        }
+      } else if (deleteModalType === 'all') {
+        const res = await api.post('/notifications/delete-all');
+        if (res.data.success) {
+          setNotifications([]);
+          setSelectedIds([]);
+          setUnreadCount(0);
+          setGlobalSuccessMsg('All notifications deleted successfully.');
         }
       }
+
+      setIsDeleteModalOpen(false);
+      setTimeout(() => setGlobalSuccessMsg(''), 4000);
     } catch (err) {
-      alert('Failed to delete notification.');
+      alert(err.response?.data?.error || 'Failed to delete notifications.');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -217,6 +292,61 @@ export const NotificationsPage = () => {
         </div>
       </div>
 
+      {globalSuccessMsg && (
+        <div className="p-3.5 rounded-2xl bg-[#22B573]/15 border border-[#22B573]/30 text-[#22B573] text-xs flex items-center gap-2 font-bold animate-fadeIn">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{globalSuccessMsg}</span>
+        </div>
+      )}
+
+      {/* Action / Toolbar Bar with Select All, Delete Selected, Delete All */}
+      <div className="p-3.5 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-white dark:bg-[#151A21] flex items-center justify-between gap-3 shadow-sm flex-wrap">
+        {/* Select All Checkbox */}
+        <label className="flex items-center gap-2 cursor-pointer select-none px-2 py-1 rounded-xl hover:bg-[#F5F7FA] dark:hover:bg-[#20252C] transition">
+          <input
+            type="checkbox"
+            checked={allVisibleSelected}
+            onChange={handleSelectAll}
+            disabled={notifications.length === 0}
+            className="w-4 h-4 rounded text-[#0757B8] border-[#D9E0E8] dark:border-[#30363D] focus:ring-[#0757B8] cursor-pointer disabled:opacity-40"
+          />
+          <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8]">
+            Select All
+          </span>
+        </label>
+
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Delete Selected Button */}
+          <button
+            type="button"
+            disabled={selectedIds.length === 0}
+            onClick={handleOpenDeleteSelected}
+            className="px-3.5 py-2 rounded-2xl bg-[#EF4444] hover:bg-red-700 text-white font-bold text-xs shadow-md shadow-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>
+              {selectedIds.length > 0 ? `Delete Selected (${selectedIds.length})` : 'Delete Selected'}
+            </span>
+          </button>
+
+          {/* Delete All Button */}
+          <button
+            type="button"
+            disabled={notifications.length === 0}
+            onClick={handleOpenDeleteAll}
+            className="px-3.5 py-2 rounded-2xl bg-[#EF4444]/10 hover:bg-[#EF4444]/20 border border-[#EF4444]/30 text-[#EF4444] font-bold text-xs shadow-sm flex items-center gap-1.5 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Delete All</span>
+          </button>
+        </div>
+
+        {/* Available Count */}
+        <span className="text-xs font-bold text-[#0757B8] dark:text-[#60A5FA] whitespace-nowrap px-1">
+          {notifications.length} {notifications.length === 1 ? 'notification' : 'notifications'}
+        </span>
+      </div>
+
       {/* Notifications Cards Stack */}
       {notifications.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-[#8491A5] dark:text-[#94A3B8] border border-[#D9E0E8] dark:border-[#30363D] rounded-3xl bg-white dark:bg-[#151A21] space-y-3">
@@ -229,17 +359,33 @@ export const NotificationsPage = () => {
           {notifications.map((notif) => {
             const Icon = NOTIF_ICONS[notif.type] || Bell;
             const colorClass = NOTIF_COLORS[notif.type] || 'bg-slate-500/10 text-slate-600 border-slate-500/20';
+            const isSelected = selectedIds.includes(notif.id);
             
             return (
               <div
                 key={notif.id}
                 onClick={() => !notif.is_read && handleMarkAsRead(notif.id)}
-                className={`p-5 rounded-3xl border bg-white dark:bg-[#151A21] transition shadow-sm hover:shadow-md cursor-pointer relative flex items-start gap-4 ${
+                className={`p-5 rounded-3xl border bg-white dark:bg-[#151A21] transition shadow-sm hover:shadow-md cursor-pointer relative flex items-start gap-3.5 ${
+                  isSelected ? 'ring-2 ring-[#0757B8] bg-blue-50/20 dark:bg-blue-950/10' : ''
+                } ${
                   notif.is_read
                     ? 'border-[#E2E8F0] dark:border-[#30363D]'
                     : 'border-l-4 border-l-[#0757B8] border-y-[#E2E8F0] border-r-[#E2E8F0] dark:border-y-[#30363D] dark:border-r-[#30363D]'
                 }`}
               >
+                {/* Individual Checkbox */}
+                <div 
+                  className="pt-2.5 shrink-0"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => handleToggleSelect(notif.id)}
+                    className="w-4 h-4 rounded text-[#0757B8] border-[#D9E0E8] dark:border-[#30363D] focus:ring-[#0757B8] cursor-pointer"
+                  />
+                </div>
+
                 {/* Notification Icon */}
                 <div className={`w-10 h-10 rounded-2xl shrink-0 flex items-center justify-center border ${colorClass}`}>
                   <Icon className="w-5 h-5" />
@@ -283,7 +429,7 @@ export const NotificationsPage = () => {
                     </button>
                   )}
                   <button
-                    onClick={(e) => handleDeleteNotification(e, notif.id, notif.is_read)}
+                    onClick={(e) => handleOpenDeleteSingle(e, notif.id)}
                     className="p-2 hover:bg-red-500/10 text-red-500 rounded-xl transition"
                     title="Delete Notification"
                   >
@@ -373,6 +519,52 @@ export const NotificationsPage = () => {
           </form>
         </Modal>
       )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      <Modal
+        isOpen={isDeleteModalOpen}
+        onClose={() => !deleteLoading && setIsDeleteModalOpen(false)}
+        title="Confirm Delete"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4 text-xs">
+          <div className="p-4 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-[#EF4444] shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-[#EF4444]">
+                {deleteModalType === 'all'
+                  ? 'Delete All Notifications?'
+                  : deleteModalType === 'selected'
+                  ? `Are you sure you want to delete ${selectedIds.length} selected notification${selectedIds.length > 1 ? 's' : ''}?`
+                  : 'Are you sure you want to delete this notification?'}
+              </p>
+              <p className="text-[#667085] dark:text-[#94A3B8]">
+                This action cannot be undone.
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-2 flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              disabled={deleteLoading}
+              onClick={() => setIsDeleteModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] font-semibold transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={deleteLoading}
+              onClick={handleConfirmDelete}
+              className="px-5 py-2 rounded-xl bg-[#EF4444] hover:bg-red-700 text-white font-bold shadow-md shadow-red-500/20 disabled:opacity-50 flex items-center gap-1.5 transition"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{deleteLoading ? 'Deleting...' : 'Delete'}</span>
+            </button>
+          </div>
+        </div>
+      </Modal>
 
     </div>
   );
