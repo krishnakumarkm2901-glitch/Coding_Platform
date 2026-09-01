@@ -117,6 +117,13 @@ export const ManageContests = () => {
   const [selectedProblems, setSelectedProblems] = useState([]);
   const [selectedMCQs, setSelectedMCQs] = useState([]);
   const [checkedProblemIds, setCheckedProblemIds] = useState([]);
+  const [checkedMcqIds, setCheckedMcqIds] = useState([]);
+  const [browserSelectedMcqIds, setBrowserSelectedMcqIds] = useState([]);
+  const [browserSelectedProblemIds, setBrowserSelectedProblemIds] = useState([]);
+  const [isBrowserMcqDeleteModalOpen, setIsBrowserMcqDeleteModalOpen] = useState(false);
+  const [isBrowserProblemDeleteModalOpen, setIsBrowserProblemDeleteModalOpen] = useState(false);
+  const [browserDeleteLoading, setBrowserDeleteLoading] = useState(false);
+  const [browserNotification, setBrowserNotification] = useState({ type: '', message: '' });
 
   const [isBrowsingProblems, setIsBrowsingProblems] = useState(false);
   const [isBrowsingMCQs, setIsBrowsingMCQs] = useState(false);
@@ -554,8 +561,6 @@ export const ManageContests = () => {
     allow_calculator: false,
   });
 
-  const [checkedMcqIds, setCheckedMcqIds] = useState([]);
-
   useEffect(() => {
     fetchInitialData();
     // Lightweight polling every 6 seconds for live status updates
@@ -662,6 +667,9 @@ export const ManageContests = () => {
       allow_calculator: false,
     });
     setCheckedMcqIds([]);
+    setCheckedProblemIds([]);
+    setBrowserSelectedMcqIds([]);
+    setBrowserSelectedProblemIds([]);
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -730,6 +738,9 @@ export const ManageContests = () => {
       allow_calculator: Boolean(contest.allow_calculator || contest.allowCalculator),
     });
     setCheckedMcqIds([]);
+    setCheckedProblemIds([]);
+    setBrowserSelectedMcqIds([]);
+    setBrowserSelectedProblemIds([]);
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -822,6 +833,59 @@ export const ManageContests = () => {
     }));
     setSelectedMCQs((prev) => prev.filter((m) => !checkedMcqIds.includes(String(m.id || m._id))));
     setCheckedMcqIds([]);
+  };
+
+  // Browser Bulk Deletion Handlers
+  const handleConfirmBrowserDeleteMCQs = async () => {
+    if (browserSelectedMcqIds.length === 0) return;
+    try {
+      setBrowserDeleteLoading(true);
+      const count = browserSelectedMcqIds.length;
+      const res = await api.post('/admin/mcqs/bulk-delete', { ids: browserSelectedMcqIds });
+      if (res.data.success) {
+        setAvailableMCQs(prev => prev.filter(m => !browserSelectedMcqIds.includes(String(m.id || m._id))));
+        setSelectedMCQs(prev => prev.filter(m => !browserSelectedMcqIds.includes(String(m.id || m._id))));
+        setFormData(prev => ({
+          ...prev,
+          mcq_ids: prev.mcq_ids.filter(id => !browserSelectedMcqIds.includes(id))
+        }));
+        setBrowserSelectedMcqIds([]);
+        setIsBrowserMcqDeleteModalOpen(false);
+        setBrowserNotification({ type: 'success', message: `${count} question${count > 1 ? 's' : ''} deleted successfully.` });
+        setTimeout(() => setBrowserNotification({ type: '', message: '' }), 4000);
+      }
+    } catch (err) {
+      setBrowserNotification({ type: 'error', message: err.response?.data?.error || 'Failed to delete questions.' });
+      setTimeout(() => setBrowserNotification({ type: '', message: '' }), 4000);
+    } finally {
+      setBrowserDeleteLoading(false);
+    }
+  };
+
+  const handleConfirmBrowserDeleteProblems = async () => {
+    if (browserSelectedProblemIds.length === 0) return;
+    try {
+      setBrowserDeleteLoading(true);
+      const count = browserSelectedProblemIds.length;
+      const res = await api.post('/admin/problems/bulk-delete', { ids: browserSelectedProblemIds });
+      if (res.data.success) {
+        setAvailableProblems(prev => prev.filter(p => !browserSelectedProblemIds.includes(String(p.id || p._id))));
+        setSelectedProblems(prev => prev.filter(p => !browserSelectedProblemIds.includes(String(p.id || p._id))));
+        setFormData(prev => ({
+          ...prev,
+          problem_ids: prev.problem_ids.filter(id => !browserSelectedProblemIds.includes(id))
+        }));
+        setBrowserSelectedProblemIds([]);
+        setIsBrowserProblemDeleteModalOpen(false);
+        setBrowserNotification({ type: 'success', message: `${count} question${count > 1 ? 's' : ''} deleted successfully.` });
+        setTimeout(() => setBrowserNotification({ type: '', message: '' }), 4000);
+      }
+    } catch (err) {
+      setBrowserNotification({ type: 'error', message: err.response?.data?.error || 'Failed to delete questions.' });
+      setTimeout(() => setBrowserNotification({ type: '', message: '' }), 4000);
+    } finally {
+      setBrowserDeleteLoading(false);
+    }
   };
 
   const handleTogglePublish = async (contest) => {
@@ -1346,8 +1410,45 @@ export const ManageContests = () => {
               {/* Lazy-Loaded Coding Problem Browser Panel */}
               {isBrowsingProblems && (
                 <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-2.5 animate-fadeIn">
-                  <div className="flex items-center justify-between">
-                    <div className="relative flex-1 mr-2">
+                  {browserNotification.message && (
+                    <div className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 animate-fadeIn ${
+                      browserNotification.type === 'success'
+                        ? 'bg-[#22B573]/15 border-[#22B573]/30 text-[#22B573]'
+                        : 'bg-[#EF4444]/15 border-[#EF4444]/30 text-[#EF4444]'
+                    }`}>
+                      {browserNotification.type === 'success' ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      )}
+                      <span>{browserNotification.message}</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 justify-between flex-wrap">
+                    {/* Select All Checkbox */}
+                    <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] font-bold text-[#0757B8] dark:text-[#60A5FA] px-1">
+                      <input
+                        type="checkbox"
+                        checked={
+                          filteredProblems.length > 0 &&
+                          filteredProblems.every((p) => browserSelectedProblemIds.includes(String(p.id || p._id)))
+                        }
+                        onChange={(e) => {
+                          const filteredIds = filteredProblems.map((p) => String(p.id || p._id));
+                          if (e.target.checked) {
+                            setBrowserSelectedProblemIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+                          } else {
+                            setBrowserSelectedProblemIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+                          }
+                        }}
+                        className="w-3.5 h-3.5 rounded text-[#0757B8] focus:ring-[#0757B8] dark:bg-[#20252C] dark:border-[#30363D] cursor-pointer"
+                      />
+                      <span>Select All</span>
+                    </label>
+
+                    {/* Filter search box */}
+                    <div className="relative flex-1 min-w-[180px]">
                       <input
                         type="text"
                         value={problemSearch}
@@ -1357,6 +1458,22 @@ export const ManageContests = () => {
                       />
                       <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
                     </div>
+
+                    {/* Delete Selected Button */}
+                    <button
+                      type="button"
+                      disabled={browserSelectedProblemIds.length === 0}
+                      onClick={() => setIsBrowserProblemDeleteModalOpen(true)}
+                      className="px-2.5 py-1.5 rounded-xl bg-red-500 hover:bg-red-600 text-white font-bold text-[11px] flex items-center gap-1.5 transition shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>
+                        {browserSelectedProblemIds.length > 0
+                          ? `Delete Selected (${browserSelectedProblemIds.length})`
+                          : 'Delete Selected'}
+                      </span>
+                    </button>
+
                     {problemsLoaded && (
                       <span className="text-[11px] font-bold text-[#0757B8] dark:text-[#60A5FA] whitespace-nowrap">
                         {availableProblems.length} available
@@ -1389,21 +1506,37 @@ export const ManageContests = () => {
                       {filteredProblems.map((p) => {
                         const pIdStr = String(p.id || p._id);
                         const isSelected = formData.problem_ids.includes(pIdStr);
+                        const isCheckedForDelete = browserSelectedProblemIds.includes(pIdStr);
 
                         return (
-                          <button
+                          <div
                             key={pIdStr}
-                            type="button"
                             onClick={() => handleToggleProblemSelect(p)}
-                            className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
-                              isSelected
+                            className={`p-2.5 rounded-xl border text-left flex items-center justify-between cursor-pointer transition ${
+                              isCheckedForDelete
+                                ? 'bg-red-500/10 border-red-500/40 text-[#172033] dark:text-[#F8FAFC]'
+                                : isSelected
                                 ? 'bg-[#DDF2FF] dark:bg-[#142A43] border-[#0757B8] text-[#0757B8] dark:text-[#60A5FA] font-bold shadow-sm'
                                 : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
                             }`}
                           >
-                            <div className="truncate pr-2">
-                              <div className="truncate font-semibold">{p.title}</div>
-                              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
+                            <div className="flex items-center gap-2 truncate pr-2">
+                              <input
+                                type="checkbox"
+                                checked={isCheckedForDelete}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  setBrowserSelectedProblemIds((prev) =>
+                                    prev.includes(pIdStr) ? prev.filter((id) => id !== pIdStr) : [...prev, pIdStr]
+                                  );
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                className="w-3.5 h-3.5 rounded text-[#0757B8] focus:ring-[#0757B8] dark:bg-[#151A21] dark:border-[#30363D] shrink-0 cursor-pointer"
+                              />
+                              <div className="truncate">
+                                <div className="truncate font-semibold">{p.title}</div>
+                                <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{p.topic || 'General'}</div>
+                              </div>
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
                               <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
@@ -1413,7 +1546,7 @@ export const ManageContests = () => {
                               </span>
                               {isSelected && <Check className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />}
                             </div>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -1544,8 +1677,45 @@ export const ManageContests = () => {
               {/* Lazy-Loaded MCQ Browser Panel */}
               {isBrowsingMCQs && (
                 <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-2.5 animate-fadeIn">
-                  <div className="flex items-center justify-between">
-                    <div className="relative flex-1 mr-2">
+                  {browserNotification.message && (
+                    <div className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 animate-fadeIn ${
+                      browserNotification.type === 'success'
+                        ? 'bg-[#22B573]/15 border-[#22B573]/30 text-[#22B573]'
+                        : 'bg-[#EF4444]/15 border-[#EF4444]/30 text-[#EF4444]'
+                    }`}>
+                      {browserNotification.type === 'success' ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      )}
+                      <span>{browserNotification.message}</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 justify-between flex-wrap">
+                    {/* Select All Checkbox */}
+                    <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] font-bold text-purple-700 dark:text-purple-300 px-1">
+                      <input
+                        type="checkbox"
+                        checked={
+                          filteredMCQs.length > 0 &&
+                          filteredMCQs.every((m) => browserSelectedMcqIds.includes(String(m.id || m._id)))
+                        }
+                        onChange={(e) => {
+                          const filteredIds = filteredMCQs.map((m) => String(m.id || m._id));
+                          if (e.target.checked) {
+                            setBrowserSelectedMcqIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+                          } else {
+                            setBrowserSelectedMcqIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+                          }
+                        }}
+                        className="w-3.5 h-3.5 rounded text-purple-600 focus:ring-purple-600 dark:bg-[#20252C] dark:border-[#30363D] cursor-pointer"
+                      />
+                      <span>Select All</span>
+                    </label>
+
+                    {/* Filter search box */}
+                    <div className="relative flex-1 min-w-[180px]">
                       <input
                         type="text"
                         value={mcqSearch}
@@ -1555,6 +1725,22 @@ export const ManageContests = () => {
                       />
                       <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#667085]" />
                     </div>
+
+                    {/* Delete Selected Button */}
+                    <button
+                      type="button"
+                      disabled={browserSelectedMcqIds.length === 0}
+                      onClick={() => setIsBrowserMcqDeleteModalOpen(true)}
+                      className="px-2.5 py-1.5 rounded-xl bg-red-500 hover:bg-red-600 text-white font-bold text-[11px] flex items-center gap-1.5 transition shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>
+                        {browserSelectedMcqIds.length > 0
+                          ? `Delete Selected (${browserSelectedMcqIds.length})`
+                          : 'Delete Selected'}
+                      </span>
+                    </button>
+
                     {mcqsLoaded && (
                       <span className="text-[11px] font-bold text-purple-600 dark:text-purple-400 whitespace-nowrap">
                         {availableMCQs.length} available
@@ -1587,26 +1773,42 @@ export const ManageContests = () => {
                       {filteredMCQs.map((m) => {
                         const mIdStr = String(m.id || m._id);
                         const isSelected = formData.mcq_ids.includes(mIdStr);
+                        const isCheckedForDelete = browserSelectedMcqIds.includes(mIdStr);
 
                         return (
-                          <button
+                          <div
                             key={mIdStr}
-                            type="button"
                             onClick={() => handleToggleMCQSelect(m)}
-                            className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition ${
-                              isSelected
+                            className={`p-2.5 rounded-xl border text-left flex items-center justify-between cursor-pointer transition ${
+                              isCheckedForDelete
+                                ? 'bg-red-500/10 border-red-500/40 text-[#172033] dark:text-[#F8FAFC]'
+                                : isSelected
                                 ? 'bg-purple-500/15 border-purple-500 text-purple-600 dark:text-purple-400 font-bold shadow-sm'
                                 : 'bg-[#FFFFFF] dark:bg-[#20252C] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
                             }`}
                           >
-                            <div className="truncate pr-2">
-                              <div className="truncate font-semibold">{m.question}</div>
-                              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
+                            <div className="flex items-center gap-2 truncate pr-2">
+                              <input
+                                type="checkbox"
+                                checked={isCheckedForDelete}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  setBrowserSelectedMcqIds((prev) =>
+                                    prev.includes(mIdStr) ? prev.filter((id) => id !== mIdStr) : [...prev, mIdStr]
+                                  );
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                className="w-3.5 h-3.5 rounded text-purple-600 focus:ring-purple-600 dark:bg-[#151A21] dark:border-[#30363D] shrink-0 cursor-pointer"
+                              />
+                              <div className="truncate">
+                                <div className="truncate font-semibold">{m.question}</div>
+                                <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-mono">{m.topic || 'CS'}</div>
+                              </div>
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
                               {isSelected && <Check className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />}
                             </div>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -2475,6 +2677,90 @@ export const ManageContests = () => {
                   ? `Import & Assign (${importMCQPreviewData.valid_count})`
                   : 'Import & Assign MCQs'}
               </span>
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* BROWSER MCQ BULK DELETE MODAL */}
+      <Modal
+        isOpen={isBrowserMcqDeleteModalOpen}
+        onClose={() => !browserDeleteLoading && setIsBrowserMcqDeleteModalOpen(false)}
+        title="Confirm Delete"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4 text-xs">
+          <div className="p-4 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-[#EF4444] shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-[#EF4444]">
+                Are you sure you want to delete {browserSelectedMcqIds.length} selected question{browserSelectedMcqIds.length > 1 ? 's' : ''}?
+              </p>
+              <p className="text-[#667085] dark:text-[#94A3B8]">
+                This action cannot be undone.
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-2 flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              disabled={browserDeleteLoading}
+              onClick={() => setIsBrowserMcqDeleteModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] font-semibold transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={browserDeleteLoading}
+              onClick={handleConfirmBrowserDeleteMCQs}
+              className="px-5 py-2 rounded-xl bg-[#EF4444] hover:bg-red-700 text-white font-bold shadow-md shadow-red-500/20 disabled:opacity-50 flex items-center gap-1.5 transition"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{browserDeleteLoading ? 'Deleting...' : 'Delete'}</span>
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* BROWSER PROBLEM BULK DELETE MODAL */}
+      <Modal
+        isOpen={isBrowserProblemDeleteModalOpen}
+        onClose={() => !browserDeleteLoading && setIsBrowserProblemDeleteModalOpen(false)}
+        title="Confirm Delete"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4 text-xs">
+          <div className="p-4 rounded-2xl bg-[#EF4444]/10 border border-[#EF4444]/30 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-[#EF4444] shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-[#EF4444]">
+                Are you sure you want to delete {browserSelectedProblemIds.length} selected question{browserSelectedProblemIds.length > 1 ? 's' : ''}?
+              </p>
+              <p className="text-[#667085] dark:text-[#94A3B8]">
+                This action cannot be undone.
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-2 flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              disabled={browserDeleteLoading}
+              onClick={() => setIsBrowserProblemDeleteModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] font-semibold transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={browserDeleteLoading}
+              onClick={handleConfirmBrowserDeleteProblems}
+              className="px-5 py-2 rounded-xl bg-[#EF4444] hover:bg-red-700 text-white font-bold shadow-md shadow-red-500/20 disabled:opacity-50 flex items-center gap-1.5 transition"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{browserDeleteLoading ? 'Deleting...' : 'Delete'}</span>
             </button>
           </div>
         </div>

@@ -147,9 +147,10 @@ export const ManageMCQs = () => {
           setGlobalSuccessMsg('MCQ deleted successfully.');
         }
       } else if (deleteModalType === 'selected') {
+        const count = selectedIds.length;
         const res = await api.post('/admin/mcqs/bulk-delete', { ids: selectedIds });
         if (res.data.success) {
-          setGlobalSuccessMsg(res.data.message || `Deleted ${selectedIds.length} MCQs.`);
+          setGlobalSuccessMsg(`${count} question${count > 1 ? 's' : ''} deleted successfully.`);
           setSelectedIds([]);
         }
       } else if (deleteModalType === 'all') {
@@ -157,7 +158,7 @@ export const ManageMCQs = () => {
           topic: topicFilter !== 'All' ? topicFilter : undefined,
         });
         if (res.data.success) {
-          setGlobalSuccessMsg(res.data.message || 'All MCQs deleted successfully.');
+          setGlobalSuccessMsg('All questions deleted successfully.');
           setSelectedIds([]);
         }
       }
@@ -421,53 +422,69 @@ export const ManageMCQs = () => {
       )}
 
       {/* Filter Bar */}
-      <div className="p-4 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
-        <div className="flex items-center gap-3 w-full sm:w-auto flex-1">
-          {/* Select All Checkbox */}
-          <label className="flex items-center gap-2 cursor-pointer select-none px-2 py-1 rounded-xl hover:bg-[#F5F7FA] dark:hover:bg-[#151A21] transition">
-            <input
-              type="checkbox"
-              checked={allVisibleSelected}
-              onChange={handleSelectAll}
-              className="w-4 h-4 rounded text-purple-600 border-[#D9E0E8] dark:border-[#30363D] focus:ring-purple-500 cursor-pointer"
-            />
-            <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8]">
-              Select All on Page
-            </span>
-          </label>
+      <div className="p-3.5 rounded-3xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#FFFFFF] dark:bg-[#20252C] flex items-center justify-between gap-3 shadow-sm flex-wrap">
+        {/* Select All Checkbox */}
+        <label className="flex items-center gap-2 cursor-pointer select-none px-2 py-1 rounded-xl hover:bg-[#F5F7FA] dark:hover:bg-[#151A21] transition">
+          <input
+            type="checkbox"
+            checked={allVisibleSelected}
+            onChange={handleSelectAll}
+            className="w-4 h-4 rounded text-purple-600 border-[#D9E0E8] dark:border-[#30363D] focus:ring-purple-500 cursor-pointer"
+          />
+          <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8]">
+            Select All
+          </span>
+        </label>
 
-          <div className="relative flex-1 w-full sm:max-w-md">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#667085] dark:text-[#94A3B8]">
-              <Search className="w-4 h-4" />
-            </div>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Search questions..."
-              className="w-full pl-10 pr-4 py-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] placeholder-[#667085] dark:placeholder-[#94A3B8] text-xs font-semibold focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC]"
-            />
+        {/* Filter search input */}
+        <div className="relative flex-1 min-w-[200px]">
+          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#667085] dark:text-[#94A3B8]">
+            <Search className="w-4 h-4" />
           </div>
-        </div>
-
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <select
-            value={topicFilter}
+          <input
+            type="text"
+            value={search}
             onChange={(e) => {
-              setTopicFilter(e.target.value);
+              setSearch(e.target.value);
               setPage(1);
             }}
-            className="py-2 px-3 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] text-xs font-bold"
-          >
-            <option value="All">All Topics</option>
-            {mcqTopics.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
+            placeholder="Filter questions by question or topic..."
+            className="w-full pl-10 pr-4 py-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] placeholder-[#667085] dark:placeholder-[#94A3B8] text-xs font-semibold focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC]"
+          />
         </div>
+
+        {/* Delete Selected Button */}
+        <button
+          type="button"
+          disabled={selectedIds.length === 0}
+          onClick={handleOpenDeleteSelected}
+          className="px-3.5 py-2 rounded-2xl bg-[#EF4444] hover:bg-red-700 text-white font-bold text-xs shadow-md shadow-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span>
+            {selectedIds.length > 0 ? `Delete Selected (${selectedIds.length})` : 'Delete Selected'}
+          </span>
+        </button>
+
+        {/* Topic Filter */}
+        <select
+          value={topicFilter}
+          onChange={(e) => {
+            setTopicFilter(e.target.value);
+            setPage(1);
+          }}
+          className="py-2 px-3 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] text-xs font-bold"
+        >
+          <option value="All">All Topics</option>
+          {mcqTopics.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+
+        {/* Available Count */}
+        <span className="text-xs font-bold text-purple-600 dark:text-purple-400 whitespace-nowrap px-1">
+          {pagination.total} available
+        </span>
       </div>
 
       {/* MCQs List */}
@@ -724,15 +741,11 @@ export const ManageMCQs = () => {
                 {deleteModalType === 'all'
                   ? 'Delete Entire MCQ Bank?'
                   : deleteModalType === 'selected'
-                  ? `Delete ${selectedIds.length} Selected MCQs?`
-                  : 'Delete this MCQ?'}
+                  ? `Are you sure you want to delete ${selectedIds.length} selected question${selectedIds.length > 1 ? 's' : ''}?`
+                  : 'Are you sure you want to delete this question?'}
               </p>
               <p className="text-[#667085] dark:text-[#94A3B8]">
-                {deleteModalType === 'all'
-                  ? `You are about to permanently delete all ${pagination.total} questions from the MCQ bank. This action cannot be undone.`
-                  : deleteModalType === 'selected'
-                  ? `You are about to permanently delete ${selectedIds.length} selected questions. This action cannot be undone.`
-                  : 'Are you sure you want to delete this question? This action cannot be undone.'}
+                This action cannot be undone.
               </p>
             </div>
           </div>
