@@ -934,6 +934,10 @@ export const ManageContests = () => {
 
   const handleSaveContest = async (e) => {
     e.preventDefault();
+
+    // Prevent duplicate submissions
+    if (actionLoading) return;
+
     if (!formData.title.trim()) {
       setErrorMsg('Contest title is required.');
       return;
@@ -968,25 +972,71 @@ export const ManageContests = () => {
       mcqIds: hasMCQ ? formData.mcq_ids : [],
     };
 
-    try {
-      setActionLoading(true);
-      setErrorMsg('');
+    setActionLoading(true);
+    setErrorMsg('');
 
+    try {
+      let res;
       if (editingId) {
-        const res = await api.put(`/admin/contests/${editingId}`, payload);
-        if (res.data.success) {
-          setIsModalOpen(false);
-          fetchInitialData();
-        }
+        res = await api.put(`/admin/contests/${editingId}`, payload);
       } else {
-        const res = await api.post('/admin/contests', payload);
-        if (res.data.success) {
-          setIsModalOpen(false);
-          fetchInitialData();
-        }
+        res = await api.post('/admin/contests', payload);
+      }
+
+      // Treat any 2xx response as success (backend returns 201 for create)
+      const isSuccess = res.data?.success !== false && res.status >= 200 && res.status < 300;
+
+      if (isSuccess) {
+        // 1. Close the modal
+        setIsModalOpen(false);
+
+        // 2. Show success message
+        const msg = editingId
+          ? 'Contest updated successfully!'
+          : (res.data?.message || 'Contest created successfully!');
+        setSuccessMsg(msg);
+        setTimeout(() => setSuccessMsg(''), 5000);
+
+        // 3. Reset form for next contest
+        setEditingId(null);
+        setFormData({
+          title: '',
+          description: '',
+          duration_minutes: 60,
+          mcqs_per_student: 20,
+          start_time: toISTDateTimeInput(new Date()),
+          end_time: toISTDateTimeInput(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
+          is_published: true,
+          problem_ids: [],
+          mcq_ids: [],
+          allow_calculator: false,
+        });
+        setHasCoding(true);
+        setHasMCQ(true);
+        setProblemSearch('');
+        setMcqSearch('');
+        setIsBrowsingProblems(false);
+        setIsBrowsingMCQs(false);
+        setSelectedProblems([]);
+        setSelectedMCQs([]);
+        setCheckedMcqIds([]);
+        setCheckedProblemIds([]);
+        setBrowserSelectedMcqIds([]);
+        setBrowserSelectedProblemIds([]);
+
+        // 4. Refresh contest list (fire and forget — don't block UI)
+        fetchInitialData().catch(() => {});
+      } else {
+        // Server returned 2xx but success was explicitly false
+        setErrorMsg(res.data?.error || res.data?.message || 'Failed to save contest.');
       }
     } catch (err) {
-      setErrorMsg(err.response?.data?.error || 'Failed to save contest.');
+      const serverMsg = err.response?.data?.error || err.response?.data?.message;
+      if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+        setErrorMsg('Request timed out. The contest may have been saved — please refresh the page.');
+      } else {
+        setErrorMsg(serverMsg || 'Failed to save contest. Please try again.');
+      }
     } finally {
       setActionLoading(false);
     }

@@ -1569,23 +1569,28 @@ def create_contest():
 
     res = db.contests.insert_one(contest_doc)
     
-    from services.notification_service import create_broadcast_notification, create_notification
-    # Broadcast to all students
-    create_broadcast_notification(
-        title="New Contest Available",
-        message=f"'{contest_doc.get('title')}' is now open. Register before the contest starts.",
-        notif_type="contest",
-        created_by="Admin"
-    )
-    # Alert admins
-    admins = list(db.users.find({"role": "ADMIN"}))
-    for admin in admins:
-        create_notification(
-            user_id=admin["_id"],
-            title="New Contest Created",
-            message=f"Contest '{contest_doc.get('title')}' was created successfully.",
-            notif_type="contest"
+    # Send notifications in a non-blocking way — never let notification failure
+    # prevent the success response from being returned to the client.
+    try:
+        from services.notification_service import create_broadcast_notification, create_notification
+        # Broadcast to all students
+        create_broadcast_notification(
+            title="New Contest Available",
+            message=f"'{contest_doc.get('title')}' is now open. Register before the contest starts.",
+            notif_type="contest",
+            created_by="Admin"
         )
+        # Alert admins
+        admins = list(db.users.find({"role": "ADMIN"}))
+        for admin in admins:
+            create_notification(
+                user_id=admin["_id"],
+                title="New Contest Created",
+                message=f"Contest '{contest_doc.get('title')}' was created successfully.",
+                notif_type="contest"
+            )
+    except Exception as notif_err:
+        logger.warning("Contest created but notifications failed: %s", notif_err)
         
     return jsonify({"success": True, "message": "Contest created successfully", "id": str(res.inserted_id)}), 201
 
