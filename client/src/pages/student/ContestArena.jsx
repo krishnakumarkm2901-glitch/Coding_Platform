@@ -87,6 +87,11 @@ export const ContestArena = () => {
   const [contestSubmitModalOpen, setContestSubmitModalOpen] = useState(false);
   const [resultModalOpen, setResultModalOpen] = useState(false);
   const [calculatorOpen, setCalculatorOpen] = useState(false);
+  const [verifiedProblemCodeHashes, setVerifiedProblemCodeHashes] = useState({});
+
+  const currentProbObj = contest?.problems?.[selectedProblemIdx];
+  const currentProblemCodeHash = `${currentProbObj?.id || ''}_${currentLanguage}_${currentCode}`;
+  const isProblemSubmitAllowed = Boolean(currentProbObj && verifiedProblemCodeHashes[currentProbObj.id] === currentProblemCodeHash);
 
   useEffect(() => {
     if (runResult || submitResult) {
@@ -575,31 +580,45 @@ export const ContestArena = () => {
       setSubmitResult(null);
       setActiveOutputTab('result');
       const normalizedCases = normalizeTestCases(currentProblem);
-      let inputToUse = customInput;
-      let expectedOutputToUse = '';
-      if (activeOutputTab !== 'custom' && normalizedCases.length > 0) {
-        inputToUse = normalizedCases[0].input;
-        expectedOutputToUse = normalizedCases[0].expected_output || '';
-      } else if (!inputToUse && currentProblem.sample_input) {
-        inputToUse = currentProblem.sample_input;
-        expectedOutputToUse = currentProblem.sample_output || '';
-      }
+      const isCustomTab = activeOutputTab === 'custom';
 
-      const res = await api.post('/submissions/run', {
+      let payload = {
         language: currentLanguage,
         code: currentCode,
-        custom_input: inputToUse,
-        expected_output: expectedOutputToUse,
-      });
+        problem_id: currentProblem?.id,
+        is_custom: isCustomTab,
+      };
+
+      if (isCustomTab) {
+        payload.custom_input = customInput;
+        payload.expected_output = '';
+      } else {
+        payload.test_cases = normalizedCases.length > 0 ? normalizedCases : [
+          { input: currentProblem?.sample_input || '', expected_output: currentProblem?.sample_output || '', is_sample: true }
+        ];
+      }
+
+      const res = await api.post('/submissions/run', payload);
       if (res.data.success) {
         setRunResult({
           ...res.data,
-          inputUsed: inputToUse,
-          input: inputToUse,
-          expected_output: expectedOutputToUse,
+          inputUsed: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
+          input: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
+          expected_output: isCustomTab ? '' : (normalizedCases[0]?.expected_output || ''),
         });
+
+        // Gate: ONLY unlock submit if all sample test cases passed AND it was not a custom input run
+        if (!isCustomTab && res.data.all_passed && currentProblem) {
+          const validHash = `${currentProblem.id}_${currentLanguage}_${currentCode}`;
+          setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: validHash }));
+        } else if (currentProblem) {
+          setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: null }));
+        }
       }
     } catch (err) {
+      if (currentProblem) {
+        setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: null }));
+      }
       setRunResult({
         status: 'Runtime Error',
         output: '',
@@ -1386,8 +1405,13 @@ export const ContestArena = () => {
                   <button
                     type="button"
                     onClick={handleOpenProblemSubmitModal}
-                    disabled={isRunning || isSubmittingProblem}
-                    className="px-3.5 py-1 rounded-lg bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 disabled:opacity-40 transition cursor-pointer"
+                    disabled={isRunning || isSubmittingProblem || !isProblemSubmitAllowed}
+                    title={!isProblemSubmitAllowed ? "Run code and pass all sample test cases to enable submission" : "Submit your verified solution"}
+                    className={`px-3.5 py-1 rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition cursor-pointer ${
+                      isProblemSubmitAllowed
+                        ? 'bg-[#22B573] hover:opacity-95 text-white'
+                        : 'bg-[#D9E0E8] dark:bg-[#30363D] text-[#667085] dark:text-[#94A3B8] opacity-50 cursor-not-allowed'
+                    }`}
                   >
                     <Send className="w-3 h-3" />
                     <span>{isSubmittingProblem ? 'Evaluating...' : 'Submit Solution'}</span>

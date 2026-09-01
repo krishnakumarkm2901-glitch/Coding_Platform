@@ -95,11 +95,13 @@ export const ProblemSolve = () => {
     setLanguage(newLang);
     const newCode = problem?.starter_code?.[newLang] || DEFAULT_STARTER_CODE[newLang] || '';
     setCode(newCode);
+    setVerifiedCodeHash(null);
   };
 
   const handleResetCode = () => {
     const resetCode = problem?.starter_code?.[language] || DEFAULT_STARTER_CODE[language] || '';
     setCode(resetCode);
+    setVerifiedCodeHash(null);
   };
 
   const handleRunCode = async () => {
@@ -120,39 +122,45 @@ export const ProblemSolve = () => {
       setIsRunning(true);
       setSubmitResult(null);
       setActiveTab('result');
-      
-      let inputToUse = '';
-      let expectedOutputToUse = '';
-      
-      if (activeTab === 'custom') {
-        inputToUse = customInput;
-      } else {
-        const activeCase = testCases[selectedCaseIndex] || testCases[0];
-        if (activeCase) {
-          inputToUse = activeCase.input !== undefined && activeCase.input !== null ? activeCase.input : '';
-          expectedOutputToUse = activeCase.expected_output || '';
-        } else {
-          inputToUse = customInput || problem?.sample_input || '';
-          expectedOutputToUse = problem?.sample_output || '';
-        }
-      }
 
-      const res = await api.post('/submissions/run', {
+      const isCustomTab = activeTab === 'custom';
+      
+      let payload = {
         language,
         code,
-        custom_input: inputToUse,
-        expected_output: expectedOutputToUse,
-      });
+        problem_id: problem?.id,
+        is_custom: isCustomTab,
+      };
+
+      if (isCustomTab) {
+        payload.custom_input = customInput;
+        payload.expected_output = '';
+      } else {
+        // Run against ALL sample/visible test cases for this problem
+        payload.test_cases = testCases.length > 0 ? testCases : [
+          { input: problem?.sample_input || '', expected_output: problem?.sample_output || '', is_sample: true }
+        ];
+      }
+
+      const res = await api.post('/submissions/run', payload);
 
       if (res.data.success) {
         setRunResult({
           ...res.data,
-          inputUsed: inputToUse,
-          input: inputToUse,
-          expected_output: expectedOutputToUse,
+          inputUsed: isCustomTab ? customInput : (testCases[selectedCaseIndex]?.input || ''),
+          input: isCustomTab ? customInput : (testCases[selectedCaseIndex]?.input || ''),
+          expected_output: isCustomTab ? '' : (testCases[selectedCaseIndex]?.expected_output || ''),
         });
+
+        // Gate: ONLY unlock submit if all sample test cases passed AND it was not a custom input run
+        if (!isCustomTab && res.data.all_passed) {
+          setVerifiedCodeHash(currentCodeHash);
+        } else {
+          setVerifiedCodeHash(null);
+        }
       }
     } catch (err) {
+      setVerifiedCodeHash(null);
       setRunResult({
         status: 'Error',
         error: err.response?.data?.error || 'Failed to connect to execution engine.',
@@ -414,8 +422,13 @@ export const ProblemSolve = () => {
               <button
                 type="button"
                 onClick={handleSubmitSolution}
-                disabled={isRunning || isSubmitting}
-                className="px-5 py-2.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white text-xs font-bold flex items-center gap-2 shadow-md shadow-emerald-500/20 transition disabled:opacity-50 cursor-pointer"
+                disabled={isRunning || isSubmitting || !isSubmitAllowed}
+                title={!isSubmitAllowed ? "Run code and pass all sample test cases to enable submission" : "Submit your verified solution"}
+                className={`px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer ${
+                  isSubmitAllowed
+                    ? 'bg-[#22B573] hover:opacity-95 text-white shadow-md shadow-emerald-500/20'
+                    : 'bg-[#D9E0E8] dark:bg-[#30363D] text-[#667085] dark:text-[#94A3B8] opacity-50 cursor-not-allowed'
+                }`}
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>{isSubmitting ? 'Evaluating...' : 'Submit Solution'}</span>

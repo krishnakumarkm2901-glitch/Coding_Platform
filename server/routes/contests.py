@@ -1049,8 +1049,30 @@ def submit_contest_problem(contest_id, problem_id):
     if not test_cases:
         test_cases = [{"input": prob.get("sample_input", ""), "expected_output": prob.get("sample_output", "")}]
 
-    # Run evaluation across central OnlineJudgeEngine
+    # =========================================================================
+    # STRICT SUBMIT GATE — MANDATORY
+    # Pre-validate solution against ALL visible/sample test cases before allowing submission
+    # =========================================================================
+    visible_test_cases = [tc for tc in test_cases if tc.get("is_sample", False) or not tc.get("is_hidden", False)]
+    if not visible_test_cases:
+        visible_test_cases = [test_cases[0]]
+
     from services.judge_engine import OnlineJudgeEngine
+    gate_res = OnlineJudgeEngine.evaluate_solution(language, code, visible_test_cases, time_limit=5.0)
+    if gate_res["status"] != "Accepted" or gate_res["passed_test_cases"] < len(visible_test_cases):
+        return jsonify({
+            "success": False,
+            "status": "SUBMISSION_BLOCKED",
+            "reason": "All test cases must pass before submission",
+            "message": "You must pass all test cases before submitting.",
+            "passed": gate_res.get("passed_test_cases", 0),
+            "total": len(visible_test_cases),
+            "diagnostics": gate_res.get("diagnostics", []),
+            "test_results": gate_res.get("test_results", []),
+            "failed_case": gate_res.get("failed_case"),
+        }), 403
+
+    # Run evaluation across central OnlineJudgeEngine for full official test cases
     time_limit = float(prob.get("time_limit", prob.get("timeLimit", 5.0)))
     eval_res = OnlineJudgeEngine.evaluate_solution(language, code, test_cases, time_limit=time_limit)
     passed = eval_res["passed_test_cases"]

@@ -22,16 +22,45 @@ submissions_bp = Blueprint("submissions", __name__)
 @submissions_bp.route("/run", methods=["POST"])
 @rate_limit(max_requests=10, window_seconds=60, key_func=lambda: request.remote_addr)
 def run_code_custom():
-    """Run code against custom input or testcase with full LeetCode-style judge comparison and diagnostics."""
+    """Run code against custom input or visible test cases with full LeetCode-style judge comparison and diagnostics."""
+    import hashlib
     data = request.get_json() or {}
     language = data.get("language", "python").lower()
     code = data.get("code", "").strip()
     custom_input = data.get("custom_input", "")
     expected_output = data.get("expected_output")
+    test_cases = data.get("test_cases")  # Optional array of sample test cases
+    problem_id = data.get("problem_id")
+    is_custom = bool(data.get("is_custom", False))
 
     if not code:
         return jsonify({"error": "Code cannot be empty", "success": False}), 400
 
+    code_hash = hashlib.sha256(f"{problem_id or ''}_{language}_{code}".encode()).hexdigest()
+
+    # If running multiple test cases (or all sample test cases for a problem)
+    if test_cases and isinstance(test_cases, list) and not is_custom:
+        from services.judge_engine import OnlineJudgeEngine
+        judge_res = OnlineJudgeEngine.evaluate_solution(language, code, test_cases, time_limit=5.0)
+        all_passed = (judge_res["status"] == "Accepted" and judge_res["passed_test_cases"] == judge_res["total_test_cases"])
+        return jsonify({
+            "success": True,
+            "status": judge_res["status"],
+            "verdict": judge_res["verdict"],
+            "all_passed": all_passed,
+            "passed_test_cases": judge_res["passed_test_cases"],
+            "total_test_cases": judge_res["total_test_cases"],
+            "runtime": judge_res["runtime_ms"],
+            "runtime_ms": judge_res["runtime_ms"],
+            "memory_mb": judge_res["memory_mb"],
+            "diagnostics": judge_res.get("diagnostics", []),
+            "test_results": judge_res.get("test_results", []),
+            "failed_case": judge_res.get("failed_case"),
+            "code_hash": code_hash,
+            "is_custom": False,
+        }), 200
+
+    # Custom input single run
     from services.compiler import get_compiler_provider
     provider = get_compiler_provider()
     exec_obj = provider.execute(language, code, custom_input, timeout=8)
@@ -39,7 +68,8 @@ def run_code_custom():
     status = result["status"]
     verdict = result.get("verdict", status.upper().replace(" ", "_"))
 
-    # If code ran to completion without crashing (status == "OK") and expected_output is provided, perform judge comparison!
+    all_passed = False
+    # If code ran without crashing (status == "OK") and expected_output is provided, perform judge comparison!
     if status == "OK" and expected_output is not None and str(expected_output).strip() != "":
         actual_norm = normalize_output(result.get("output", ""))
         expected_norm = normalize_output(expected_output)
@@ -47,14 +77,17 @@ def run_code_custom():
         if actual_norm == expected_norm or actual_norm.lower() == expected_norm.lower():
             status = "Accepted"
             verdict = "ACCEPTED"
+            all_passed = not is_custom
         else:
             status = "Wrong Answer"
             verdict = "WRONG_ANSWER"
+            all_passed = False
 
     return jsonify({
         "success": True,
         "status": status,
         "verdict": verdict,
+        "all_passed": all_passed,
         "output": result["output"],
         "expected_output": expected_output,
         "error": result["error"],
@@ -62,7 +95,9 @@ def run_code_custom():
         "execution_time": result["execution_time"],
         "runtime_ms": result.get("runtime_ms", result["execution_time"]),
         "memory_mb": result.get("memory_mb", 14.2),
-        "diagnostics": result.get("diagnostics", [])
+        "diagnostics": result.get("diagnostics", []),
+        "code_hash": code_hash,
+        "is_custom": is_custom,
     }), 200
 
 
@@ -88,15 +123,8 @@ def _get_user_id_for_rate_limit():
 @token_required
 @rate_limit(max_requests=5, window_seconds=60, key_func=_get_user_id_for_rate_limit)
 def submit_solution():
-    """Submit solution code to be tested against all test cases.
-
-    When the Redis queue is available, the submission is enqueued and
-    a job_id is returned immediately (status='QUEUED').  The client
-    polls GET /submissions/<id> until the status changes.
-
-    When the queue is unavailable, execution happens synchronously
-    (preserving the original behaviour for local development).
-    """
+    """Submit solution code with Strict Submit Gate verification."""
+    from services.judge_engine import OnlineJudgeEngine
     data = request.get_json() or {}
     problem_id = data.get("problem_id")
     language = data.get("language", "python").lower()
@@ -118,6 +146,33 @@ def submit_solution():
     test_cases = problem.get("test_cases", [])
     if not test_cases:
         test_cases = list(db.test_cases.find({"problem_id": str(problem["_id"])}))
+
+    if not test_cases:
+        sample_in = problem.get("sample_input", "")
+        sample_out = problem.get("sample_output", "")
+        test_cases = [{"input": sample_in, "expected_output": sample_out, "is_sample": True}]
+
+    # =========================================================================
+    # STRICT SUBMIT GATE — MANDATORY
+    # Pre-validate solution against ALL visible/sample test cases before allowing submission
+    # =========================================================================
+    visible_test_cases = [tc for tc in test_cases if tc.get("is_sample", False) or not tc.get("is_hidden", False)]
+    if not visible_test_cases:
+        visible_test_cases = [test_cases[0]]
+
+    gate_res = OnlineJudgeEngine.evaluate_solution(language, code, visible_test_cases, time_limit=5.0)
+    if gate_res["status"] != "Accepted" or gate_res["passed_test_cases"] < len(visible_test_cases):
+        return jsonify({
+            "success": False,
+            "status": "SUBMISSION_BLOCKED",
+            "reason": "All test cases must pass before submission",
+            "message": "You must pass all test cases before submitting.",
+            "passed": gate_res.get("passed_test_cases", 0),
+            "total": len(visible_test_cases),
+            "diagnostics": gate_res.get("diagnostics", []),
+            "test_results": gate_res.get("test_results", []),
+            "failed_case": gate_res.get("failed_case"),
+        }), 403
 
     if not test_cases:
         # Fallback if no test cases defined: create a basic sample test case
