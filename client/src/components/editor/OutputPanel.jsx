@@ -87,10 +87,14 @@ export const OutputPanel = ({
   const isTLE = rawStatus === 'Time Limit Exceeded' || rawVerdict === 'TIME_LIMIT_EXCEEDED';
   const isMLE = rawStatus === 'Memory Limit Exceeded' || rawVerdict === 'MEMORY_LIMIT_EXCEEDED';
 
-  let status = rawStatus;
-  let verdict = rawVerdict;
+  let status = rawStatus || (actualIsRunning ? 'Running' : '');
+  let verdict = rawVerdict || (actualIsRunning ? 'RUNNING' : '');
 
-  if (!isCompileOrSyntaxError && !isRuntimeError && !isTLE && !isMLE) {
+  // If backend provided a verdict for multiple test cases (or submission evaluation), respect it directly!
+  if (activeResult?.test_results && activeResult.test_results.length > 0) {
+    status = rawStatus || (activeResult.passed_test_cases === activeResult.total_test_cases ? 'Accepted' : 'Wrong Answer');
+    verdict = rawVerdict || (activeResult.passed_test_cases === activeResult.total_test_cases ? 'ACCEPTED' : 'WRONG_ANSWER');
+  } else if (!isCompileOrSyntaxError && !isRuntimeError && !isTLE && !isMLE) {
     if (hasExpected) {
       if (outputMatches) {
         status = 'Accepted';

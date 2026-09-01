@@ -273,7 +273,8 @@ class OnlineJudgeEngine:
             # Raw string stdin input (preserved without any JSON modification)
             tc_input = str(tc.get("input", "")) if tc.get("input") is not None else ""
             tc_expected = str(tc.get("expected_output", tc.get("output", ""))) if tc.get("expected_output") is not None else ""
-            is_sample = bool(tc.get("is_sample", False)) and not bool(tc.get("is_hidden", False))
+            is_hidden = bool(tc.get("is_hidden", False))
+            is_sample = bool(tc.get("is_sample", False)) or not is_hidden
 
             exec_obj = provider.execute(language, code, tc_input, timeout=int(time_limit))
             res = exec_obj.to_dict()
