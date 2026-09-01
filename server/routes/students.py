@@ -228,9 +228,11 @@ def run_playground_code():
     if not code:
         return jsonify({"error": "Code cannot be empty", "success": False}), 400
 
-    # Execute code using the existing piston service
-    from services.piston_service import execute_code
-    result = execute_code(language, code, custom_input, timeout=8)
+    # Execute code using central compiler provider
+    from services.compiler import get_compiler_provider
+    provider = get_compiler_provider()
+    exec_obj = provider.execute(language, code, custom_input, timeout=8)
+    result = exec_obj.to_dict()
 
     return jsonify({
         "success": True,

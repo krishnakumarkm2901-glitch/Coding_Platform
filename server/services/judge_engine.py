@@ -266,7 +266,7 @@ class OnlineJudgeEngine:
         test_results = []
         diagnostics = []
 
-        from services.compiler_provider import get_compiler_provider
+        from services.compiler import get_compiler_provider
         provider = get_compiler_provider()
 
         for idx, tc in enumerate(test_cases):

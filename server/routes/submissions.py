@@ -32,7 +32,10 @@ def run_code_custom():
     if not code:
         return jsonify({"error": "Code cannot be empty", "success": False}), 400
 
-    result = execute_code(language, code, custom_input, timeout=8)
+    from services.compiler import get_compiler_provider
+    provider = get_compiler_provider()
+    exec_obj = provider.execute(language, code, custom_input, timeout=8)
+    result = exec_obj.to_dict()
     status = result["status"]
     verdict = result.get("verdict", status.upper().replace(" ", "_"))
 
