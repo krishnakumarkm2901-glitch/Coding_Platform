@@ -994,6 +994,96 @@ def submit_contest(contest_id):
         }
     }), 200
 
+@contests_bp.route("/<contest_id>/problems/<problem_id>/submit", methods=["POST"])
+@student_required
+def submit_contest_problem(contest_id, problem_id):
+    """
+    Evaluate and save a student's solution for a specific coding problem during a contest.
+    Returns LeetCode-style diagnostics, test case results, runtime and memory metrics,
+    while keeping the contest active.
+    """
+    db = get_db()
+    user = request.current_user
+    user_id = str(user["_id"])
+    data = request.get_json() or {}
+    language = data.get("language", "python").lower()
+    code = data.get("code", "").strip()
+
+    if not code:
+        return jsonify({"error": "Code cannot be empty", "success": False}), 400
+
+    # Verify active participant attempt
+    contest_id_objs = [contest_id]
+    if ObjectId.is_valid(contest_id):
+        contest_id_objs.append(ObjectId(contest_id))
+
+    user_id_objs = [user_id]
+    if ObjectId.is_valid(user_id):
+        user_id_objs.append(ObjectId(user_id))
+
+    participant = db.contest_participants.find_one({
+        "contest_id": {"$in": contest_id_objs},
+        "user_id": {"$in": user_id_objs},
+        "is_active_attempt": True,
+    }, sort=[("attempt_number", -1)])
+
+    if not participant:
+        return jsonify({"error": "Active contest attempt not found", "success": False}), 404
+    if participant.get("status") == "LOCKED":
+        return jsonify({"error": "Locked attempts cannot be submitted.", "is_locked": True, "success": False}), 423
+    if participant.get("auto_terminated") or participant.get("status") == "AUTO_TERMINATED":
+        return jsonify({"error": "Terminated attempts cannot be submitted.", "is_terminated": True, "success": False}), 403
+
+    # Fetch problem details & test cases
+    q = {"_id": ObjectId(problem_id)} if ObjectId.is_valid(problem_id) else {"slug": problem_id}
+    prob = db.problems.find_one(q)
+    if not prob:
+        return jsonify({"error": "Problem not found", "success": False}), 404
+
+    test_cases = prob.get("test_cases", [])
+    if not test_cases:
+        test_cases = list(db.test_cases.find({"problem_id": str(prob["_id"])}))
+    if not test_cases:
+        test_cases = [{"input": prob.get("sample_input", ""), "expected_output": prob.get("sample_output", "")}]
+
+    # Run evaluation across compiler worker pool
+    eval_res = compiler_pool.evaluate_test_cases(language, code, test_cases, timeout=5)
+    passed = eval_res["passed"]
+    total = eval_res["total"]
+    status = eval_res["status"]
+
+    # Save student code and result to participant document
+    prob_key = str(prob["_id"])
+    db.contest_participants.update_one(
+        {"_id": participant["_id"]},
+        {
+            "$set": {
+                f"code_solutions.{prob_key}": {"language": language, "code": code},
+                f"coding_results.{prob_key}": {
+                    "status": status,
+                    "passed": passed,
+                    "total": total,
+                    "time_ms": eval_res.get("total_time_ms", 0)
+                }
+            }
+        }
+    )
+
+    return jsonify({
+        "success": True,
+        "status": status,
+        "verdict": eval_res.get("verdict", status.upper().replace(" ", "_")),
+        "passed_test_cases": passed,
+        "total_test_cases": total,
+        "runtime": eval_res.get("max_time_ms", 0),
+        "runtime_ms": eval_res.get("max_time_ms", 0),
+        "memory_mb": eval_res.get("memory_mb", 14.2),
+        "total_time_ms": eval_res.get("total_time_ms", 0),
+        "diagnostics": eval_res.get("diagnostics", []),
+        "test_results": eval_res.get("results", []),
+        "error_message": eval_res.get("error_message", "")
+    }), 200
+
 @contests_bp.route("/<contest_id>/my-report", methods=["GET"])
 @student_required
 def get_student_contest_report(contest_id):

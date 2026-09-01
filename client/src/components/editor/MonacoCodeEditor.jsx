@@ -1,9 +1,9 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import Editor from '@monaco-editor/react';
 import { Code, RotateCcw } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 
-export const MonacoCodeEditor = ({
+export const MonacoCodeEditor = forwardRef(({
   language = 'python',
   code = '',
   value = '',
@@ -11,18 +11,36 @@ export const MonacoCodeEditor = ({
   onReset,
   fontSize = 14,
   readOnly = false,
-}) => {
+  diagnostics = [],
+}, ref) => {
   const { isDark } = useTheme();
-  const editorRef = useRef(null);
-  const monacoRef = useRef(null);
+  const editorInstanceRef = useRef(null);
+  const monacoInstanceRef = useRef(null);
 
   const editorValue = (code !== undefined && code !== null && code !== '') 
     ? code 
     : (value !== undefined && value !== null ? value : '');
 
+  // Expose imperative methods to parent components (e.g. click error -> jump to line)
+  useImperativeHandle(ref, () => ({
+    revealPosition: (lineNumber, columnNumber = 1) => {
+      if (editorInstanceRef.current && lineNumber) {
+        try {
+          editorInstanceRef.current.revealLineInCenter(lineNumber);
+          editorInstanceRef.current.setPosition({ lineNumber, column: columnNumber || 1 });
+          editorInstanceRef.current.focus();
+        } catch (e) {
+          // Ignore if position out of bounds
+        }
+      }
+    },
+    getEditor: () => editorInstanceRef.current,
+    getMonaco: () => monacoInstanceRef.current,
+  }));
+
   const handleEditorDidMount = (editor, monaco) => {
-    editorRef.current = editor;
-    monacoRef.current = monaco;
+    editorInstanceRef.current = editor;
+    monacoInstanceRef.current = monaco;
     
     // Define custom themes matching exact dark/light background
     monaco.editor.defineTheme('custom-dark', {
@@ -67,7 +85,11 @@ export const MonacoCodeEditor = ({
       lineNumbersMinChars: 3,
       automaticLayout: true,
       fixedOverflowWidgets: true,
+      renderValidationDecorations: 'on',
     });
+
+    // Apply diagnostics markers if available immediately on mount
+    updateMarkers(editor, monaco, diagnostics);
 
     // Remeasure fonts once custom web fonts are fully loaded to prevent layer misalignment
     if (document.fonts && document.fonts.ready) {
@@ -82,10 +104,50 @@ export const MonacoCodeEditor = ({
     }
   };
 
+  const updateMarkers = (editor, monaco, diags) => {
+    if (!editor || !monaco) return;
+    const model = editor.getModel();
+    if (!model) return;
+
+    if (!diags || diags.length === 0) {
+      monaco.editor.setModelMarkers(model, 'compiler-diagnostics', []);
+      return;
+    }
+
+    const markers = diags
+      .filter((d) => d && d.line)
+      .map((d) => {
+        const line = Math.max(1, Math.min(d.line, model.getLineCount()));
+        const maxCol = model.getLineMaxColumn(line);
+        const col = Math.max(1, Math.min(d.column || 1, maxCol));
+        const endLine = Math.max(line, Math.min(d.end_line || line, model.getLineCount()));
+        const endCol = Math.max(col + 1, Math.min(d.end_column || maxCol, maxCol));
+
+        return {
+          severity: d.severity === 'warning' ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Error,
+          startLineNumber: line,
+          startColumn: col,
+          endLineNumber: endLine,
+          endColumn: endCol,
+          message: d.message || d.compiler_message || 'Error',
+          source: d.source || 'Compiler'
+        };
+      });
+
+    monaco.editor.setModelMarkers(model, 'compiler-diagnostics', markers);
+  };
+
+  // Synchronize diagnostics markers when diagnostics array changes
+  useEffect(() => {
+    if (editorInstanceRef.current && monacoInstanceRef.current) {
+      updateMarkers(editorInstanceRef.current, monacoInstanceRef.current, diagnostics);
+    }
+  }, [diagnostics]);
+
   useEffect(() => {
     const handleResize = () => {
-      if (editorRef.current) {
-        editorRef.current.layout();
+      if (editorInstanceRef.current) {
+        editorInstanceRef.current.layout();
       }
     };
     window.addEventListener('resize', handleResize);
@@ -120,6 +182,11 @@ export const MonacoCodeEditor = ({
           <span className="font-bold text-[#172033] dark:text-[#F8FAFC] tracking-wider">
             {displayLang} Solution
           </span>
+          {diagnostics && diagnostics.length > 0 && (
+            <span className="ml-2 px-2 py-0.5 rounded-full bg-[#EF4444]/15 text-[#EF4444] text-[10px] font-bold border border-[#EF4444]/30 animate-pulse">
+              {diagnostics.length} error{diagnostics.length > 1 ? 's' : ''}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           {onReset && (
@@ -146,7 +213,13 @@ export const MonacoCodeEditor = ({
           language={monacoLanguageMap[language?.toLowerCase()] || 'python'}
           value={editorValue}
           theme={currentTheme}
-          onChange={onChange}
+          onChange={(val, ev) => {
+            // Clear diagnostics on edit
+            if (diagnostics && diagnostics.length > 0 && editorInstanceRef.current && monacoInstanceRef.current) {
+              updateMarkers(editorInstanceRef.current, monacoInstanceRef.current, []);
+            }
+            if (onChange) onChange(val, ev);
+          }}
           onMount={handleEditorDidMount}
           options={{
             readOnly: readOnly,
@@ -159,4 +232,4 @@ export const MonacoCodeEditor = ({
       </div>
     </div>
   );
-};
+});

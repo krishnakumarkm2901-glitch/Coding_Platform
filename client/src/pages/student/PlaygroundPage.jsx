@@ -46,15 +46,19 @@ export const PlaygroundPage = () => {
   const [execTime, setExecTime] = useState(0.0);
   const [running, setRunning] = useState(false);
 
+  const [diagnostics, setDiagnostics] = useState([]);
+  const [memoryMb, setMemoryMb] = useState(0);
+
   const outputPanelRef = useRef(null);
+  const editorRef = useRef(null);
 
   useEffect(() => {
-    if (output || error || runStatus) {
+    if (output || error || runStatus || diagnostics.length > 0) {
       setTimeout(() => {
         outputPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);
     }
-  }, [output, error, runStatus]);
+  }, [output, error, runStatus, diagnostics]);
 
   // If user is Admin, block access (although route protection should block it first)
   if (user?.role === 'ADMIN') {
@@ -74,6 +78,7 @@ export const PlaygroundPage = () => {
   const handleLanguageChange = (lang) => {
     setLanguage(lang);
     setCode(STARTER_CODE[lang] || '');
+    setDiagnostics([]);
   };
 
   const handleRunCode = async () => {
@@ -82,6 +87,7 @@ export const PlaygroundPage = () => {
     setOutput('');
     setRunStatus('');
     setExecTime(0.0);
+    setDiagnostics([]);
 
     try {
       const res = await api.post('/students/playground/run', {
@@ -92,14 +98,16 @@ export const PlaygroundPage = () => {
 
       setRunStatus(res.data.status || (res.data.success ? 'OK' : 'Execution Error'));
       setExecTime((res.data.execution_time || 0) / 1000);
+      setDiagnostics(res.data.diagnostics || []);
+      setMemoryMb(res.data.memory_mb || 0);
+
       if (res.data.success) {
-        
         if (res.data.status === 'OK' || res.data.status === 'Runtime Error' || res.data.status === 'Time Limit Exceeded') {
           setOutput(res.data.output);
           if (res.data.error) {
             setError(res.data.error);
           }
-        } else if (res.data.status === 'Compilation Error') {
+        } else if (res.data.status === 'Compilation Error' || res.data.status === 'Syntax Error') {
           setError(res.data.error);
         } else {
           setError(res.data.error || 'Execution failed.');
@@ -124,7 +132,7 @@ export const PlaygroundPage = () => {
           Coding Playground
         </h1>
         <p className="text-sm text-[#667085] dark:text-[#94A3B8] mt-1">
-          Practice your programming skills in a safe sandbox environment. Playground codes do not count as problem submissions.
+          Practice your programming skills in a safe sandbox environment with real-time compiler diagnostics and error highlighting.
         </p>
       </div>
 
@@ -155,7 +163,7 @@ export const PlaygroundPage = () => {
             <button
               onClick={handleRunCode}
               disabled={running || !code}
-              className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all transform duration-150 disabled:opacity-50"
+              className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all transform duration-150 disabled:opacity-50 cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
               <span>{running ? 'Running...' : 'Run Code'}</span>
@@ -165,10 +173,18 @@ export const PlaygroundPage = () => {
           {/* Editor Content Area */}
           <div className="relative flex-1 min-h-[400px]">
             <MonacoCodeEditor
+              ref={editorRef}
               language={language}
               code={code}
-              onChange={(newCode) => setCode(newCode || '')}
-              onReset={() => setCode(STARTER_CODE[language])}
+              diagnostics={diagnostics}
+              onChange={(newCode) => {
+                setCode(newCode || '');
+                if (diagnostics.length > 0) setDiagnostics([]);
+              }}
+              onReset={() => {
+                setCode(STARTER_CODE[language]);
+                setDiagnostics([]);
+              }}
             />
           </div>
         </div>
@@ -201,15 +217,41 @@ export const PlaygroundPage = () => {
                 </h3>
 
                 {runStatus && (
-                  <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-extrabold tracking-wider ${
-                    runStatus === 'Accepted'
+                  <span className={`px-2.5 py-1 rounded-lg text-xs font-extrabold tracking-wide ${
+                    runStatus === 'OK' || runStatus === 'Accepted'
                       ? 'bg-green-500/10 text-green-500'
                       : 'bg-red-500/10 text-red-500'
                   }`}>
-                    {runStatus}
+                    {runStatus === 'OK' ? 'Accepted' : runStatus}
                   </span>
                 )}
               </div>
+
+              {/* Diagnostics List */}
+              {diagnostics && diagnostics.length > 0 && (
+                <div className="space-y-1.5 mb-3">
+                  <div className="text-[10px] font-bold text-red-500 uppercase tracking-wider">
+                    Errors ({diagnostics.length}) — Click to jump:
+                  </div>
+                  {diagnostics.map((diag, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => diag.line && editorRef.current?.revealPosition(diag.line, diag.column)}
+                      className={`p-2 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-500 font-mono flex items-start gap-2 ${
+                        diag.line ? 'cursor-pointer hover:bg-red-500/20 transition' : ''
+                      }`}
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold">
+                          {diag.line ? `Line ${diag.line}${diag.column ? `, Col ${diag.column}` : ''}` : 'Error'}
+                        </div>
+                        <div className="text-[11px] opacity-90">{diag.message}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Console stdout/stderr display */}
               <div className="space-y-3 font-mono text-xs max-h-[250px] overflow-y-auto">

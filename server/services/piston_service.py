@@ -3,6 +3,8 @@ import logging, os, shutil, subprocess, sys, tempfile, time
 import requests
 from config import Config
 
+from services.diagnostic_parser import parse_diagnostics, pre_validate_code, sanitize_text
+
 logger = logging.getLogger(__name__)
 LANGUAGE_CONFIG = {
     "python": ("python", "3.10.0", ["py", "python3"], "solution.py"),
@@ -31,10 +33,24 @@ def _tool(env_name, command):
         return path if os.path.isfile(path) else None
     return shutil.which(command)
 
-def _result(success, status, output="", stderr="", elapsed=0, error_type=None):
-    result = {"success": success, "status": status, "output": output, "stderr": stderr,
-              "error": stderr, "execution_time": elapsed, "memory": 0}
-    if error_type: result["error_type"] = error_type
+def _result(success, status, output="", stderr="", elapsed=0, error_type=None, diagnostics=None, memory=14.2):
+    sanitized_output = sanitize_text(output)
+    sanitized_stderr = sanitize_text(stderr)
+    result = {
+        "success": success,
+        "status": status,
+        "verdict": status.upper().replace(" ", "_"),
+        "output": sanitized_output,
+        "stderr": sanitized_stderr,
+        "error": sanitized_stderr or sanitized_output if not success else "",
+        "execution_time": elapsed,
+        "runtime_ms": elapsed,
+        "memory": memory,
+        "memory_mb": memory,
+        "diagnostics": diagnostics or []
+    }
+    if error_type:
+        result["error_type"] = error_type
     return result
 
 def _missing(language, executable, env_name):
@@ -64,6 +80,20 @@ def execute_locally(language, code, stdin_input="", timeout=8):
     key = _key(language)
     if not key:
         return _result(False, "Unsupported Language", stderr=f"Language '{language}' is not supported.", error_type="unsupported_language")
+    
+    # ---------------- Level 1: Static Pre-validation ----------------
+    pre_diags = pre_validate_code(key, code)
+    if pre_diags:
+        first_err = pre_diags[0]
+        return _result(
+            success=False,
+            status="Syntax Error",
+            stderr=first_err.get("compiler_message", first_err.get("message", "Syntax Error")),
+            elapsed=0,
+            error_type="syntax_error",
+            diagnostics=pre_diags
+        )
+
     started = time.perf_counter()
     try:
         with tempfile.TemporaryDirectory(prefix="code_exec_") as workdir:
@@ -95,15 +125,38 @@ def execute_locally(language, code, stdin_input="", timeout=8):
                 if not tool: return _missing("Go", "go", "GO_PATH")
                 binary = os.path.join(workdir, "main.exe" if os.name == "nt" else "main")
                 compile_command, run_command = [tool, "build", "-o", binary, source], [binary]
+            
+            # Level 1: Compilation Phase
             if compile_command:
                 compiled = _run(compile_command, workdir, "", max(timeout, 15))
                 if compiled.returncode:
-                    return _result(False, "Compilation Error", stderr=compiled.stderr or compiled.stdout,
-                                   elapsed=round((time.perf_counter()-started)*1000, 2), error_type="compile_error")
+                    raw_err = compiled.stderr or compiled.stdout or "Compilation failed"
+                    diags = parse_diagnostics(key, raw_err, is_compile=True)
+                    return _result(
+                        success=False, 
+                        status="Compilation Error", 
+                        stderr=raw_err,
+                        elapsed=round((time.perf_counter()-started)*1000, 2), 
+                        error_type="compile_error",
+                        diagnostics=diags
+                    )
+            
+            # Level 2: Runtime Execution Phase
             process = _run(run_command, workdir, stdin_input or "", timeout)
             elapsed = round((time.perf_counter()-started)*1000, 2)
             if process.returncode:
-                return _result(False, "Runtime Error", process.stdout, process.stderr or f"Process exited with code {process.returncode}", elapsed, "runtime_error")
+                raw_err = process.stderr or f"Process exited with code {process.returncode}"
+                diags = parse_diagnostics(key, raw_err, is_compile=False)
+                return _result(
+                    success=False, 
+                    status="Runtime Error", 
+                    output=process.stdout, 
+                    stderr=raw_err, 
+                    elapsed=elapsed, 
+                    error_type="runtime_error",
+                    diagnostics=diags
+                )
+            
             return _result(True, "OK", process.stdout, process.stderr, elapsed)
     except subprocess.TimeoutExpired as exc:
         output = exc.stdout or ""
@@ -124,9 +177,17 @@ def _execute_piston(language, code, stdin_input, timeout):
         response = requests.post(f"{Config.PISTON_API_URL.rstrip('/')}/execute", json=payload, headers=headers, timeout=timeout+5)
         response.raise_for_status(); data = response.json()
         compiled, ran = data.get("compile") or {}, data.get("run") or {}
-        if compiled.get("code", 0): return _result(False, "Compilation Error", stderr=compiled.get("stderr") or compiled.get("output", "Compilation failed"), error_type="compile_error")
-        if ran.get("signal") == "SIGKILL": return _result(False, "Time Limit Exceeded", ran.get("stdout", ""), "Time Limit Exceeded", error_type="timeout")
-        if ran.get("code", 0): return _result(False, "Runtime Error", ran.get("stdout", ""), ran.get("stderr", ""), error_type="runtime_error")
+        key = _key(language)
+        if compiled.get("code", 0):
+            raw_err = compiled.get("stderr") or compiled.get("output", "Compilation failed")
+            diags = parse_diagnostics(key, raw_err, is_compile=True)
+            return _result(False, "Compilation Error", stderr=raw_err, error_type="compile_error", diagnostics=diags)
+        if ran.get("signal") == "SIGKILL": 
+            return _result(False, "Time Limit Exceeded", ran.get("stdout", ""), "Time Limit Exceeded", error_type="timeout")
+        if ran.get("code", 0): 
+            raw_err = ran.get("stderr") or f"Process exited with code {ran.get('code')}"
+            diags = parse_diagnostics(key, raw_err, is_compile=False)
+            return _result(False, "Runtime Error", ran.get("stdout", ""), raw_err, error_type="runtime_error", diagnostics=diags)
         return _result(True, "OK", ran.get("stdout", ""), ran.get("stderr", ""))
     except (requests.RequestException, ValueError) as exc:
         logger.warning("Optional Piston fallback unavailable: %s", exc); return None

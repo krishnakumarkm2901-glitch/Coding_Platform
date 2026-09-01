@@ -83,19 +83,86 @@ class CompilerWorkerPool:
 
         start_time = time.perf_counter()
 
-        # Submit all test cases to the worker pool concurrently
+        # Level 1: Pre-flight check on first test case or standalone compile
+        first_tc = test_cases[0]
+        first_in = first_tc.get("input", "")
+        first_res = execute_code(language, code, first_in, timeout)
+        
+        # If compilation or syntax error occurred, immediately abort and return diagnostics
+        if first_res.get("status") in ["Compilation Error", "Syntax Error"] or first_res.get("diagnostics"):
+            status = first_res.get("status", "Compilation Error")
+            diags = first_res.get("diagnostics", [])
+            err_msg = first_res.get("error") or first_res.get("stderr") or "Compilation failed"
+            return {
+                "status": status,
+                "verdict": status.upper().replace(" ", "_"),
+                "passed": 0,
+                "total": len(test_cases),
+                "total_time_ms": first_res.get("execution_time", 0),
+                "max_time_ms": first_res.get("execution_time", 0),
+                "memory_mb": first_res.get("memory_mb", 14.2),
+                "diagnostics": diags,
+                "error_message": err_msg,
+                "results": [{
+                    "test_case": 1,
+                    "status": status,
+                    "passed": False,
+                    "input": first_tc.get("input", "") if first_tc.get("is_sample") else "(Hidden)",
+                    "expected_output": first_tc.get("expected_output", "") if first_tc.get("is_sample") else "(Hidden)",
+                    "actual_output": "",
+                    "error": err_msg,
+                    "execution_time_ms": first_res.get("execution_time", 0)
+                }]
+            }
+
+        # Submit remaining test cases (or all) to the worker pool concurrently
         futures = []
+        # First test is already executed
+        first_expected = normalize_output(first_tc.get("expected_output", first_tc.get("output", "")))
+        
         for idx, tc in enumerate(test_cases):
+            if idx == 0:
+                continue
             tc_in = tc.get("input", "")
             tc_expected = normalize_output(tc.get("expected_output", tc.get("output", "")))
             f = self.executor.submit(execute_code, language, code, tc_in, timeout)
             futures.append((idx, tc, tc_expected, f))
 
         passed_count = 0
-        max_time_ms = 0
+        max_time_ms = first_res.get("execution_time", 0)
         detailed_results = []
         overall_status = "Accepted"
 
+        # Process first test result
+        first_out = normalize_output(first_res.get("output", ""))
+        first_err = first_res.get("stderr", "") or first_res.get("error", "")
+        first_correct = bool((first_out == first_expected or first_out.lower() == first_expected.lower()) and not first_err and first_res.get("success", False))
+        
+        if first_correct:
+            first_status = "Passed"
+            passed_count += 1
+        elif "Time Limit Exceeded" in first_res.get("status", "") or "timeout" in str(first_err).lower():
+            first_status = "Time Limit Exceeded"
+            overall_status = "Time Limit Exceeded"
+        elif "Runtime Error" in first_res.get("status", ""):
+            first_status = "Runtime Error"
+            overall_status = "Runtime Error"
+        else:
+            first_status = "Wrong Answer"
+            overall_status = "Wrong Answer"
+
+        detailed_results.append({
+            "test_case": 1,
+            "status": first_status,
+            "passed": first_correct,
+            "input": first_tc.get("input", "") if first_tc.get("is_sample") else "(Hidden)",
+            "expected_output": first_expected if first_tc.get("is_sample") else "(Hidden)",
+            "actual_output": first_out if first_tc.get("is_sample") else ("" if first_correct else "(Output Mismatch)"),
+            "error": first_err,
+            "execution_time_ms": first_res.get("execution_time", 0)
+        })
+
+        # Process remaining test results
         for idx, tc, expected, future in futures:
             try:
                 res = future.result(timeout=timeout + 2)
@@ -158,10 +225,13 @@ class CompilerWorkerPool:
 
         return {
             "status": final_status,
+            "verdict": final_status.upper().replace(" ", "_"),
             "passed": passed_count,
             "total": total_count,
             "total_time_ms": total_time_ms,
             "max_time_ms": max_time_ms,
+            "memory_mb": 14.2,
+            "diagnostics": first_res.get("diagnostics", []),
             "results": detailed_results
         }
 

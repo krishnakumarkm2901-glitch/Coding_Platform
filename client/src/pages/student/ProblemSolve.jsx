@@ -41,6 +41,7 @@ export const ProblemSolve = () => {
   const [submitResult, setSubmitResult] = useState(null);
 
   const outputPanelRef = useRef(null);
+  const editorRef = useRef(null);
 
   useEffect(() => {
     if (runResult || submitResult) {
@@ -53,6 +54,14 @@ export const ProblemSolve = () => {
   useEffect(() => {
     fetchProblemDetails();
   }, [id]);
+
+  const activeDiagnostics = submitResult?.diagnostics || runResult?.diagnostics || [];
+
+  const handleNavigateToLine = (line, col) => {
+    if (editorRef.current && line) {
+      editorRef.current.revealPosition(line, col || 1);
+    }
+  };
 
   const fetchProblemDetails = async () => {
     try {
@@ -373,8 +382,10 @@ export const ProblemSolve = () => {
           {/* Code Editor Container */}
           <div className="flex-1 min-h-[380px] max-h-[440px]">
             <MonacoCodeEditor
+              ref={editorRef}
               language={language}
               code={code}
+              diagnostics={activeDiagnostics}
               onChange={(newVal) => setCode(newVal || '')}
               onReset={handleResetCode}
             />
@@ -425,6 +436,7 @@ export const ProblemSolve = () => {
               submitResult={submitResult}
               isRunning={isRunning}
               isSubmitting={isSubmitting}
+              onNavigateToLine={handleNavigateToLine}
             />
           </div>
 

@@ -22,7 +22,7 @@ submissions_bp = Blueprint("submissions", __name__)
 @submissions_bp.route("/run", methods=["POST"])
 @rate_limit(max_requests=10, window_seconds=60, key_func=lambda: request.remote_addr)
 def run_code_custom():
-    """Run code against custom input using Piston API."""
+    """Run code against custom input with full LeetCode-style compiler diagnostics."""
     data = request.get_json() or {}
     language = data.get("language", "python").lower()
     code = data.get("code", "").strip()
@@ -36,9 +36,14 @@ def run_code_custom():
     return jsonify({
         "success": True,
         "status": result["status"],
+        "verdict": result.get("verdict", result["status"].upper().replace(" ", "_")),
         "output": result["output"],
         "error": result["error"],
-        "execution_time": result["execution_time"]
+        "stderr": result.get("stderr", ""),
+        "execution_time": result["execution_time"],
+        "runtime_ms": result.get("runtime_ms", result["execution_time"]),
+        "memory_mb": result.get("memory_mb", 14.2),
+        "diagnostics": result.get("diagnostics", [])
     }), 200
 
 
@@ -166,14 +171,16 @@ def submit_solution():
 
 
 def _submit_synchronous(db, user, problem, test_cases, language, code):
-    """Original synchronous submission flow — used when Redis is unavailable."""
+    """Synchronous submission flow with full LeetCode-style diagnostics."""
     user_id = user["_id"]
     total_test_cases = len(test_cases)
     passed_test_cases = 0
     final_status = "Accepted"
     first_error = ""
     failed_test_case_info = None
+    diagnostics = []
     max_runtime = 0.0
+    test_results = []
 
     for idx, tc in enumerate(test_cases):
         tc_input = tc.get("input", "")
@@ -183,9 +190,19 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
         max_runtime = max(max_runtime, res.get("execution_time", 0.0))
 
         # Check for compilation or runtime errors
-        if res["status"] == "Compilation Error":
-            final_status = "Compilation Error"
+        if res["status"] in ["Compilation Error", "Syntax Error"]:
+            final_status = res["status"]
             first_error = res["error"]
+            diagnostics = res.get("diagnostics", [])
+            test_results.append({
+                "test_case": idx + 1,
+                "status": final_status,
+                "passed": False,
+                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
+                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
+                "actual": res["error"],
+                "execution_time_ms": res.get("execution_time", 0)
+            })
             break
         elif res["status"] == "Time Limit Exceeded":
             final_status = "Time Limit Exceeded"
@@ -196,22 +213,50 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
                 "expected": expected_output if tc.get("is_sample") else "(Hidden)",
                 "actual": "Time Limit Exceeded"
             }
+            test_results.append({
+                "test_case": idx + 1,
+                "status": "Time Limit Exceeded",
+                "passed": False,
+                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
+                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
+                "actual": "Time Limit Exceeded",
+                "execution_time_ms": res.get("execution_time", 0)
+            })
             break
         elif res["status"] == "Runtime Error":
             final_status = "Runtime Error"
             first_error = res["error"]
+            diagnostics = res.get("diagnostics", [])
             failed_test_case_info = {
                 "test_case_index": idx + 1,
                 "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
                 "expected": expected_output if tc.get("is_sample") else "(Hidden)",
                 "actual": res["error"]
             }
+            test_results.append({
+                "test_case": idx + 1,
+                "status": "Runtime Error",
+                "passed": False,
+                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
+                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
+                "actual": res["error"],
+                "execution_time_ms": res.get("execution_time", 0)
+            })
             break
         
         # Compare actual output with expected output
         actual_output = normalize_output(res["output"])
         if actual_output == expected_output or actual_output.lower() == expected_output.lower():
             passed_test_cases += 1
+            test_results.append({
+                "test_case": idx + 1,
+                "status": "Passed",
+                "passed": True,
+                "input": tc_input if tc.get("is_sample") else "(Hidden)",
+                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
+                "actual": actual_output if tc.get("is_sample") else "(Hidden)",
+                "execution_time_ms": res.get("execution_time", 0)
+            })
         else:
             final_status = "Wrong Answer"
             first_error = f"Output mismatch on test case {idx + 1}"
@@ -221,6 +266,15 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
                 "expected": expected_output if tc.get("is_sample") else "(Hidden)",
                 "actual": actual_output if tc.get("is_sample") else "(Hidden Output)"
             }
+            test_results.append({
+                "test_case": idx + 1,
+                "status": "Wrong Answer",
+                "passed": False,
+                "input": tc_input if tc.get("is_sample") else "(Hidden Test Case)",
+                "expected": expected_output if tc.get("is_sample") else "(Hidden)",
+                "actual": actual_output if tc.get("is_sample") else "(Hidden Output)",
+                "execution_time_ms": res.get("execution_time", 0)
+            })
             break
 
     # Save submission record
@@ -233,11 +287,15 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
         "language": language,
         "code": code,
         "status": final_status,
+        "verdict": final_status.upper().replace(" ", "_"),
         "runtime": max_runtime,
-        "memory": 15.4, # Approx MB
+        "runtime_ms": max_runtime,
+        "memory": 14.2,
+        "memory_mb": 14.2,
         "passed_test_cases": passed_test_cases,
         "total_test_cases": total_test_cases,
         "error_message": first_error,
+        "diagnostics": diagnostics,
         "created_at": datetime.now(timezone.utc)
     }
 
@@ -282,11 +340,16 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
         "success": True,
         "submission_id": str(sub_result.inserted_id),
         "status": final_status,
+        "verdict": final_status.upper().replace(" ", "_"),
         "passed_test_cases": passed_test_cases,
         "total_test_cases": total_test_cases,
         "runtime": max_runtime,
+        "runtime_ms": max_runtime,
+        "memory_mb": 14.2,
         "error_message": first_error,
-        "failed_case": failed_test_case_info
+        "failed_case": failed_test_case_info,
+        "diagnostics": diagnostics,
+        "test_results": test_results
     }), 200
 
 

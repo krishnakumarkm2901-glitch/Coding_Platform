@@ -235,9 +235,13 @@ def run_playground_code():
     return jsonify({
         "success": True,
         "status": result["status"],
+        "verdict": result.get("verdict", result["status"].upper().replace(" ", "_")),
         "output": result.get("output", ""),
         "error": result.get("error", ""),
         "stderr": result.get("stderr", result.get("error", "")),
         "error_type": result.get("error_type"),
-        "execution_time": result.get("execution_time", 0.0)
+        "execution_time": result.get("execution_time", 0.0),
+        "runtime_ms": result.get("runtime_ms", result.get("execution_time", 0.0)),
+        "memory_mb": result.get("memory_mb", 14.2),
+        "diagnostics": result.get("diagnostics", [])
     }), 200

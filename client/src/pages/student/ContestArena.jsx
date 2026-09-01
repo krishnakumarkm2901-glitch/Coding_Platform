@@ -77,14 +77,20 @@ export const ContestArena = () => {
   const [activeOutputTab, setActiveOutputTab] = useState('testcases');
 
   const outputPanelRef = useRef(null);
+  const editorRef = useRef(null);
+
+  // Problem Submission & Modal state
+  const [isSubmittingProblem, setIsSubmittingProblem] = useState(false);
+  const [problemSubmitModalOpen, setProblemSubmitModalOpen] = useState(false);
+  const [contestSubmitModalOpen, setContestSubmitModalOpen] = useState(false);
 
   useEffect(() => {
-    if (runResult) {
+    if (runResult || submitResult) {
       setTimeout(() => {
         outputPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);
     }
-  }, [runResult]);
+  }, [runResult, submitResult]);
 
   // Submit state
   const [isSubmittingContest, setIsSubmittingContest] = useState(false);
@@ -500,6 +506,14 @@ export const ContestArena = () => {
 
   // ----------------- PROBLEM & CODE HANDLING -----------------
 
+  const activeDiagnostics = submitResult?.diagnostics || runResult?.diagnostics || [];
+
+  const handleNavigateToLine = (line, col) => {
+    if (editorRef.current && line) {
+      editorRef.current.revealPosition(line, col || 1);
+    }
+  };
+
   const handleProblemSelect = (idx) => {
     if (!contest?.problems) return;
     
@@ -519,6 +533,7 @@ export const ContestArena = () => {
     const saved = codeSolutions[newProb.id]?.[currentLanguage] || newProb.starter_code?.[currentLanguage] || DEFAULT_STARTER_CODE[currentLanguage] || '';
     setCurrentCode(saved);
     setRunResult(null);
+    setSubmitResult(null);
   };
 
   const handleLanguageChange = (newLang) => {
@@ -537,6 +552,7 @@ export const ContestArena = () => {
     const savedCode = codeSolutions[currentProblem.id]?.[newLang] || currentProblem.starter_code?.[newLang] || DEFAULT_STARTER_CODE[newLang] || '';
     setCurrentCode(savedCode);
     setRunResult(null);
+    setSubmitResult(null);
   };
 
   const handleRunCurrentCode = async () => {
@@ -558,6 +574,7 @@ export const ContestArena = () => {
 
     try {
       setIsRunning(true);
+      setSubmitResult(null);
       setActiveOutputTab('result');
       const normalizedCases = normalizeTestCases(currentProblem);
       let inputToUse = customInput;
@@ -594,6 +611,61 @@ export const ContestArena = () => {
       });
     } finally {
       setIsRunning(false);
+    }
+  };
+
+  const handleOpenProblemSubmitModal = () => {
+    if (!currentCode.trim()) {
+      setRunResult({
+        status: 'Error',
+        output: '',
+        error: 'Code cannot be empty. Please write your solution before submitting.',
+        execution_time: 0,
+        inputUsed: '',
+        input: '',
+      });
+      setActiveOutputTab('result');
+      return;
+    }
+    setProblemSubmitModalOpen(true);
+  };
+
+  const handleConfirmProblemSubmit = async () => {
+    const currentProblem = contest?.problems?.[selectedProblemIdx];
+    if (!currentProblem) return;
+    setProblemSubmitModalOpen(false);
+
+    try {
+      setIsSubmittingProblem(true);
+      setRunResult(null);
+      setActiveOutputTab('result');
+
+      const res = await api.post(`/contests/${id}/problems/${currentProblem.id}/submit`, {
+        language: currentLanguage,
+        code: currentCode,
+      });
+
+      if (res.data.success) {
+        setSubmitResult(res.data);
+        if (res.data.status === 'Accepted' || res.data.verdict === 'ACCEPTED') {
+          confetti({
+            particleCount: 100,
+            spread: 60,
+            origin: { y: 0.6 },
+            colors: ['#0757B8', '#22B573', '#F2B705'],
+          });
+        }
+      }
+    } catch (err) {
+      setSubmitResult({
+        status: 'Submission Error',
+        error_message: err.response?.data?.error || 'Problem submission failed.',
+        passed_test_cases: 0,
+        total_test_cases: 0,
+        runtime: 0,
+      });
+    } finally {
+      setIsSubmittingProblem(false);
     }
   };
 
@@ -1301,22 +1373,37 @@ export const ContestArena = () => {
                   </select>
                 </div>
 
-                <button
-                  onClick={handleRunCurrentCode}
-                  disabled={isRunning}
-                  className="px-3 py-1 rounded-lg bg-[#0757B8] dark:bg-[#0066CC] hover:opacity-95 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 disabled:opacity-40"
-                >
-                  <Play className="w-3 h-3 fill-current" />
-                  <span>{isRunning ? 'Executing...' : 'Run Code'}</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRunCurrentCode}
+                    disabled={isRunning || isSubmittingProblem}
+                    className="px-3 py-1 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] hover:bg-[#DDF2FF] dark:hover:bg-[#142A43] text-[#172033] dark:text-[#F8FAFC] border border-[#D9E0E8] dark:border-[#30363D] font-bold text-xs shadow-sm flex items-center gap-1.5 disabled:opacity-40 transition cursor-pointer"
+                  >
+                    <Play className="w-3 h-3 text-[#0757B8] dark:text-[#60A5FA] fill-current" />
+                    <span>{isRunning ? 'Running...' : 'Run Code'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleOpenProblemSubmitModal}
+                    disabled={isRunning || isSubmittingProblem}
+                    className="px-3.5 py-1 rounded-lg bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 disabled:opacity-40 transition cursor-pointer"
+                  >
+                    <Send className="w-3 h-3" />
+                    <span>{isSubmittingProblem ? 'Evaluating...' : 'Submit Solution'}</span>
+                  </button>
+                </div>
               </div>
 
               {/* Monaco Editor */}
               <div className="flex-1 overflow-hidden relative">
                 <MonacoCodeEditor
+                  ref={editorRef}
                   language={currentLanguage}
                   code={currentCode}
                   value={currentCode}
+                  diagnostics={activeDiagnostics}
                   onChange={(val) => setCurrentCode(val || '')}
                   onReset={() => {
                     const currentProblem = contest?.problems?.[selectedProblemIdx];
@@ -1327,19 +1414,22 @@ export const ContestArena = () => {
               </div>
 
               {/* Bottom Output Panel */}
-              <div className="h-52 border-t border-[#D9E0E8] dark:border-[#30363D] shrink-0 bg-[#FFFFFF] dark:bg-[#151A21]" ref={outputPanelRef}>
+              <div className="h-56 border-t border-[#D9E0E8] dark:border-[#30363D] shrink-0 bg-[#FFFFFF] dark:bg-[#151A21]" ref={outputPanelRef}>
                 <OutputPanel
                   activeTab={activeOutputTab}
                   setActiveTab={setActiveOutputTab}
                   onTabChange={setActiveOutputTab}
                   runResult={runResult}
+                  submitResult={submitResult}
                   result={runResult}
                   isRunning={isRunning}
-                  isLoading={isRunning}
+                  isSubmitting={isSubmittingProblem}
+                  isLoading={isRunning || isSubmittingProblem}
                   customInput={customInput}
                   setCustomInput={setCustomInput}
                   onCustomInputChange={setCustomInput}
                   sampleTestCases={currentProblem ? normalizeTestCases(currentProblem) : []}
+                  onNavigateToLine={handleNavigateToLine}
                 />
               </div>
 
@@ -1467,6 +1557,45 @@ export const ContestArena = () => {
           onClose={() => setCalculatorOpen(false)}
         />
       )}
+
+      {/* Problem Solution Submit Confirmation Modal */}
+      <Modal
+        isOpen={problemSubmitModalOpen}
+        onClose={() => setProblemSubmitModalOpen(false)}
+        title={`Submit Solution — ${currentProblem?.title || 'Coding Problem'}`}
+      >
+        <div className="space-y-4 text-sm text-[#172033] dark:text-[#F8FAFC]">
+          <div className="p-3.5 rounded-2xl bg-[#DDF2FF] dark:bg-[#142A43] border border-[#0757B8]/20 flex items-start gap-3">
+            <Code2 className="w-5 h-5 text-[#0757B8] dark:text-[#60A5FA] shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-xs">
+                Your solution for <strong>{currentProblem?.title}</strong> will be evaluated against all test cases.
+              </p>
+              <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1">
+                Clicking Submit evaluates and saves your code for this problem. You can continue working on other problems in the contest.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setProblemSubmitModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs font-bold text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmProblemSubmit}
+              className="px-5 py-2 rounded-xl bg-[#22B573] hover:opacity-95 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition flex items-center gap-1.5"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Submit Solution</span>
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };
