@@ -442,8 +442,9 @@ export const ContestArena = () => {
 
     // 2. Window Blur (Focus Lost / Clicked Outside) Detection
     const handleWindowBlur = () => {
-      if (!isTerminatedRef.current && !isSubmittedRef.current) {
-        triggerTermination('WINDOW_BLUR', 'Left the contest browser window (Focus lost)');
+      // Only terminate if document actually became hidden (switched tab / minimized)
+      if (document.hidden && !isTerminatedRef.current && !isSubmittedRef.current) {
+        triggerTermination('TAB_SWITCH', 'Left the contest browser window (Focus lost)');
       }
     };
 
@@ -673,11 +674,21 @@ export const ContestArena = () => {
             colors: ['#0757B8', '#22B573', '#F2B705'],
           });
         }
+      } else {
+        setSubmitResult({
+          status: res.data.status || 'Submission Error',
+          error_message: res.data.message || res.data.error || 'Submission failed.',
+          passed_test_cases: res.data.passed || res.data.passed_test_cases || 0,
+          total_test_cases: res.data.total || res.data.total_test_cases || 0,
+          runtime: 0,
+          diagnostics: res.data.diagnostics || [],
+          test_results: res.data.test_results || [],
+        });
       }
     } catch (err) {
       setSubmitResult({
         status: 'Submission Error',
-        error_message: err.response?.data?.error || 'Problem submission failed.',
+        error_message: err.response?.data?.error || err.response?.data?.message || 'Problem submission failed.',
         passed_test_cases: 0,
         total_test_cases: 0,
         runtime: 0,
@@ -687,14 +698,15 @@ export const ContestArena = () => {
     }
   };
 
-  // ----------------- CONTEST SUBMISSION -----------------
+  // ----------------- CONTEST SUBMISSION & FINALIZATION -----------------
 
-  const handleFinalSubmit = async (isAuto = false) => {
+  const handleOpenFinalSubmitModal = () => {
+    setContestSubmitModalOpen(true);
+  };
+
+  const handleConfirmFinalSubmit = async (isAuto = false) => {
     if (isSubmittingContest || isTerminatedRef.current || isSubmittedRef.current) return;
-
-    if (!isAuto && !window.confirm('Are you sure you want to finish and submit your contest? This cannot be undone.')) {
-      return;
-    }
+    setContestSubmitModalOpen(false);
 
     try {
       setIsSubmittingContest(true);
@@ -735,7 +747,7 @@ export const ContestArena = () => {
   };
 
   const handleAutoSubmit = () => {
-    handleFinalSubmit(true);
+    handleConfirmFinalSubmit(true);
   };
 
   const formatTimer = (seconds) => {
@@ -1267,9 +1279,10 @@ export const ContestArena = () => {
           </div>
 
           <button
-            onClick={() => handleFinalSubmit(false)}
+            type="button"
+            onClick={handleOpenFinalSubmitModal}
             disabled={isSubmittingContest}
-            className="px-4 py-1.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition disabled:opacity-40"
+            className="px-4 py-1.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition disabled:opacity-40 cursor-pointer"
           >
             <Send className="w-3.5 h-3.5" />
             <span>{isSubmittingContest ? 'Submitting...' : 'Finish & Submit'}</span>
@@ -1573,7 +1586,7 @@ export const ContestArena = () => {
         />
       )}
 
-      {/* Problem Solution Submit Confirmation Modal */}
+      {/* 1. Problem Solution Submit Confirmation Modal */}
       <Modal
         isOpen={problemSubmitModalOpen}
         onClose={() => setProblemSubmitModalOpen(false)}
@@ -1583,11 +1596,11 @@ export const ContestArena = () => {
           <div className="p-3.5 rounded-2xl bg-[#DDF2FF] dark:bg-[#142A43] border border-[#0757B8]/20 flex items-start gap-3">
             <Code2 className="w-5 h-5 text-[#0757B8] dark:text-[#60A5FA] shrink-0 mt-0.5" />
             <div>
-              <p className="font-bold text-xs">
-                Your solution for <strong>{currentProblem?.title}</strong> will be evaluated against all test cases.
+              <p className="font-bold text-xs text-[#0757B8] dark:text-[#60A5FA]">
+                Are you sure you want to submit this solution?
               </p>
-              <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1">
-                Clicking Submit evaluates and saves your code for this problem. You can continue working on other problems in the contest.
+              <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1 leading-relaxed">
+                Your solution for <strong>{currentProblem?.title}</strong> will be evaluated against all test cases and saved. You can continue working on other problems in the contest.
               </p>
             </div>
           </div>
@@ -1595,18 +1608,75 @@ export const ContestArena = () => {
           <div className="flex items-center justify-end gap-3 pt-2">
             <button
               type="button"
-              onClick={() => setProblemSubmitModalOpen(false)}
-              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs font-bold text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] transition"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setProblemSubmitModalOpen(false);
+              }}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs font-bold text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] transition cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="button"
-              onClick={handleConfirmProblemSubmit}
-              className="px-5 py-2 rounded-xl bg-[#22B573] hover:opacity-95 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition flex items-center gap-1.5"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleConfirmProblemSubmit();
+              }}
+              disabled={isSubmittingProblem}
+              className="px-5 py-2 rounded-xl bg-[#22B573] hover:opacity-95 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>Submit Solution</span>
+              <span>{isSubmittingProblem ? 'Submitting...' : 'OK / Submit'}</span>
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* 2. Entire Contest Finish / Submit Confirmation Modal */}
+      <Modal
+        isOpen={contestSubmitModalOpen}
+        onClose={() => setContestSubmitModalOpen(false)}
+        title="Finish Contest"
+      >
+        <div className="space-y-4 text-sm text-[#172033] dark:text-[#F8FAFC]">
+          <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-xs text-amber-700 dark:text-amber-300">
+                Are you sure you want to finish the contest?
+              </p>
+              <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1 leading-relaxed">
+                You will not be able to make further submissions once submitted. All your saved code solutions and MCQ answers will be evaluated and finalized.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setContestSubmitModalOpen(false);
+              }}
+              className="px-4 py-2 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs font-bold text-[#667085] dark:text-[#94A3B8] hover:text-[#172033] dark:hover:text-[#F8FAFC] transition cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleConfirmFinalSubmit(false);
+              }}
+              disabled={isSubmittingContest}
+              className="px-5 py-2 rounded-xl bg-[#22B573] hover:opacity-95 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>{isSubmittingContest ? 'Submitting...' : 'Finish Contest'}</span>
             </button>
           </div>
         </div>
