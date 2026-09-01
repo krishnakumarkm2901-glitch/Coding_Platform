@@ -27,7 +27,7 @@ def get_language_details(language):
     return {"language": value[0], "version": value[1], "aliases": value[2], "filename": value[3]}
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"), override=True)
 
 def _tool(env_name, command):
     # 1. Environment variable
@@ -48,11 +48,15 @@ def _tool(env_name, command):
     
     candidates = [
         os.path.join(toolchains_dir, "jdk", "jdk-21.0.12+8", "bin", f"{command}.exe"),
+        os.path.join("C:\\Program Files\\Java\\jdk-21.0.12.1\\bin", f"{command}.exe"),
+        os.path.join("C:\\Program Files\\Common Files\\Oracle\\Java\\javapath", f"{command}.exe"),
         os.path.join(toolchains_dir, "winlibs", "mingw64", "bin", f"{command}.exe"),
         os.path.join(toolchains_dir, "go", "go", "bin", f"{command}.exe"),
         os.path.expanduser(os.path.join("~", ".cargo", "bin", f"{command}.exe")),
         os.path.join("C:\\Program Files\\nodejs", f"{command}.exe"),
     ]
+    import glob
+    candidates.extend(glob.glob(f"C:\\Program Files\\Java\\*\\bin\\{command}.exe"))
     for c in candidates:
         if os.path.isfile(c):
             return c
