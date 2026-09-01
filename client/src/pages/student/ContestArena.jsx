@@ -79,10 +79,14 @@ export const ContestArena = () => {
   const outputPanelRef = useRef(null);
   const editorRef = useRef(null);
 
-  // Problem Submission & Modal state
+  // Submit & Evaluation state
+  const [isSubmittingContest, setIsSubmittingContest] = useState(false);
   const [isSubmittingProblem, setIsSubmittingProblem] = useState(false);
+  const [submitResult, setSubmitResult] = useState(null);
   const [problemSubmitModalOpen, setProblemSubmitModalOpen] = useState(false);
   const [contestSubmitModalOpen, setContestSubmitModalOpen] = useState(false);
+  const [resultModalOpen, setResultModalOpen] = useState(false);
+  const [calculatorOpen, setCalculatorOpen] = useState(false);
 
   useEffect(() => {
     if (runResult || submitResult) {
@@ -91,12 +95,6 @@ export const ContestArena = () => {
       }, 100);
     }
   }, [runResult, submitResult]);
-
-  // Submit state
-  const [isSubmittingContest, setIsSubmittingContest] = useState(false);
-  const [submitResult, setSubmitResult] = useState(null);
-  const [resultModalOpen, setResultModalOpen] = useState(false);
-  const [calculatorOpen, setCalculatorOpen] = useState(false);
 
   // Countdown timer tick effect for upcoming contests
   useEffect(() => {
