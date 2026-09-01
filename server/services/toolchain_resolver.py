@@ -84,13 +84,22 @@ def resolve_java_toolchain() -> Tuple[Optional[str], Optional[str]]:
         else:
             search_roots.extend([
                 "/usr/lib/jvm",
-                "/Library/Java/JavaVirtualMachines"
+                "/usr/lib/jvm/default-java",
+                "/Library/Java/JavaVirtualMachines",
+                os.path.join(server_dir, ".jdk"),
+                "/opt/render/project/src/.jdk",
+                "/opt/render/project/src/server/.jdk",
+                "/tmp/jdk"
             ])
 
         discovered_jdks = []
         for root in search_roots:
             if not os.path.isdir(root):
                 continue
+            # Direct check if root itself is the JDK root
+            direct_javac = os.path.join(root, "bin", f"javac{exe_suffix}")
+            if os.path.isfile(direct_javac):
+                discovered_jdks.append((_extract_version_score(os.path.basename(root)), root))
             try:
                 for entry in os.listdir(root):
                     full_entry = os.path.join(root, entry)
