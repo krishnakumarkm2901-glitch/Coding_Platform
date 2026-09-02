@@ -141,6 +141,12 @@ def resolve_java_toolchain() -> Tuple[Optional[str], Optional[str]]:
             if path_java and _is_valid_executable(path_java):
                 java_path = path_java
 
+    if javac_path and java_path:
+        logger.info(f"[toolchain] Java resolved: javac={javac_path}, java={java_path}")
+    else:
+        logger.warning(f"[toolchain] Java NOT fully resolved: javac={javac_path}, java={java_path}, "
+                       f"JAVAC_PATH env='{os.getenv('JAVAC_PATH', '')}', JAVA_HOME='{os.getenv('JAVA_HOME', '')}'")
+
     return javac_path, java_path
 
 def resolve_tool(env_name: str, command: str) -> Optional[str]:
@@ -151,30 +157,45 @@ def resolve_tool(env_name: str, command: str) -> Optional[str]:
     # 1. Environment variable
     configured = os.getenv(env_name, "").strip().strip('"')
     if configured and _is_valid_executable(configured):
+        logger.info(f"[toolchain] {command} resolved via {env_name}: {configured}")
         return os.path.abspath(os.path.expandvars(os.path.expanduser(configured)))
 
     # 2. System PATH
     found = shutil.which(command)
     if found and _is_valid_executable(found):
+        logger.info(f"[toolchain] {command} resolved via PATH: {found}")
         return found
 
-    # 3. Dedicated directories
+    # 3. Dedicated directories (Linux standard paths + Windows paths + project toolchains)
     server_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     toolchains_dir = os.path.join(server_dir, "toolchains")
 
     candidates = [
+        # Linux standard paths (Render, Docker, Ubuntu)
+        f"/usr/bin/{command}",
+        f"/usr/local/bin/{command}",
+        f"/opt/render/project/src/server/.jdk/bin/{command}",
+        os.path.join(server_dir, ".jdk", "bin", command),
+        # Project toolchains
         os.path.join(toolchains_dir, "winlibs", "mingw64", "bin", cmd_name),
         os.path.join(toolchains_dir, "go", "go", "bin", cmd_name),
         os.path.join(toolchains_dir, "go", "bin", cmd_name),
         os.path.expanduser(os.path.join("~", ".cargo", "bin", cmd_name)),
-        os.path.join("C:\\Program Files\\nodejs", cmd_name),
-        os.path.join("C:\\Program Files\\Go\\bin", cmd_name),
-        os.path.join("C:\\mingw64\\bin", cmd_name),
-        os.path.join("C:\\msys64\\mingw64\\bin", cmd_name),
-        os.path.join("C:\\msys64\\ucrt64\\bin", cmd_name),
     ]
+
+    # Windows-specific paths (only on Windows)
+    if os.name == "nt":
+        candidates.extend([
+            os.path.join("C:\\Program Files\\nodejs", cmd_name),
+            os.path.join("C:\\Program Files\\Go\\bin", cmd_name),
+            os.path.join("C:\\mingw64\\bin", cmd_name),
+            os.path.join("C:\\msys64\\mingw64\\bin", cmd_name),
+            os.path.join("C:\\msys64\\ucrt64\\bin", cmd_name),
+        ])
+
     for c in candidates:
         if _is_valid_executable(c):
+            logger.info(f"[toolchain] {command} resolved via candidate path: {c}")
             return c
 
     # 4. Search recursively inside server/toolchains
@@ -183,8 +204,10 @@ def resolve_tool(env_name: str, command: str) -> Optional[str]:
             if cmd_name in files:
                 p = os.path.join(root, cmd_name)
                 if _is_valid_executable(p):
+                    logger.info(f"[toolchain] {command} resolved via recursive search: {p}")
                     return p
 
+    logger.warning(f"[toolchain] {command} NOT FOUND (env={env_name}, PATH lookup failed, no candidates matched)")
     return None
 
 def get_toolchain_diagnostics() -> Dict[str, Dict]:

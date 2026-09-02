@@ -64,12 +64,10 @@ export const ProblemSolve = () => {
   const fetchEngineHealth = async () => {
     try {
       const res = await api.get('/execution/health');
-      if (res.data.success || res.data.status === 'healthy') {
-        const provName = res.data.provider || 'Local Sandbox';
-        const friendlyName = provName.replace('Provider', '').replace('LocalSandbox', 'Local Sandbox');
-        setEngineStatus({ connected: true, loading: false, provider: friendlyName, error: '' });
+      if (res.data.success && res.data.status === 'healthy') {
+        setEngineStatus({ connected: true, loading: false, provider: '', error: '' });
       } else {
-        setEngineStatus({ connected: false, loading: false, provider: '', error: 'Degraded' });
+        setEngineStatus({ connected: false, loading: false, provider: '', error: res.data.status || 'Unavailable' });
       }
     } catch (err) {
       setEngineStatus({ connected: false, loading: false, provider: '', error: 'Unavailable' });
@@ -449,12 +447,12 @@ export const ProblemSolve = () => {
                 ) : engineStatus.connected ? (
                   <span className="inline-flex items-center gap-1 font-semibold text-[#22B573]">
                     <span className="w-2 h-2 rounded-full bg-[#22B573]"></span>
-                    Connected ({engineStatus.provider || 'Local Sandbox'})
+                    Connected
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 font-semibold text-red-500">
                     <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                    Unavailable
+                    Disconnected
                   </span>
                 )}
               </span>

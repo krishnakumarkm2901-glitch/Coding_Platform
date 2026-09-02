@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env if present
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 class Config:
     SECRET_KEY = os.getenv("JWT_SECRET", "college_coding_super_secret_jwt_key_2026")

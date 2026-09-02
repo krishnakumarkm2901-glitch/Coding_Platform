@@ -95,14 +95,15 @@ def create_app():
             bool(toolchains.get("java", {}).get("available")) or bool(toolchains.get("c", {}).get("available"))
         )
 
+        status_code = 200 if is_healthy else 503
         return jsonify({
-            "success": True,
-            "status": "healthy" if is_healthy else "degraded",
+            "success": is_healthy,
+            "status": "healthy" if is_healthy else "unavailable",
             "provider": provider.__class__.__name__,
             "provider_type": "local_sandbox" if "Local" in provider.__class__.__name__ else "remote",
             "available_languages": available_langs,
             "toolchains": toolchains
-        }), 200
+        }), status_code
 
 
     # Error Handlers

@@ -36,7 +36,7 @@ def get_language_details(language):
     return {"language": value[0], "version": value[1], "aliases": value[2], "filename": value[3]}
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"), override=True)
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"), override=False)
 
 from services.toolchain_resolver import resolve_java_toolchain, resolve_tool
 
