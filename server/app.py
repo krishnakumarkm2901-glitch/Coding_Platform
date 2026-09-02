@@ -83,6 +83,28 @@ def create_app():
             "server_time_utc": format_utc_iso(get_utc_now())
         }), 200 if db_healthy else 503
 
+    @app.route("/api/execution/health")
+    def execution_health_check():
+        from services.compiler import get_compiler_provider
+        from services.toolchain_resolver import get_toolchain_diagnostics
+        provider = get_compiler_provider()
+        toolchains = get_toolchain_diagnostics()
+        
+        available_langs = [lang for lang, info in toolchains.items() if info.get("available")]
+        is_healthy = bool(toolchains.get("python", {}).get("available")) and (
+            bool(toolchains.get("java", {}).get("available")) or bool(toolchains.get("c", {}).get("available"))
+        )
+
+        return jsonify({
+            "success": True,
+            "status": "healthy" if is_healthy else "degraded",
+            "provider": provider.__class__.__name__,
+            "provider_type": "local_sandbox" if "Local" in provider.__class__.__name__ else "remote",
+            "available_languages": available_langs,
+            "toolchains": toolchains
+        }), 200
+
+
     # Error Handlers
     @app.errorhandler(404)
     def not_found(error):

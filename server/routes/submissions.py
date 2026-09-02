@@ -16,6 +16,38 @@ submissions_bp = Blueprint("submissions", __name__)
 
 
 # ---------------------------------------------------------------------------
+# Health Check Endpoint
+# ---------------------------------------------------------------------------
+
+@submissions_bp.route("/health", methods=["GET"])
+def execution_health():
+    """Returns real-time execution engine health and available compiler toolchains."""
+    from services.compiler import get_compiler_provider
+    from services.toolchain_resolver import get_toolchain_diagnostics
+    provider = get_compiler_provider()
+    toolchains = get_toolchain_diagnostics()
+    
+    # Calculate available languages
+    available_langs = []
+    for lang, info in toolchains.items():
+        if info.get("available"):
+            available_langs.append(lang)
+            
+    is_healthy = bool(toolchains.get("python", {}).get("available")) and (
+        bool(toolchains.get("java", {}).get("available")) or bool(toolchains.get("c", {}).get("available"))
+    )
+
+    return jsonify({
+        "success": True,
+        "status": "healthy" if is_healthy else "degraded",
+        "provider": provider.__class__.__name__,
+        "provider_type": "local_sandbox" if "Local" in provider.__class__.__name__ else "remote",
+        "available_languages": available_langs,
+        "toolchains": toolchains
+    }), 200
+
+
+# ---------------------------------------------------------------------------
 # Run Code (custom input) — always synchronous for instant feedback
 # ---------------------------------------------------------------------------
 
@@ -31,17 +63,29 @@ def run_code_custom():
     expected_output = data.get("expected_output")
     test_cases = data.get("test_cases")  # Optional array of sample test cases
     problem_id = data.get("problem_id")
+    contest_id = data.get("contest_id")
     is_custom = bool(data.get("is_custom", False))
 
     if not code:
         return jsonify({"error": "Code cannot be empty", "success": False}), 400
+
+    # Extract user ID if auth header provided
+    user_id = _get_user_id_for_rate_limit()
 
     code_hash = hashlib.sha256(f"{problem_id or ''}_{language}_{code}".encode()).hexdigest()
 
     # If running multiple test cases (or all sample test cases for a problem)
     if test_cases and isinstance(test_cases, list) and not is_custom:
         from services.judge_engine import OnlineJudgeEngine
-        judge_res = OnlineJudgeEngine.evaluate_solution(language, code, test_cases, time_limit=5.0)
+        judge_res = OnlineJudgeEngine.evaluate_solution(
+            language,
+            code,
+            test_cases,
+            time_limit=5.0,
+            user_id=str(user_id) if user_id else None,
+            contest_id=contest_id,
+            problem_id=problem_id
+        )
         all_passed = (judge_res["status"] == "Accepted" and judge_res["passed_test_cases"] == judge_res["total_test_cases"])
         return jsonify({
             "success": True,
@@ -56,6 +100,7 @@ def run_code_custom():
             "diagnostics": judge_res.get("diagnostics", []),
             "test_results": judge_res.get("test_results", []),
             "failed_case": judge_res.get("failed_case"),
+            "error": judge_res.get("error_message", ""),
             "code_hash": code_hash,
             "is_custom": False,
         }), 200
@@ -74,7 +119,8 @@ def run_code_custom():
         actual_norm = normalize_output(result.get("output", ""))
         expected_norm = normalize_output(expected_output)
 
-        if actual_norm == expected_norm or actual_norm.lower() == expected_norm.lower():
+        from services.judge_engine import OutputComparator
+        if OutputComparator.compare(actual_norm, expected_norm):
             status = "Accepted"
             verdict = "ACCEPTED"
             all_passed = not is_custom
@@ -99,6 +145,7 @@ def run_code_custom():
         "code_hash": code_hash,
         "is_custom": is_custom,
     }), 200
+
 
 
 # ---------------------------------------------------------------------------

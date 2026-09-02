@@ -201,11 +201,18 @@ class OnlineJudgeEngine:
         test_cases: List[Dict[str, Any]],
         time_limit: float = 5.0,
         memory_limit: float = 256.0,
-        output_limit_chars: int = 500000
+        output_limit_chars: int = 500000,
+        user_id: Optional[str] = None,
+        contest_id: Optional[str] = None,
+        problem_id: Optional[str] = None,
+        request_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Judge a complete student solution against all public and hidden test cases.
         """
+        import uuid
+        req_id = request_id or str(uuid.uuid4())[:8]
+        start_wall_time = time.time()
         start_time = time.perf_counter()
 
         if not code or not code.strip():
@@ -213,9 +220,9 @@ class OnlineJudgeEngine:
                 "status": "Compilation Error",
                 "verdict": "COMPILATION_ERROR",
                 "passed": 0,
-                "total": len(test_cases),
+                "total": len(test_cases) if test_cases else 0,
                 "passed_test_cases": 0,
-                "total_test_cases": len(test_cases),
+                "total_test_cases": len(test_cases) if test_cases else 0,
                 "runtime_ms": 0,
                 "memory_mb": 0,
                 "diagnostics": [{
@@ -240,9 +247,9 @@ class OnlineJudgeEngine:
                 "status": "Syntax Error",
                 "verdict": "SYNTAX_ERROR",
                 "passed": 0,
-                "total": len(test_cases),
+                "total": len(test_cases) if test_cases else 0,
                 "passed_test_cases": 0,
-                "total_test_cases": len(test_cases),
+                "total_test_cases": len(test_cases) if test_cases else 0,
                 "runtime_ms": 0,
                 "memory_mb": 0,
                 "error_message": err_msg,
@@ -259,6 +266,7 @@ class OnlineJudgeEngine:
         total_test_cases = len(test_cases)
         passed_test_cases = 0
         final_status = "Accepted"
+        final_verdict = "ACCEPTED"
         first_error_msg = ""
         failed_test_info = None
         max_runtime_ms = 0.0
@@ -268,6 +276,7 @@ class OnlineJudgeEngine:
 
         from services.compiler import get_compiler_provider
         provider = get_compiler_provider()
+        provider_name = provider.__class__.__name__
 
         for idx, tc in enumerate(test_cases):
             # Raw string stdin input (preserved without any JSON modification)
@@ -281,10 +290,35 @@ class OnlineJudgeEngine:
             exec_time = res.get("execution_time", 0.0)
             max_runtime_ms = max(max_runtime_ms, exec_time)
 
+            # Check for Execution Engine Unavailable (Connection / Toolchain Error)
+            if res.get("status") == "Execution Engine Unavailable" or res.get("error_type") in ("connection_error", "configuration_error"):
+                final_status = "Execution Engine Unavailable"
+                final_verdict = "CONNECTION_ERROR"
+                first_error_msg = res.get("error") or "Execution engine unavailable"
+                failed_test_info = {
+                    "test_case_index": idx + 1,
+                    "input": tc_input if is_sample else "(Hidden Test Case)",
+                    "expected": tc_expected if is_sample else "(Hidden)",
+                    "actual": "Execution engine unavailable"
+                }
+                test_results.append({
+                    "test_case": idx + 1,
+                    "status": "Execution Engine Unavailable",
+                    "verdict": "CONNECTION_ERROR",
+                    "passed": False,
+                    "input": tc_input if is_sample else "(Hidden Test Case)",
+                    "expected": tc_expected if is_sample else "(Hidden)",
+                    "actual": "Execution engine unavailable",
+                    "error": first_error_msg,
+                    "execution_time_ms": exec_time
+                })
+                break
+
             # Check Output Limit
             actual_raw_output = res.get("output", "")
             if len(actual_raw_output) > output_limit_chars:
                 final_status = "Output Limit Exceeded"
+                final_verdict = "OUTPUT_LIMIT_EXCEEDED"
                 first_error_msg = f"Output size exceeded limit of {output_limit_chars} characters."
                 failed_test_info = {
                     "test_case_index": idx + 1,
@@ -295,6 +329,7 @@ class OnlineJudgeEngine:
                 test_results.append({
                     "test_case": idx + 1,
                     "status": "Output Limit Exceeded",
+                    "verdict": "OUTPUT_LIMIT_EXCEEDED",
                     "passed": False,
                     "input": tc_input if is_sample else "(Hidden Test Case)",
                     "expected": tc_expected if is_sample else "(Hidden)",
@@ -306,11 +341,13 @@ class OnlineJudgeEngine:
             # Check for Compilation / Syntax Error
             if res.get("status") in ["Compilation Error", "Syntax Error"]:
                 final_status = res.get("status")
+                final_verdict = "COMPILATION_ERROR"
                 first_error_msg = res.get("error") or res.get("stderr") or "Compilation failed"
                 diagnostics = res.get("diagnostics", [])
                 test_results.append({
                     "test_case": idx + 1,
                     "status": final_status,
+                    "verdict": "COMPILATION_ERROR",
                     "passed": False,
                     "input": tc_input if is_sample else "(Hidden Test Case)",
                     "expected": tc_expected if is_sample else "(Hidden)",
@@ -319,9 +356,10 @@ class OnlineJudgeEngine:
                 })
                 break
 
-            # Check for Time Limit Exceeded
+            # Check for Time Limit Exceeded (ONLY when user code genuinely timed out)
             if res.get("status") == "Time Limit Exceeded":
                 final_status = "Time Limit Exceeded"
+                final_verdict = "TIME_LIMIT_EXCEEDED"
                 first_error_msg = f"Time Limit Exceeded (> {time_limit}s)"
                 failed_test_info = {
                     "test_case_index": idx + 1,
@@ -332,6 +370,7 @@ class OnlineJudgeEngine:
                 test_results.append({
                     "test_case": idx + 1,
                     "status": "Time Limit Exceeded",
+                    "verdict": "TIME_LIMIT_EXCEEDED",
                     "passed": False,
                     "input": tc_input if is_sample else "(Hidden Test Case)",
                     "expected": tc_expected if is_sample else "(Hidden)",
@@ -343,6 +382,7 @@ class OnlineJudgeEngine:
             # Check for Runtime Error
             if res.get("status") == "Runtime Error":
                 final_status = "Runtime Error"
+                final_verdict = "RUNTIME_ERROR"
                 first_error_msg = res.get("error") or res.get("stderr") or "Runtime Error"
                 diagnostics = res.get("diagnostics", [])
                 failed_test_info = {
@@ -354,6 +394,7 @@ class OnlineJudgeEngine:
                 test_results.append({
                     "test_case": idx + 1,
                     "status": "Runtime Error",
+                    "verdict": "RUNTIME_ERROR",
                     "passed": False,
                     "input": tc_input if is_sample else "(Hidden Test Case)",
                     "expected": tc_expected if is_sample else "(Hidden)",
@@ -372,6 +413,7 @@ class OnlineJudgeEngine:
                 test_results.append({
                     "test_case": idx + 1,
                     "status": "Passed",
+                    "verdict": "ACCEPTED",
                     "passed": True,
                     "input": tc_input if is_sample else "(Hidden)",
                     "expected": tc_expected if is_sample else "(Hidden)",
@@ -380,6 +422,7 @@ class OnlineJudgeEngine:
                 })
             else:
                 final_status = "Wrong Answer"
+                final_verdict = "WRONG_ANSWER"
                 first_error_msg = f"Output mismatch on test case {idx + 1}"
                 failed_test_info = {
                     "test_case_index": idx + 1,
@@ -390,6 +433,7 @@ class OnlineJudgeEngine:
                 test_results.append({
                     "test_case": idx + 1,
                     "status": "Wrong Answer",
+                    "verdict": "WRONG_ANSWER",
                     "passed": False,
                     "input": tc_input if is_sample else "(Hidden Test Case)",
                     "expected": tc_expected if is_sample else "(Hidden)",
@@ -401,13 +445,26 @@ class OnlineJudgeEngine:
         # If any mandatory test case failed, verdict CANNOT be Accepted
         if passed_test_cases < total_test_cases and final_status == "Accepted":
             final_status = "Wrong Answer"
+            final_verdict = "WRONG_ANSWER"
 
         # Static Complexity Estimation
         complexity = ComplexityAnalyzer.analyze_generic(language, code)
+        end_wall_time = time.time()
+
+        # Structured backend logging for monitoring & audit
+        import logging
+        logger = logging.getLogger("judge.execution")
+        logger.info(
+            "ExecutionLog: req_id=%s user_id=%s contest_id=%s problem_id=%s lang=%s provider=%s "
+            "start_time=%.3f end_time=%.3f status=%s verdict=%s passed=%d/%d runtime=%.2fms err=%s",
+            req_id, user_id or "anon", contest_id or "none", problem_id or "none", language,
+            provider_name, start_wall_time, end_wall_time, final_status, final_verdict,
+            passed_test_cases, total_test_cases, max_runtime_ms, first_error_msg[:100] if first_error_msg else "none"
+        )
 
         return {
             "status": final_status,
-            "verdict": final_status.upper().replace(" ", "_"),
+            "verdict": final_verdict,
             "passed": passed_test_cases,
             "total": total_test_cases,
             "passed_test_cases": passed_test_cases,
@@ -422,3 +479,4 @@ class OnlineJudgeEngine:
             "test_results": test_results,
             "complexity": complexity
         }
+

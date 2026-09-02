@@ -40,6 +40,7 @@ export const ProblemSolve = () => {
   const [runResult, setRunResult] = useState(null);
   const [submitResult, setSubmitResult] = useState(null);
   const [verifiedCodeHash, setVerifiedCodeHash] = useState(null);
+  const [engineStatus, setEngineStatus] = useState({ connected: false, loading: true, provider: '', error: '' });
 
   const currentCodeHash = `${problem?.id || ''}_${language}_${code}`;
   const isSubmitAllowed = Boolean(verifiedCodeHash && verifiedCodeHash === currentCodeHash);
@@ -57,7 +58,24 @@ export const ProblemSolve = () => {
 
   useEffect(() => {
     fetchProblemDetails();
+    fetchEngineHealth();
   }, [id]);
+
+  const fetchEngineHealth = async () => {
+    try {
+      const res = await api.get('/execution/health');
+      if (res.data.success || res.data.status === 'healthy') {
+        const provName = res.data.provider || 'Local Sandbox';
+        const friendlyName = provName.replace('Provider', '').replace('LocalSandbox', 'Local Sandbox');
+        setEngineStatus({ connected: true, loading: false, provider: friendlyName, error: '' });
+      } else {
+        setEngineStatus({ connected: false, loading: false, provider: '', error: 'Degraded' });
+      }
+    } catch (err) {
+      setEngineStatus({ connected: false, loading: false, provider: '', error: 'Unavailable' });
+    }
+  };
+
 
   const activeDiagnostics = submitResult?.diagnostics || runResult?.diagnostics || [];
 
@@ -149,25 +167,38 @@ export const ProblemSolve = () => {
       const res = await api.post('/submissions/run', payload);
 
       if (res.data.success) {
-        setRunResult({
-          ...res.data,
-          inputUsed: isCustomTab ? customInput : (testCases[selectedCaseIndex]?.input || ''),
-          input: isCustomTab ? customInput : (testCases[selectedCaseIndex]?.input || ''),
-          expected_output: isCustomTab ? '' : (testCases[selectedCaseIndex]?.expected_output || ''),
-        });
-
-        // Gate: ONLY unlock submit if all sample test cases passed AND it was not a custom input run
-        if (!isCustomTab && res.data.all_passed) {
-          setVerifiedCodeHash(currentCodeHash);
-        } else {
+        if (res.data.status === 'Execution Engine Unavailable' || res.data.verdict === 'CONNECTION_ERROR') {
           setVerifiedCodeHash(null);
+          setRunResult({
+            status: 'Error',
+            error: res.data.error || 'Execution engine unavailable. Please try again or notify the administrator.',
+            output: '',
+            execution_time: 0,
+            inputUsed: isCustomTab ? customInput : (testCases[selectedCaseIndex]?.input || ''),
+            input: isCustomTab ? customInput : (testCases[selectedCaseIndex]?.input || ''),
+            expected_output: isCustomTab ? '' : (testCases[selectedCaseIndex]?.expected_output || ''),
+          });
+        } else {
+          setRunResult({
+            ...res.data,
+            inputUsed: isCustomTab ? customInput : (testCases[selectedCaseIndex]?.input || ''),
+            input: isCustomTab ? customInput : (testCases[selectedCaseIndex]?.input || ''),
+            expected_output: isCustomTab ? '' : (testCases[selectedCaseIndex]?.expected_output || ''),
+          });
+
+          // Gate: ONLY unlock submit if all sample test cases passed AND it was not a custom input run
+          if (!isCustomTab && res.data.all_passed) {
+            setVerifiedCodeHash(currentCodeHash);
+          } else {
+            setVerifiedCodeHash(null);
+          }
         }
       }
     } catch (err) {
       setVerifiedCodeHash(null);
       setRunResult({
         status: 'Error',
-        error: err.response?.data?.error || 'Failed to connect to execution engine.',
+        error: err.response?.data?.error || 'Execution engine unavailable.',
         output: '',
         execution_time: 0,
         inputUsed: customInput,
@@ -408,8 +439,24 @@ export const ProblemSolve = () => {
           {/* Execution Action Bar */}
           <div className="flex items-center justify-between p-3 rounded-2xl bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] shadow-sm">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-medium hidden sm:inline">
-                Execution Engine: <strong className="text-[#22B573] font-semibold">Active (Local)</strong>
+              <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-medium hidden sm:inline flex items-center gap-1.5">
+                Execution Engine:
+                {engineStatus.loading ? (
+                  <span className="inline-flex items-center gap-1 font-semibold text-[#F2B705]">
+                    <span className="w-2 h-2 rounded-full bg-[#F2B705] animate-pulse"></span>
+                    Connecting...
+                  </span>
+                ) : engineStatus.connected ? (
+                  <span className="inline-flex items-center gap-1 font-semibold text-[#22B573]">
+                    <span className="w-2 h-2 rounded-full bg-[#22B573]"></span>
+                    Connected ({engineStatus.provider || 'Local Sandbox'})
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 font-semibold text-red-500">
+                    <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                    Unavailable
+                  </span>
+                )}
               </span>
             </div>
 

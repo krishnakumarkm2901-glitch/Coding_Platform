@@ -15,14 +15,18 @@ _global_provider: Optional[CompilerProvider] = None
 
 
 def get_compiler_provider() -> CompilerProvider:
-    """Returns the globally configured compiler provider (default: OneCompiler)."""
+    """Returns the globally configured compiler provider (default: LocalSandboxProvider or OneCompiler when API key is provided)."""
     global _global_provider
     if _global_provider is None:
-        provider_name = os.environ.get("COMPILER_PROVIDER", "onecompiler").strip().lower()
-        if provider_name == "onecompiler":
+        provider_name = os.environ.get("COMPILER_PROVIDER", "auto").strip().lower()
+        onecompiler_key = os.environ.get("ONECOMPILER_API_KEY", "").strip()
+        onlinecompiler_key = os.environ.get("ONLINECOMPILER_API_KEY", "").strip()
+
+        if provider_name == "onecompiler" and onecompiler_key:
             _global_provider = OneCompilerProvider()
-        elif provider_name == "onlinecompiler":
+        elif provider_name == "onlinecompiler" and onlinecompiler_key:
             _global_provider = OnlineCompilerProvider()
         else:
             _global_provider = LocalSandboxProvider()
     return _global_provider
+

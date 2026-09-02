@@ -587,6 +587,7 @@ export const ContestArena = () => {
         language: currentLanguage,
         code: currentCode,
         problem_id: currentProblem?.id,
+        contest_id: id,
         is_custom: isCustomTab,
       };
 
@@ -601,19 +602,34 @@ export const ContestArena = () => {
 
       const res = await api.post('/submissions/run', payload);
       if (res.data.success) {
-        setRunResult({
-          ...res.data,
-          inputUsed: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
-          input: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
-          expected_output: isCustomTab ? '' : (normalizedCases[0]?.expected_output || ''),
-        });
+        if (res.data.status === 'Execution Engine Unavailable' || res.data.verdict === 'CONNECTION_ERROR') {
+          if (currentProblem) {
+            setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: null }));
+          }
+          setRunResult({
+            status: 'Error',
+            output: '',
+            error: res.data.error || 'Execution engine unavailable. Please try again.',
+            execution_time: 0,
+            inputUsed: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
+            input: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
+            expected_output: isCustomTab ? '' : (normalizedCases[0]?.expected_output || ''),
+          });
+        } else {
+          setRunResult({
+            ...res.data,
+            inputUsed: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
+            input: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
+            expected_output: isCustomTab ? '' : (normalizedCases[0]?.expected_output || ''),
+          });
 
-        // Gate: ONLY unlock submit if all sample test cases passed AND it was not a custom input run
-        if (!isCustomTab && res.data.all_passed && currentProblem) {
-          const validHash = `${currentProblem.id}_${currentLanguage}_${currentCode}`;
-          setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: validHash }));
-        } else if (currentProblem) {
-          setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: null }));
+          // Gate: ONLY unlock submit if all sample test cases passed AND it was not a custom input run
+          if (!isCustomTab && res.data.all_passed && currentProblem) {
+            const validHash = `${currentProblem.id}_${currentLanguage}_${currentCode}`;
+            setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: validHash }));
+          } else if (currentProblem) {
+            setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: null }));
+          }
         }
       }
     } catch (err) {
@@ -621,9 +637,9 @@ export const ContestArena = () => {
         setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: null }));
       }
       setRunResult({
-        status: 'Runtime Error',
+        status: 'Error',
         output: '',
-        error: err.response?.data?.error || 'Execution service failed.',
+        error: err.response?.data?.error || 'Execution engine unavailable.',
         execution_time: 0,
         inputUsed: customInput,
         input: customInput,

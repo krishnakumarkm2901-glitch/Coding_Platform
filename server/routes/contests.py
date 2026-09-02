@@ -911,7 +911,15 @@ def submit_contest(contest_id):
         # Execute test cases using central OnlineJudgeEngine
         from services.judge_engine import OnlineJudgeEngine
         time_limit = float(prob.get("time_limit", prob.get("timeLimit", 5.0)))
-        eval_res = OnlineJudgeEngine.evaluate_solution(lang, code, test_cases, time_limit=time_limit)
+        eval_res = OnlineJudgeEngine.evaluate_solution(
+            lang,
+            code,
+            test_cases,
+            time_limit=time_limit,
+            user_id=str(user_id),
+            contest_id=contest_id,
+            problem_id=pid
+        )
         passed = eval_res["passed_test_cases"]
         total_tcs = eval_res["total_test_cases"]
         status = eval_res["status"]
@@ -1058,7 +1066,15 @@ def submit_contest_problem(contest_id, problem_id):
         visible_test_cases = [test_cases[0]]
 
     from services.judge_engine import OnlineJudgeEngine
-    gate_res = OnlineJudgeEngine.evaluate_solution(language, code, visible_test_cases, time_limit=5.0)
+    gate_res = OnlineJudgeEngine.evaluate_solution(
+        language,
+        code,
+        visible_test_cases,
+        time_limit=5.0,
+        user_id=user_id,
+        contest_id=contest_id,
+        problem_id=problem_id
+    )
     if gate_res["status"] != "Accepted" or gate_res["passed_test_cases"] < len(visible_test_cases):
         return jsonify({
             "success": False,
@@ -1074,7 +1090,15 @@ def submit_contest_problem(contest_id, problem_id):
 
     # Run evaluation across central OnlineJudgeEngine for full official test cases
     time_limit = float(prob.get("time_limit", prob.get("timeLimit", 5.0)))
-    eval_res = OnlineJudgeEngine.evaluate_solution(language, code, test_cases, time_limit=time_limit)
+    eval_res = OnlineJudgeEngine.evaluate_solution(
+        language,
+        code,
+        test_cases,
+        time_limit=time_limit,
+        user_id=user_id,
+        contest_id=contest_id,
+        problem_id=problem_id
+    )
     passed = eval_res["passed_test_cases"]
     total = eval_res["total_test_cases"]
     status = eval_res["status"]
