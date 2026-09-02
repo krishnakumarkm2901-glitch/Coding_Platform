@@ -211,10 +211,15 @@ def execute_locally(language, code, stdin_input="", timeout=8):
                 compile_command = [tool, "build", "-o", binary, source]
                 run_command = [binary]
 
+        logger.info(f"[EXECUTION] language={key}")
+        logger.info(f"[EXECUTION] compiler found={bool(compile_command or key in ('python', 'javascript'))}")
+
         # Level 1: Compilation Phase
         if compile_command:
+            logger.info(f"[EXECUTION] compile started")
             try:
                 compiled = _run(compile_command, workdir, "", 15)
+                logger.info(f"[EXECUTION] compile success={compiled.returncode == 0}")
                 if compiled.returncode != 0:
                     raw_err = compiled.stderr or compiled.stdout or "Compilation failed"
                     diags = parse_diagnostics(key, raw_err, is_compile=True)
@@ -228,6 +233,7 @@ def execute_locally(language, code, stdin_input="", timeout=8):
                         exit_code=compiled.returncode
                     )
             except subprocess.TimeoutExpired:
+                logger.warning(f"[EXECUTION] compile timed out")
                 return _result(
                     success=False,
                     status="Compilation Error",
@@ -238,10 +244,12 @@ def execute_locally(language, code, stdin_input="", timeout=8):
                 )
 
         # Level 2: Runtime Execution Phase
+        logger.info(f"[EXECUTION] execution started")
         run_start = time.perf_counter()
         try:
             process = _run(run_command, workdir, stdin_input or "", timeout)
             elapsed = round((time.perf_counter() - run_start) * 1000, 2)
+            logger.info(f"[EXECUTION] execution finished: exit_code={process.returncode}, runtime_ms={elapsed}")
             if process.returncode != 0:
                 raw_err = process.stderr or f"Process exited with code {process.returncode}"
                 diags = parse_diagnostics(key, raw_err, is_compile=False)

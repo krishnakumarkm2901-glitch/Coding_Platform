@@ -1,8 +1,11 @@
 import axios from 'axios';
 
-const rawApiUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_EXECUTION_API_URL || '';
-const API_BASE_URL = rawApiUrl 
-  ? (rawApiUrl.endsWith('/api') ? rawApiUrl : `${rawApiUrl.replace(/\/+$/, '')}/api`) 
+const rawApiUrl = (import.meta.env.VITE_API_URL || import.meta.env.VITE_EXECUTION_API_URL || '').trim();
+const defaultBackend = 'https://coding-platform-m2kx.onrender.com';
+const resolvedUrl = rawApiUrl || (import.meta.env.PROD ? defaultBackend : '');
+
+const API_BASE_URL = resolvedUrl 
+  ? (resolvedUrl.replace(/\/+$/, '').endsWith('/api') ? resolvedUrl.replace(/\/+$/, '') : `${resolvedUrl.replace(/\/+$/, '')}/api`) 
   : '/api';
 
 const api = axios.create({
@@ -10,7 +13,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 30000,
+  timeout: 45000,
 });
 
 // Request interceptor to attach JWT token

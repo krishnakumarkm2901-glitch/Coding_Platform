@@ -73,6 +73,10 @@ def run_code_custom():
     if not code:
         return jsonify({"error": "Code cannot be empty", "success": False}), 400
 
+    import logging
+    _logger = logging.getLogger(__name__)
+    _logger.info(f"[EXECUTION] request received: language={language}, is_custom={is_custom}, problem_id={problem_id}")
+
     # Extract user ID if auth header provided
     user_id = _get_user_id_for_rate_limit()
 

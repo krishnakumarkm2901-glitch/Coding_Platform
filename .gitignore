@@ -17,6 +17,7 @@ server/*/*/__pycache__/
 .env.local
 .env.production
 !.env.example
+!client/.env.production
 
 # Node / Frontend
 node_modules/

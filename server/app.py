@@ -23,13 +23,39 @@ def create_app():
     # Support reverse proxy headers (Render/Vercel HTTPS)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-    # Setup CORS
+    # Setup CORS (supporting local dev and any Vercel domain with credentials)
+    import re
+    cors_allowed_patterns = [
+        r"^https?://localhost(:\d+)?$",
+        r"^https?://127\.0\.0\.1(:\d+)?$",
+        r"^https://.*\.vercel\.app$",
+        r"^https://nit-campus-coder\.vercel\.app$"
+    ]
+    for orig in Config.CORS_ORIGINS:
+        if orig and orig != "*":
+            cors_allowed_patterns.append(re.escape(orig))
+
+    cors_regex = re.compile("|".join(cors_allowed_patterns))
+
     CORS(
         app,
-        resources={r"/api/*": {"origins": Config.CORS_ORIGINS}},
+        resources={r"/*": {"origins": [cors_regex]}},
         supports_credentials=True,
-        expose_headers=["Content-Disposition", "Content-Type"]
+        expose_headers=["Content-Disposition", "Content-Type", "Authorization"]
     )
+
+    @app.before_request
+    def handle_cors_preflight():
+        if request.method == "OPTIONS":
+            origin = request.headers.get("Origin", "")
+            response = app.make_default_options_response()
+            if origin and (cors_regex.match(origin) or "*" in Config.CORS_ORIGINS):
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+                response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+                response.headers["Access-Control-Max-Age"] = "86400"
+            return response
 
     # Initialize Database
     with app.app_context():
@@ -52,6 +78,13 @@ def create_app():
             "status": "Online",
             "version": "1.0.0"
         })
+
+    @app.route("/health")
+    def health():
+        return jsonify({
+            "status": "ok",
+            "service": "College Coding Platform API"
+        }), 200
 
 
     @app.route("/api/health")
@@ -123,10 +156,16 @@ def create_app():
     def internal_error(error):
         return jsonify({"error": "Internal server error. Please check server logs.", "success": False}), 500
 
-    # Automatic Gzip Compression for JSON & Text Responses (>1KB)
+    # Automatic Gzip Compression and CORS Headers
     import gzip
     @app.after_request
-    def compress_response(response):
+    def post_process_response(response):
+        origin = request.headers.get("Origin", "")
+        if origin and (cors_regex.match(origin) or "*" in Config.CORS_ORIGINS):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Vary"] = "Origin"
+
         accept_encoding = request.headers.get("Accept-Encoding", "")
         if (
             "gzip" in accept_encoding.lower()
