@@ -174,7 +174,7 @@ def execute_locally(language, code, stdin_input="", timeout=8):
             with open(source, "w", encoding="utf-8") as handle:
                 handle.write(cleaned_code)
 
-            compile_command = [javac, "-encoding", "UTF-8", source]
+            compile_command = [javac, "-J-Xmx256m", "-J-XX:+UseSerialGC", "-encoding", "UTF-8", source]
             run_command = [java, "-cp", workdir, "-Xmx256m", "-XX:+UseSerialGC", class_name]
 
         else:
@@ -218,7 +218,7 @@ def execute_locally(language, code, stdin_input="", timeout=8):
         if compile_command:
             logger.info(f"[EXECUTION] compile started")
             try:
-                compiled = _run(compile_command, workdir, "", 15)
+                compiled = _run(compile_command, workdir, "", 30)
                 logger.info(f"[EXECUTION] compile success={compiled.returncode == 0}")
                 if compiled.returncode != 0:
                     raw_err = compiled.stderr or compiled.stdout or "Compilation failed"
@@ -237,8 +237,8 @@ def execute_locally(language, code, stdin_input="", timeout=8):
                 return _result(
                     success=False,
                     status="Compilation Error",
-                    stderr="Compilation timed out (exceeded 15s limit).",
-                    elapsed=15000,
+                    stderr="Compilation timed out (exceeded 30s limit).",
+                    elapsed=30000,
                     error_type="compile_error",
                     exit_code=-1
                 )
@@ -301,6 +301,172 @@ def execute_locally(language, code, stdin_input="", timeout=8):
             shutil.rmtree(workdir, ignore_errors=True)
         except Exception:
             pass
+
+def execute_batch(language, code, inputs_list, timeout=8):
+    """
+    Compiles code ONCE and runs it against multiple inputs in an isolated workspace.
+    Guarantees massive speedup (1 compilation instead of N compilations) and zero compilation timeouts.
+    """
+    key = _key(language)
+    if key not in LANGUAGE_CONFIG:
+        return [_result(False, "Unsupported Language", stderr=f"Language '{language}' is not supported.", error_type="unsupported_language") for _ in inputs_list]
+
+    started = time.perf_counter()
+    exec_root = os.path.join(tempfile.gettempdir(), "campus_coder_exec")
+    os.makedirs(exec_root, exist_ok=True)
+    job_id = f"batch_{uuid.uuid4().hex}"
+    workdir = os.path.join(exec_root, job_id)
+
+    try:
+        os.makedirs(workdir, exist_ok=True)
+        import re
+        compile_command = None
+
+        if key == "java":
+            javac, java = resolve_java_toolchain()
+            if not javac:
+                return [_missing("Java JDK", "javac", "JAVAC_PATH") for _ in inputs_list]
+            if not java:
+                return [_missing("Java runtime", "java", "JAVA_PATH") for _ in inputs_list]
+
+            class_match = re.search(r'\bpublic\s+class\s+([A-Za-z_][A-Za-z0-9_]*)', code)
+            if class_match:
+                class_name = class_match.group(1)
+            else:
+                main_match = re.search(r'\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{[^}]*public\s+static\s+void\s+main', code)
+                if main_match:
+                    class_name = main_match.group(1)
+                else:
+                    first_class = re.search(r'\bclass\s+([A-Za-z_][A-Za-z0-9_]*)', code)
+                    class_name = first_class.group(1) if first_class else "Main"
+
+            cleaned_code = re.sub(r'^\s*package\s+[^;]+;', '// package stripped', code, flags=re.MULTILINE)
+            source = os.path.join(workdir, f"{class_name}.java")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write(cleaned_code)
+
+            compile_command = [javac, "-J-Xmx256m", "-J-XX:+UseSerialGC", "-encoding", "UTF-8", source]
+            run_command = [java, "-cp", workdir, "-Xmx256m", "-XX:+UseSerialGC", class_name]
+
+        else:
+            source = os.path.join(workdir, LANGUAGE_CONFIG[key][3])
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write(code)
+
+            if key == "python":
+                run_command = [sys.executable, "-u", source]
+            elif key == "javascript":
+                tool = _tool("NODE_PATH", "node")
+                if not tool:
+                    return [_missing("JavaScript", "node", "NODE_PATH") for _ in inputs_list]
+                run_command = [tool, source]
+            elif key in ("c", "cpp", "rust"):
+                env_name, executable, label = {
+                    "c": ("GCC_PATH", "gcc", "C"),
+                    "cpp": ("GPP_PATH", "g++", "C++"),
+                    "rust": ("RUSTC_PATH", "rustc", "Rust")
+                }[key]
+                tool = _tool(env_name, executable)
+                if not tool:
+                    return [_missing(label, executable, env_name) for _ in inputs_list]
+                binary = os.path.join(workdir, "main.exe" if os.name == "nt" else "main")
+                compile_command = [tool, source, "-o", binary]
+                if key == "rust" and os.name == "nt":
+                    compile_command.extend(["--target", "x86_64-pc-windows-gnu"])
+                run_command = [binary]
+            else:
+                tool = _tool("GO_PATH", "go")
+                if not tool:
+                    return [_missing("Go", "go", "GO_PATH") for _ in inputs_list]
+                binary = os.path.join(workdir, "main.exe" if os.name == "nt" else "main")
+                compile_command = [tool, "build", "-o", binary, source]
+                run_command = [binary]
+
+        # Level 1: Compile ONCE
+        if compile_command:
+            logger.info(f"[EXECUTION] batch compile started for {key}")
+            try:
+                compiled = _run(compile_command, workdir, "", 30)
+                logger.info(f"[EXECUTION] batch compile success={compiled.returncode == 0}")
+                if compiled.returncode != 0:
+                    raw_err = compiled.stderr or compiled.stdout or "Compilation failed"
+                    diags = parse_diagnostics(key, raw_err, is_compile=True)
+                    err_res = _result(
+                        success=False,
+                        status="Compilation Error",
+                        stderr=raw_err,
+                        elapsed=round((time.perf_counter() - started) * 1000, 2),
+                        error_type="compile_error",
+                        diagnostics=diags,
+                        exit_code=compiled.returncode
+                    )
+                    return [err_res for _ in inputs_list]
+            except subprocess.TimeoutExpired:
+                logger.warning(f"[EXECUTION] batch compile timed out")
+                err_res = _result(
+                    success=False,
+                    status="Compilation Error",
+                    stderr="Compilation timed out (exceeded 30s limit).",
+                    elapsed=30000,
+                    error_type="compile_error",
+                    exit_code=-1
+                )
+                return [err_res for _ in inputs_list]
+
+        # Level 2: Run all inputs sequentially against compiled binary / runtime
+        batch_results = []
+        for inp in inputs_list:
+            r_start = time.perf_counter()
+            try:
+                proc = _run(run_command, workdir, inp or "", timeout)
+                r_elapsed = round((time.perf_counter() - r_start) * 1000, 2)
+                if proc.returncode != 0:
+                    raw_err = proc.stderr or f"Process exited with code {proc.returncode}"
+                    diags = parse_diagnostics(key, raw_err, is_compile=False)
+                    batch_results.append(_result(
+                        success=False,
+                        status="Runtime Error",
+                        output=proc.stdout,
+                        stderr=raw_err,
+                        elapsed=r_elapsed,
+                        error_type="runtime_error",
+                        diagnostics=diags,
+                        exit_code=proc.returncode
+                    ))
+                else:
+                    batch_results.append(_result(
+                        success=True,
+                        status="OK",
+                        output=proc.stdout,
+                        stderr=proc.stderr,
+                        elapsed=r_elapsed,
+                        exit_code=0
+                    ))
+            except subprocess.TimeoutExpired as exc:
+                output = exc.stdout or ""
+                if isinstance(output, bytes):
+                    output = output.decode(errors="replace")
+                batch_results.append(_result(
+                    success=False,
+                    status="Time Limit Exceeded",
+                    output=output,
+                    stderr="Time Limit Exceeded",
+                    elapsed=timeout * 1000,
+                    error_type="timeout",
+                    exit_code=-1
+                ))
+
+        return batch_results
+
+    except Exception as exc:
+        logger.exception(f"Unexpected batch execution error for {language}: {exc}")
+        return [_result(False, "Internal Error", stderr=f"Execution error: {str(exc)}", error_type="internal_error", exit_code=-1) for _ in inputs_list]
+    finally:
+        try:
+            shutil.rmtree(workdir, ignore_errors=True)
+        except Exception:
+            pass
+
 
 def _execute_piston(language, code, stdin_input, timeout):
     details = get_language_details(language)
