@@ -17,26 +17,104 @@ def _is_valid_executable(path: Optional[str]) -> bool:
     """Check if path is an existing, non-empty executable file."""
     if not path:
         return False
+    # On Linux, reject Windows paths immediately (containing backslash or drive letter)
+    if os.name != "nt" and ("\\" in path or ":" in path):
+        return False
     clean_path = os.path.abspath(os.path.expandvars(os.path.expanduser(path.strip().strip('"'))))
-    return os.path.isfile(clean_path) and os.access(clean_path, os.X_OK | os.R_OK)
+    return os.path.isfile(clean_path) and os.access(clean_path, os.X_OK)
 
 def _extract_version_score(folder_name: str) -> Tuple[int, ...]:
     """Extract numeric version components for sorting JDK versions descending."""
     nums = re.findall(r"\d+", folder_name)
     return tuple(map(int, nums)) if nums else (0,)
 
+def _load_jdk_env_sh(server_dir: str):
+    """Auto-load .jdk_env.sh into os.environ if present and not already set."""
+    candidates = [
+        os.path.join(server_dir, ".jdk_env.sh"),
+        os.path.join(os.getcwd(), ".jdk_env.sh"),
+        "/opt/render/project/src/server/.jdk_env.sh",
+        "/opt/render/project/src/.jdk_env.sh",
+    ]
+    for env_sh in candidates:
+        if os.path.isfile(env_sh):
+            try:
+                with open(env_sh, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("export "):
+                            parts = line[7:].split("=", 1)
+                            if len(parts) == 2:
+                                k = parts[0].strip()
+                                v = parts[1].strip().strip('"').strip("'")
+                                if k and (k not in os.environ or not os.environ[k]):
+                                    os.environ[k] = v
+                logger.info(f"[toolchain] Sourced environment from {env_sh}")
+                break
+            except Exception as e:
+                logger.debug(f"[toolchain] Failed to read {env_sh}: {e}")
+
+def _bootstrap_linux_jdk(server_dir: str) -> Tuple[Optional[str], Optional[str]]:
+    """Auto-bootstrap Eclipse Temurin OpenJDK 21 on Linux if missing from host environment."""
+    if os.name == "nt":
+        return None, None
+    target_dir = os.path.join(server_dir, ".jdk")
+    javac_path = os.path.join(target_dir, "bin", "javac")
+    java_path = os.path.join(target_dir, "bin", "java")
+    if _is_valid_executable(javac_path) and _is_valid_executable(java_path):
+        return javac_path, java_path
+
+    try:
+        import urllib.request
+        import tarfile
+        import tempfile
+        logger.info(f"[toolchain] Auto-bootstrapping OpenJDK 21 to {target_dir}...")
+        os.makedirs(target_dir, exist_ok=True)
+        url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_x64_linux_hotspot_21.0.2_13.tar.gz"
+        tar_gz = os.path.join(tempfile.gettempdir(), "temurin21.tar.gz")
+        urllib.request.urlretrieve(url, tar_gz)
+        with tarfile.open(tar_gz, "r:gz") as tar:
+            for member in tar.getmembers():
+                parts = member.name.split("/", 1)
+                if len(parts) > 1 and parts[1]:
+                    member.name = parts[1]
+                    tar.extract(member, path=target_dir)
+        try:
+            os.remove(tar_gz)
+        except Exception:
+            pass
+
+        bin_dir = os.path.join(target_dir, "bin")
+        if os.path.isdir(bin_dir):
+            for f in os.listdir(bin_dir):
+                fp = os.path.join(bin_dir, f)
+                try:
+                    os.chmod(fp, 0o755)
+                except Exception:
+                    pass
+
+        if _is_valid_executable(javac_path) and _is_valid_executable(java_path):
+            logger.info(f"[toolchain] OpenJDK 21 auto-bootstrap SUCCESS: javac={javac_path}")
+            return javac_path, java_path
+    except Exception as e:
+        logger.warning(f"[toolchain] OpenJDK 21 auto-bootstrap failed: {e}")
+    return None, None
+
 def resolve_java_toolchain() -> Tuple[Optional[str], Optional[str]]:
     """
     Robustly resolves Java JDK (javac) and Java Runtime (java) executables.
     
     Priority Order:
-    1. Explicit JAVAC_PATH and JAVA_PATH in environment/.env
-    2. JAVA_HOME/bin/javac(.exe) and JAVA_HOME/bin/java(.exe)
-    3. Auto-discovery in standard Windows/Linux/macOS JDK installation locations
-    4. Auto-discovery in server/toolchains/jdk/
-    5. PATH lookup (excluding Oracle javapath shim if real JDK is found)
-    6. Windows where.exe lookup
+    1. Explicit JAVAC_PATH and JAVA_PATH in environment (if valid executable)
+    2. JAVA_HOME/bin/javac and JAVA_HOME/bin/java (if both valid executables)
+    3. Known standard Linux locations (/opt/render/project/src/server/.jdk, .jdk, /usr/bin)
+    4. PATH lookup (javac with sibling java)
+    5. Windows standard paths (on Windows only)
+    6. Linux auto-bootstrap (downloads Temurin 21 if missing)
     """
+    server_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    _load_jdk_env_sh(server_dir)
+
     javac_path: Optional[str] = None
     java_path: Optional[str] = None
     exe_suffix = ".exe" if os.name == "nt" else ""
@@ -45,10 +123,18 @@ def resolve_java_toolchain() -> Tuple[Optional[str], Optional[str]]:
     env_javac = os.getenv("JAVAC_PATH", "").strip().strip('"')
     if env_javac and _is_valid_executable(env_javac):
         javac_path = os.path.abspath(os.path.expandvars(os.path.expanduser(env_javac)))
+        # Verify adjacent java executable
+        env_java = os.getenv("JAVA_PATH", "").strip().strip('"')
+        if env_java and _is_valid_executable(env_java):
+            java_path = os.path.abspath(os.path.expandvars(os.path.expanduser(env_java)))
+        else:
+            adjacent_java = os.path.join(os.path.dirname(javac_path), f"java{exe_suffix}")
+            if _is_valid_executable(adjacent_java):
+                java_path = adjacent_java
 
-    env_java = os.getenv("JAVA_PATH", "").strip().strip('"')
-    if env_java and _is_valid_executable(env_java):
-        java_path = os.path.abspath(os.path.expandvars(os.path.expanduser(env_java)))
+        if javac_path and java_path:
+            logger.info(f"[toolchain] Java resolved via JAVAC_PATH/JAVA_PATH: javac={javac_path}, java={java_path}")
+            return javac_path, java_path
 
     # --- 2. Check JAVA_HOME ---
     java_home = os.getenv("JAVA_HOME", "").strip().strip('"')
@@ -56,47 +142,63 @@ def resolve_java_toolchain() -> Tuple[Optional[str], Optional[str]]:
         jh_clean = os.path.abspath(os.path.expandvars(os.path.expanduser(java_home)))
         candidate_javac = os.path.join(jh_clean, "bin", f"javac{exe_suffix}")
         candidate_java = os.path.join(jh_clean, "bin", f"java{exe_suffix}")
-        if not javac_path and _is_valid_executable(candidate_javac):
-            javac_path = candidate_javac
-        if not java_path and _is_valid_executable(candidate_java):
-            java_path = candidate_java
+        if _is_valid_executable(candidate_javac) and _is_valid_executable(candidate_java):
+            logger.info(f"[toolchain] Java resolved via JAVA_HOME: javac={candidate_javac}, java={candidate_java}")
+            return candidate_javac, candidate_java
 
-    # --- 3. Dynamic search in common JDK directories ---
-    if not javac_path or not java_path:
+    # --- 3. Check Known Standard Linux & Project Locations ---
+    direct_candidates = [
+        os.path.join(server_dir, ".jdk", "bin", f"javac{exe_suffix}"),
+        os.path.join(os.getcwd(), ".jdk", "bin", f"javac{exe_suffix}"),
+        "/opt/render/project/src/server/.jdk/bin/javac",
+        "/opt/render/project/src/.jdk/bin/javac",
+        os.path.expanduser("~/.jdk/bin/javac"),
+        "/tmp/jdk/bin/javac",
+        "/usr/bin/javac",
+        "/usr/local/bin/javac",
+    ]
+    for c_javac in direct_candidates:
+        if _is_valid_executable(c_javac):
+            c_java = os.path.join(os.path.dirname(c_javac), f"java{exe_suffix}")
+            if _is_valid_executable(c_java):
+                logger.info(f"[toolchain] Java resolved via direct candidate: javac={c_javac}, java={c_java}")
+                return c_javac, c_java
+
+    # --- 4. Fallback: Check System PATH ---
+    path_javac = shutil.which("javac")
+    if path_javac and _is_valid_executable(path_javac):
+        adjacent_java = os.path.join(os.path.dirname(path_javac), f"java{exe_suffix}")
+        if _is_valid_executable(adjacent_java):
+            logger.info(f"[toolchain] Java resolved via PATH with sibling: javac={path_javac}, java={adjacent_java}")
+            return path_javac, adjacent_java
+        path_java = shutil.which("java")
+        if path_java and _is_valid_executable(path_java):
+            logger.info(f"[toolchain] Java resolved via PATH: javac={path_javac}, java={path_java}")
+            return path_javac, path_java
+
+    # --- 5. Windows Standard Directory Search (on Windows only) ---
+    if os.name == "nt":
         search_roots = []
-        server_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         toolchains_jdk = os.path.join(server_dir, "toolchains", "jdk")
         if os.path.isdir(toolchains_jdk):
             search_roots.append(toolchains_jdk)
 
-        if os.name == "nt":
-            for prog_dir in [os.environ.get("ProgramFiles", r"C:\Program Files"),
-                             os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")]:
-                if prog_dir and os.path.isdir(prog_dir):
-                    search_roots.extend([
-                        os.path.join(prog_dir, "Java"),
-                        os.path.join(prog_dir, "Eclipse Adoptium"),
-                        os.path.join(prog_dir, "Microsoft"),
-                        os.path.join(prog_dir, "Amazon Corretto"),
-                        os.path.join(prog_dir, "Zulu"),
-                        os.path.join(prog_dir, "BellSoft", "LibericaJDK"),
-                    ])
-        else:
-            search_roots.extend([
-                "/usr/lib/jvm",
-                "/usr/lib/jvm/default-java",
-                "/Library/Java/JavaVirtualMachines",
-                os.path.join(server_dir, ".jdk"),
-                "/opt/render/project/src/.jdk",
-                "/opt/render/project/src/server/.jdk",
-                "/tmp/jdk"
-            ])
+        for prog_dir in [os.environ.get("ProgramFiles", r"C:\Program Files"),
+                         os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")]:
+            if prog_dir and os.path.isdir(prog_dir):
+                search_roots.extend([
+                    os.path.join(prog_dir, "Java"),
+                    os.path.join(prog_dir, "Eclipse Adoptium"),
+                    os.path.join(prog_dir, "Microsoft"),
+                    os.path.join(prog_dir, "Amazon Corretto"),
+                    os.path.join(prog_dir, "Zulu"),
+                    os.path.join(prog_dir, "BellSoft", "LibericaJDK"),
+                ])
 
         discovered_jdks = []
         for root in search_roots:
             if not os.path.isdir(root):
                 continue
-            # Direct check if root itself is the JDK root
             direct_javac = os.path.join(root, "bin", f"javac{exe_suffix}")
             if os.path.isfile(direct_javac):
                 discovered_jdks.append((_extract_version_score(os.path.basename(root)), root))
@@ -110,44 +212,25 @@ def resolve_java_toolchain() -> Tuple[Optional[str], Optional[str]]:
             except Exception as e:
                 logger.debug(f"Error scanning JDK directory {root}: {e}")
 
-        # Sort discovered JDKs by version score descending (newest JDK first)
         discovered_jdks.sort(key=lambda x: x[0], reverse=True)
-
         for _, jdk_dir in discovered_jdks:
             cand_javac = os.path.join(jdk_dir, "bin", f"javac{exe_suffix}")
             cand_java = os.path.join(jdk_dir, "bin", f"java{exe_suffix}")
-            if not javac_path and _is_valid_executable(cand_javac):
-                javac_path = cand_javac
-            if not java_path and _is_valid_executable(cand_java):
-                java_path = cand_java
-            if javac_path and java_path:
-                break
+            if _is_valid_executable(cand_javac) and _is_valid_executable(cand_java):
+                logger.info(f"[toolchain] Windows Java resolved: javac={cand_javac}, java={cand_java}")
+                return cand_javac, cand_java
 
-    # --- 4. Fallback: Check System PATH ---
-    if not javac_path:
-        path_javac = shutil.which("javac")
-        if path_javac and _is_valid_executable(path_javac):
-            # Prefer non-shim if possible, but accept if valid
-            javac_path = path_javac
+    # --- 6. Linux Auto-Bootstrap (downloads OpenJDK 21 if missing on Linux) ---
+    if os.name != "nt":
+        boot_javac, boot_java = _bootstrap_linux_jdk(server_dir)
+        if boot_javac and boot_java:
+            return boot_javac, boot_java
 
-    if not java_path:
-        # If javac was found in a real bin folder, try adjacent java.exe
-        if javac_path:
-            adjacent_java = os.path.join(os.path.dirname(javac_path), f"java{exe_suffix}")
-            if _is_valid_executable(adjacent_java):
-                java_path = adjacent_java
-        if not java_path:
-            path_java = shutil.which("java")
-            if path_java and _is_valid_executable(path_java):
-                java_path = path_java
+    logger.warning(
+        "[toolchain] Java NOT resolved. Checked JAVAC_PATH, JAVA_HOME, candidates, and system PATH."
+    )
+    return None, None
 
-    if javac_path and java_path:
-        logger.info(f"[toolchain] Java resolved: javac={javac_path}, java={java_path}")
-    else:
-        logger.warning(f"[toolchain] Java NOT fully resolved: javac={javac_path}, java={java_path}, "
-                       f"JAVAC_PATH env='{os.getenv('JAVAC_PATH', '')}', JAVA_HOME='{os.getenv('JAVA_HOME', '')}'")
-
-    return javac_path, java_path
 
 def resolve_tool(env_name: str, command: str) -> Optional[str]:
     """Resolves general language compiler/runtime tool paths."""

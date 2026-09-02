@@ -344,6 +344,12 @@ class OnlineJudgeEngine:
                 final_verdict = "COMPILATION_ERROR"
                 first_error_msg = res.get("error") or res.get("stderr") or "Compilation failed"
                 diagnostics = res.get("diagnostics", [])
+                failed_test_info = {
+                    "test_case_index": idx + 1,
+                    "input": tc_input if is_sample else "(Hidden Test Case)",
+                    "expected": tc_expected if is_sample else "(Hidden)",
+                    "actual": first_error_msg
+                }
                 test_results.append({
                     "test_case": idx + 1,
                     "status": final_status,
@@ -352,6 +358,7 @@ class OnlineJudgeEngine:
                     "input": tc_input if is_sample else "(Hidden Test Case)",
                     "expected": tc_expected if is_sample else "(Hidden)",
                     "actual": first_error_msg,
+                    "error": first_error_msg,
                     "execution_time_ms": exec_time
                 })
                 break

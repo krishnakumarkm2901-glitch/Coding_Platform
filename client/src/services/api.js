@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const rawApiUrl = import.meta.env.VITE_API_URL || '';
+const rawApiUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_EXECUTION_API_URL || '';
 const API_BASE_URL = rawApiUrl 
   ? (rawApiUrl.endsWith('/api') ? rawApiUrl : `${rawApiUrl.replace(/\/+$/, '')}/api`) 
   : '/api';

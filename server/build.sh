@@ -14,10 +14,12 @@ if [ ! -f "$JDK_DIR/bin/javac" ]; then
     echo "Downloading Eclipse Temurin OpenJDK 21 (Linux x64)..."
     curl -sSL "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_x64_linux_hotspot_21.0.2_13.tar.gz" \
         | tar -xz -C "$JDK_DIR" --strip-components=1
+    chmod -R +x "$JDK_DIR/bin"
     echo "JDK installed to $JDK_DIR"
 else
     echo "JDK already cached at $JDK_DIR"
 fi
+chmod +x "$JDK_DIR/bin/javac" "$JDK_DIR/bin/java" 2>/dev/null || true
 
 # Verify Java
 echo "=== Verifying Java installation ==="

@@ -27,24 +27,28 @@ def execution_health():
     provider = get_compiler_provider()
     toolchains = get_toolchain_diagnostics()
     
-    # Calculate available languages
-    available_langs = []
-    for lang, info in toolchains.items():
-        if info.get("available"):
-            available_langs.append(lang)
-            
-    is_healthy = bool(toolchains.get("python", {}).get("available")) and (
-        bool(toolchains.get("java", {}).get("available")) or bool(toolchains.get("c", {}).get("available"))
-    )
+    java_info = toolchains.get("java", {})
+    java_available = bool(java_info.get("available"))
+    python_available = bool(toolchains.get("python", {}).get("available"))
+    
+    available_langs = [lang for lang, info in toolchains.items() if info.get("available")]
+    is_healthy = java_available and python_available
 
+    status_code = 200 if is_healthy else 503
     return jsonify({
-        "success": True,
-        "status": "healthy" if is_healthy else "degraded",
+        "success": is_healthy,
+        "status": "healthy" if is_healthy else "unavailable",
         "provider": provider.__class__.__name__,
         "provider_type": "local_sandbox" if "Local" in provider.__class__.__name__ else "remote",
         "available_languages": available_langs,
+        "java": {
+            "available": java_available,
+            "javac": java_info.get("javac_path") or "Not found",
+            "java": java_info.get("java_path") or "Not found",
+            "version": java_info.get("javac_version") or "Unknown"
+        },
         "toolchains": toolchains
-    }), 200
+    }), status_code
 
 
 # ---------------------------------------------------------------------------

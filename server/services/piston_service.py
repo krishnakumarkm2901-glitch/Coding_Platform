@@ -43,7 +43,7 @@ from services.toolchain_resolver import resolve_java_toolchain, resolve_tool
 def _tool(env_name, command):
     return resolve_tool(env_name, command)
 
-def _result(success, status, output="", stderr="", elapsed=0, error_type=None, diagnostics=None, memory=14.2):
+def _result(success, status, output="", stderr="", elapsed=0, error_type=None, diagnostics=None, memory=14.2, exit_code=0):
     sanitized_output = sanitize_text(output)
     sanitized_stderr = sanitize_text(stderr)
     
@@ -71,6 +71,7 @@ def _result(success, status, output="", stderr="", elapsed=0, error_type=None, d
         "stdout": sanitized_output,
         "stderr": sanitized_stderr,
         "error": sanitized_stderr or (sanitized_output if not success else ""),
+        "exit_code": exit_code,
         "execution_time": elapsed,
         "runtime_ms": elapsed,
         "memory": memory,
@@ -84,7 +85,7 @@ def _result(success, status, output="", stderr="", elapsed=0, error_type=None, d
 def _missing(language, executable, env_name):
     error = (f"Local {language} toolchain is not configured. Required executable: {executable}. "
              f"Install it and add it to PATH, or set {env_name} to its full executable path.")
-    return _result(False, "Execution Engine Unavailable", stderr=error, error_type="configuration_error")
+    return _result(False, "Execution Engine Unavailable", stderr=error, error_type="configuration_error", exit_code=-1)
 
 def _run(command, cwd, stdin_input, timeout):
     environment = os.environ.copy()
@@ -143,56 +144,78 @@ def execute_locally(language, code, stdin_input="", timeout=8):
     os.makedirs(exec_root, exist_ok=True)
     job_id = f"job_{uuid.uuid4().hex}"
     workdir = os.path.join(exec_root, job_id)
-    os.makedirs(workdir, exist_ok=True)
-
     try:
-        source = os.path.join(workdir, LANGUAGE_CONFIG[key][3])
-        with open(source, "w", encoding="utf-8") as handle:
-            handle.write(code)
-            
+        os.makedirs(workdir, exist_ok=True)
+        import re
         compile_command = None
-        if key == "python":
-            run_command = [sys.executable, "-u", source]
-        elif key == "javascript":
-            tool = _tool("NODE_PATH", "node")
-            if not tool:
-                return _missing("JavaScript", "node", "NODE_PATH")
-            run_command = [tool, source]
-        elif key in ("c", "cpp", "rust"):
-            env_name, executable, label = {
-                "c": ("GCC_PATH", "gcc", "C"),
-                "cpp": ("GPP_PATH", "g++", "C++"),
-                "rust": ("RUSTC_PATH", "rustc", "Rust")
-            }[key]
-            tool = _tool(env_name, executable)
-            if not tool:
-                return _missing(label, executable, env_name)
-            binary = os.path.join(workdir, "main.exe" if os.name == "nt" else "main")
-            compile_command = [tool, source, "-o", binary]
-            if key == "rust" and os.name == "nt":
-                compile_command.extend(["--target", "x86_64-pc-windows-gnu"])
-            run_command = [binary]
-        elif key == "java":
+
+        if key == "java":
             javac, java = resolve_java_toolchain()
             if not javac:
                 return _missing("Java JDK", "javac", "JAVAC_PATH")
             if not java:
                 return _missing("Java runtime", "java", "JAVA_PATH")
-            compile_command = [javac, source]
-            run_command = [java, "-cp", workdir, "-Xmx256m", "Main"]
+
+            # Detect public class name from code if present, otherwise find class with main, else default to Main
+            class_match = re.search(r'\bpublic\s+class\s+([A-Za-z_][A-Za-z0-9_]*)', code)
+            if class_match:
+                class_name = class_match.group(1)
+            else:
+                main_match = re.search(r'\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{[^}]*public\s+static\s+void\s+main', code)
+                if main_match:
+                    class_name = main_match.group(1)
+                else:
+                    first_class = re.search(r'\bclass\s+([A-Za-z_][A-Za-z0-9_]*)', code)
+                    class_name = first_class.group(1) if first_class else "Main"
+
+            # Strip package declarations for competitive programming execution
+            cleaned_code = re.sub(r'^\s*package\s+[^;]+;', '// package stripped', code, flags=re.MULTILINE)
+            source = os.path.join(workdir, f"{class_name}.java")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write(cleaned_code)
+
+            compile_command = [javac, "-encoding", "UTF-8", source]
+            run_command = [java, "-cp", workdir, "-Xmx256m", "-XX:+UseSerialGC", class_name]
+
         else:
-            tool = _tool("GO_PATH", "go")
-            if not tool:
-                return _missing("Go", "go", "GO_PATH")
-            binary = os.path.join(workdir, "main.exe" if os.name == "nt" else "main")
-            compile_command = [tool, "build", "-o", binary, source]
-            run_command = [binary]
-        
+            source = os.path.join(workdir, LANGUAGE_CONFIG[key][3])
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write(code)
+
+            if key == "python":
+                run_command = [sys.executable, "-u", source]
+            elif key == "javascript":
+                tool = _tool("NODE_PATH", "node")
+                if not tool:
+                    return _missing("JavaScript", "node", "NODE_PATH")
+                run_command = [tool, source]
+            elif key in ("c", "cpp", "rust"):
+                env_name, executable, label = {
+                    "c": ("GCC_PATH", "gcc", "C"),
+                    "cpp": ("GPP_PATH", "g++", "C++"),
+                    "rust": ("RUSTC_PATH", "rustc", "Rust")
+                }[key]
+                tool = _tool(env_name, executable)
+                if not tool:
+                    return _missing(label, executable, env_name)
+                binary = os.path.join(workdir, "main.exe" if os.name == "nt" else "main")
+                compile_command = [tool, source, "-o", binary]
+                if key == "rust" and os.name == "nt":
+                    compile_command.extend(["--target", "x86_64-pc-windows-gnu"])
+                run_command = [binary]
+            else:
+                tool = _tool("GO_PATH", "go")
+                if not tool:
+                    return _missing("Go", "go", "GO_PATH")
+                binary = os.path.join(workdir, "main.exe" if os.name == "nt" else "main")
+                compile_command = [tool, "build", "-o", binary, source]
+                run_command = [binary]
+
         # Level 1: Compilation Phase
         if compile_command:
             try:
                 compiled = _run(compile_command, workdir, "", 15)
-                if compiled.returncode:
+                if compiled.returncode != 0:
                     raw_err = compiled.stderr or compiled.stdout or "Compilation failed"
                     diags = parse_diagnostics(key, raw_err, is_compile=True)
                     return _result(
@@ -201,7 +224,8 @@ def execute_locally(language, code, stdin_input="", timeout=8):
                         stderr=raw_err,
                         elapsed=round((time.perf_counter() - started) * 1000, 2), 
                         error_type="compile_error",
-                        diagnostics=diags
+                        diagnostics=diags,
+                        exit_code=compiled.returncode
                     )
             except subprocess.TimeoutExpired:
                 return _result(
@@ -209,15 +233,16 @@ def execute_locally(language, code, stdin_input="", timeout=8):
                     status="Compilation Error",
                     stderr="Compilation timed out (exceeded 15s limit).",
                     elapsed=15000,
-                    error_type="compile_error"
+                    error_type="compile_error",
+                    exit_code=-1
                 )
-        
+
         # Level 2: Runtime Execution Phase
         run_start = time.perf_counter()
         try:
             process = _run(run_command, workdir, stdin_input or "", timeout)
             elapsed = round((time.perf_counter() - run_start) * 1000, 2)
-            if process.returncode:
+            if process.returncode != 0:
                 raw_err = process.stderr or f"Process exited with code {process.returncode}"
                 diags = parse_diagnostics(key, raw_err, is_compile=False)
                 return _result(
@@ -227,18 +252,41 @@ def execute_locally(language, code, stdin_input="", timeout=8):
                     stderr=raw_err, 
                     elapsed=elapsed, 
                     error_type="runtime_error",
-                    diagnostics=diags
+                    diagnostics=diags,
+                    exit_code=process.returncode
                 )
             
-            return _result(True, "OK", process.stdout, process.stderr, elapsed)
+            return _result(
+                success=True,
+                status="OK",
+                output=process.stdout,
+                stderr=process.stderr,
+                elapsed=elapsed,
+                exit_code=0
+            )
         except subprocess.TimeoutExpired as exc:
             output = exc.stdout or ""
             if isinstance(output, bytes):
                 output = output.decode(errors="replace")
-            return _result(False, "Time Limit Exceeded", output, "Time Limit Exceeded", timeout * 1000, "timeout")
+            return _result(
+                success=False,
+                status="Time Limit Exceeded",
+                output=output,
+                stderr="Time Limit Exceeded",
+                elapsed=timeout * 1000,
+                error_type="timeout",
+                exit_code=-1
+            )
 
-    except (OSError, ValueError) as exc:
-        return _result(False, "Execution Engine Unavailable", stderr=str(exc), error_type="configuration_error")
+    except Exception as exc:
+        logger.exception(f"Unexpected execution error for {language}: {exc}")
+        return _result(
+            success=False,
+            status="Internal Error",
+            stderr=f"Execution error: {str(exc)}",
+            error_type="internal_error",
+            exit_code=-1
+        )
     finally:
         # Guarantee removal of temporary execution folder
         try:
