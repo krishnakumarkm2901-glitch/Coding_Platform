@@ -75,6 +75,7 @@ export const ContestArena = () => {
   const [runResult, setRunResult] = useState(null);
   const [customInput, setCustomInput] = useState('');
   const [activeOutputTab, setActiveOutputTab] = useState('testcases');
+  const [contestInputMode, setContestInputMode] = useState('testcases');
 
   const outputPanelRef = useRef(null);
   const editorRef = useRef(null);
@@ -579,19 +580,19 @@ export const ContestArena = () => {
     try {
       setIsRunning(true);
       setSubmitResult(null);
+      const isCustomRun = activeOutputTab === 'custom' || (activeOutputTab === 'result' && contestInputMode === 'custom');
       setActiveOutputTab('result');
       const normalizedCases = normalizeTestCases(currentProblem);
-      const isCustomTab = activeOutputTab === 'custom';
 
       let payload = {
         language: currentLanguage,
         code: currentCode,
         problem_id: currentProblem?.id,
         contest_id: id,
-        is_custom: isCustomTab,
+        is_custom: isCustomRun,
       };
 
-      if (isCustomTab) {
+      if (isCustomRun) {
         payload.custom_input = customInput;
         payload.expected_output = '';
       } else {
@@ -611,23 +612,25 @@ export const ContestArena = () => {
             output: '',
             error: res.data.error || 'Execution engine unavailable. Please try again.',
             execution_time: 0,
-            inputUsed: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
-            input: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
-            expected_output: isCustomTab ? '' : (normalizedCases[0]?.expected_output || ''),
+            inputUsed: isCustomRun ? customInput : (normalizedCases[0]?.input || ''),
+            input: isCustomRun ? customInput : (normalizedCases[0]?.input || ''),
+            expected_output: isCustomRun ? null : (normalizedCases[0]?.expected_output || ''),
+            is_custom: isCustomRun,
           });
         } else {
           setRunResult({
             ...res.data,
-            inputUsed: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
-            input: isCustomTab ? customInput : (normalizedCases[0]?.input || ''),
-            expected_output: isCustomTab ? '' : (normalizedCases[0]?.expected_output || ''),
+            is_custom: isCustomRun,
+            inputUsed: isCustomRun ? customInput : (normalizedCases[0]?.input || ''),
+            input: isCustomRun ? customInput : (normalizedCases[0]?.input || ''),
+            expected_output: isCustomRun ? null : (normalizedCases[0]?.expected_output || ''),
           });
 
           // Gate: ONLY unlock submit if all sample test cases passed AND it was not a custom input run
-          if (!isCustomTab && res.data.all_passed && currentProblem) {
+          if (!isCustomRun && res.data.all_passed && currentProblem) {
             const validHash = `${currentProblem.id}_${currentLanguage}_${currentCode}`;
             setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: validHash }));
-          } else if (currentProblem) {
+          } else if (currentProblem && !isCustomRun) {
             setVerifiedProblemCodeHashes(prev => ({ ...prev, [currentProblem.id]: null }));
           }
         }
@@ -641,8 +644,9 @@ export const ContestArena = () => {
         output: '',
         error: err.response?.data?.error || 'Execution engine unavailable.',
         execution_time: 0,
-        inputUsed: customInput,
-        input: customInput,
+        inputUsed: isCustomRun ? customInput : '',
+        input: isCustomRun ? customInput : '',
+        is_custom: isCustomRun,
       });
     } finally {
       setIsRunning(false);
@@ -1367,23 +1371,56 @@ export const ContestArena = () => {
                     </div>
                   )}
 
-                  {currentProblem.sample_input && (
-                    <div className="space-y-1">
-                      <div className="font-bold text-[#667085] dark:text-[#94A3B8] uppercase">Sample Input:</div>
-                      <pre className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#0B0F14] border border-[#D9E0E8] dark:border-[#30363D] font-mono">
-                        {currentProblem.sample_input}
-                      </pre>
-                    </div>
-                  )}
+                  {/* Sample Input / Output (Problem Statement Examples) */}
+                  {(() => {
+                    const displayCases = currentProblem ? normalizeTestCases(currentProblem) : [];
+                    if (displayCases.length === 0) return null;
 
-                  {currentProblem.sample_output && (
-                    <div className="space-y-1">
-                      <div className="font-bold text-[#667085] dark:text-[#94A3B8] uppercase">Sample Output:</div>
-                      <pre className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#0B0F14] border border-[#D9E0E8] dark:border-[#30363D] font-mono">
-                        {currentProblem.sample_output}
-                      </pre>
-                    </div>
-                  )}
+                    return (
+                      <div className="space-y-3 pt-3 border-t border-[#D9E0E8] dark:border-[#30363D] text-xs font-mono">
+                        <h4 className="font-bold text-[#172033] dark:text-[#F8FAFC] uppercase tracking-wide font-sans">
+                          {displayCases.length > 1 ? 'Sample Cases:' : 'Sample Case:'}
+                        </h4>
+
+                        <div className="space-y-3">
+                          {displayCases.map((tc, idx) => (
+                            <div
+                              key={idx}
+                              className="p-3.5 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#F5F7FA] dark:bg-[#0B0F14] space-y-2.5"
+                            >
+                              {displayCases.length > 1 && (
+                                <div className="font-bold text-[#172033] dark:text-[#F8FAFC] font-mono text-[11px] pb-1 border-b border-[#D9E0E8]/60 dark:border-[#30363D]/60 font-sans">
+                                  Sample #{idx + 1}
+                                </div>
+                              )}
+
+                              {(tc.input !== '' && tc.input !== undefined && tc.input !== null) && (
+                                <div>
+                                  <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans font-semibold text-[11px]">
+                                    Sample Input:
+                                  </div>
+                                  <pre className="p-2.5 rounded-xl bg-[#FFFFFF] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
+                                    {tc.input}
+                                  </pre>
+                                </div>
+                              )}
+
+                              {(tc.expected_output !== '' && tc.expected_output !== undefined && tc.expected_output !== null) && (
+                                <div>
+                                  <div className="text-[#667085] dark:text-[#94A3B8] mb-1 font-sans font-semibold text-[11px]">
+                                    Sample Output:
+                                  </div>
+                                  <pre className="p-2.5 rounded-xl bg-[#FFFFFF] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] overflow-x-auto whitespace-pre-wrap font-bold">
+                                    {tc.expected_output}
+                                  </pre>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="p-8 text-center text-[#667085]">No problems assigned to this contest.</div>
@@ -1463,6 +1500,7 @@ export const ContestArena = () => {
                   activeTab={activeOutputTab}
                   setActiveTab={setActiveOutputTab}
                   onTabChange={setActiveOutputTab}
+                  onInputModeChange={setContestInputMode}
                   runResult={runResult}
                   submitResult={submitResult}
                   result={runResult}

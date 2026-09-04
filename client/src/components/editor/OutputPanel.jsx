@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle2, 
   XCircle, 
@@ -18,6 +18,7 @@ export const OutputPanel = ({
   activeTab = 'testcases',
   setActiveTab,
   onTabChange, // fallback
+  onInputModeChange,
   selectedCaseIndex = 0,
   setSelectedCaseIndex,
   customInput = '',
@@ -40,12 +41,21 @@ export const OutputPanel = ({
   const [copied, setCopied] = useState(false);
   const [selectedResultCaseIdx, setSelectedResultCaseIdx] = useState(0);
 
+  // Auto-select first failing test case if any exists
+  useEffect(() => {
+    if (activeResult?.test_results && activeResult.test_results.length > 0) {
+      const firstFailIdx = activeResult.test_results.findIndex((tr) => !tr.passed);
+      if (firstFailIdx !== -1) {
+        setSelectedResultCaseIdx(firstFailIdx);
+      } else {
+        setSelectedResultCaseIdx(0);
+      }
+    }
+  }, [submitResult, actualRunResult]);
+
   const handleSelectCase = (idx) => {
     if (setSelectedCaseIndex) {
       setSelectedCaseIndex(idx);
-    }
-    if (sampleTestCases[idx] && actualSetCustomInput) {
-      actualSetCustomInput(sampleTestCases[idx].input || '');
     }
   };
 
@@ -119,7 +129,10 @@ export const OutputPanel = ({
         <div className="flex items-center gap-3 overflow-x-auto py-2.5">
           <button
             type="button"
-            onClick={() => actualSetActiveTab('testcases')}
+            onClick={() => {
+              actualSetActiveTab('testcases');
+              if (onInputModeChange) onInputModeChange('testcases');
+            }}
             className={`font-bold transition flex items-center gap-1.5 py-1 px-2.5 rounded-lg ${
               activeTab === 'testcases'
                 ? 'bg-[#FFFFFF] dark:bg-[#20252C] text-[#172033] dark:text-[#F8FAFC] shadow-sm border border-[#D9E0E8] dark:border-[#30363D]'
@@ -132,7 +145,10 @@ export const OutputPanel = ({
 
           <button
             type="button"
-            onClick={() => actualSetActiveTab('custom')}
+            onClick={() => {
+              actualSetActiveTab('custom');
+              if (onInputModeChange) onInputModeChange('custom');
+            }}
             className={`font-bold transition flex items-center gap-1.5 py-1 px-2.5 rounded-lg ${
               activeTab === 'custom'
                 ? 'bg-[#FFFFFF] dark:bg-[#20252C] text-[#172033] dark:text-[#F8FAFC] shadow-sm border border-[#D9E0E8] dark:border-[#30363D]'
@@ -250,7 +266,7 @@ export const OutputPanel = ({
               <div className="flex flex-col items-center justify-center py-10 space-y-3">
                 <div className="w-8 h-8 border-4 border-[#0757B8] dark:border-[#60A5FA] border-t-transparent rounded-full animate-spin"></div>
                 <div className="text-xs text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wider animate-pulse">
-                  {isSubmitting ? 'Evaluating Solution Against Official & Hidden Tests...' : 'Compiling & Executing Code...'}
+                  {isSubmitting ? 'Evaluating Solution Against Sample Testcases...' : 'Compiling & Executing Code...'}
                 </div>
               </div>
             )}
@@ -260,8 +276,8 @@ export const OutputPanel = ({
               <div className="space-y-4">
                 
                 {/* 1. STATUS HEADER BAR */}
-                <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-[#D9E0E8] dark:border-[#30363D]">
-                  <div className="flex items-center gap-3">
+                <div className="flex items-center justify-between flex-wrap gap-x-4 gap-y-2 pb-2 border-b border-[#D9E0E8] dark:border-[#30363D]">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
                     <span className={`text-xl font-extrabold tracking-tight flex items-center gap-2 ${
                       isAccepted
                         ? 'text-[#22B573]'
@@ -270,22 +286,38 @@ export const OutputPanel = ({
                         : 'text-[#F59E0B]'
                     }`}>
                       {isAccepted ? <CheckCircle2 className="w-6 h-6" /> : <XCircle className="w-6 h-6" />}
-                      <span>{status === 'OK' ? 'Accepted' : status}</span>
+                      <span className="whitespace-nowrap">{status === 'OK' ? 'Accepted' : status}</span>
                     </span>
 
-                    {activeResult.total_test_cases !== undefined && activeResult.total_test_cases > 0 && (
-                      <span className="text-xs text-[#667085] dark:text-[#94A3B8] font-bold font-mono bg-[#F5F7FA] dark:bg-[#151A21] px-2.5 py-1 rounded-lg border border-[#D9E0E8] dark:border-[#30363D]">
-                        {activeResult.passed_test_cases} / {activeResult.total_test_cases} passed
-                      </span>
-                    )}
+                    {activeResult.total_test_cases !== undefined && activeResult.total_test_cases > 0 && !activeResult.is_custom && (() => {
+                      const total = activeResult.total_test_cases;
+                      const passed = activeResult.passed_test_cases || 0;
+                      const failed = activeResult.failed_test_cases !== undefined 
+                        ? activeResult.failed_test_cases 
+                        : Math.max(0, total - passed);
+
+                      return (
+                        <span className="shrink-0 text-xs font-bold font-mono bg-[#F5F7FA] dark:bg-[#151A21] px-2.5 py-1 rounded-lg border border-[#D9E0E8] dark:border-[#30363D] flex items-center gap-1">
+                          {failed > 0 ? (
+                            <>
+                              <span className="text-emerald-600 dark:text-emerald-400">{passed} / {total} passed</span>
+                              <span className="text-[#667085] dark:text-[#94A3B8]">, </span>
+                              <span className="text-[#EF4444] font-extrabold">{failed} failed</span>
+                            </>
+                          ) : (
+                            <span className="text-emerald-600 dark:text-emerald-400">{passed} / {total} passed</span>
+                          )}
+                        </span>
+                      );
+                    })()}
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs text-[#667085] dark:text-[#94A3B8] font-mono flex-wrap">
-                    <span className="px-2.5 py-1 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D]">
+                  <div className="flex min-w-0 shrink-0 items-center justify-end gap-2 text-xs text-[#667085] dark:text-[#94A3B8] font-mono flex-wrap">
+                    <span className="whitespace-nowrap px-2.5 py-1 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D]">
                       Runtime: {activeResult.runtime_ms || activeResult.runtime || activeResult.execution_time || 0} ms
                     </span>
                     {activeResult.memory_mb && (
-                      <span className="px-2.5 py-1 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D]">
+                      <span className="whitespace-nowrap px-2.5 py-1 rounded-lg bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D]">
                         Memory: {activeResult.memory_mb} MB
                       </span>
                     )}
@@ -359,147 +391,304 @@ export const OutputPanel = ({
                   </div>
                 )}
 
-                {/* 3. RUNTIME ERROR PANEL */}
-                {isRuntimeError && (
-                  <div className="space-y-3">
-                    {diagnostics && diagnostics.length > 0 && (
-                      <div className="space-y-1.5">
-                        {diagnostics.map((diag, idx) => (
-                          <div
-                            key={idx}
-                            onClick={() => diag.line && onNavigateToLine && onNavigateToLine(diag.line, diag.column)}
-                            className={`p-2.5 rounded-xl border border-red-500/30 bg-red-500/10 text-xs text-[#EF4444] font-mono flex items-start justify-between gap-3 ${
-                              diag.line && onNavigateToLine ? 'cursor-pointer hover:bg-red-500/20 transition' : ''
-                            }`}
-                          >
-                            <div className="flex items-start gap-2">
-                              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                              <div>
-                                <div className="font-bold">
-                                  {diag.line ? `Runtime Error at Line ${diag.line}` : 'Runtime Exception'}
-                                </div>
-                                <div className="text-xs text-[#EF4444]/90 mt-0.5">{diag.message}</div>
-                              </div>
-                            </div>
-                            {diag.line && onNavigateToLine && (
-                              <ExternalLink className="w-3.5 h-3.5 opacity-60 shrink-0 mt-1" />
-                            )}
-                          </div>
-                        ))}
+                {/* 3. CUSTOM INPUT RESULT VIEW */}
+                {!isCompileOrSyntaxError && activeResult.is_custom && (
+                  <div className="space-y-3 font-mono text-xs">
+                    {/* Custom Input */}
+                    <div>
+                      <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1 flex items-center justify-between">
+                        <span>Custom Input:</span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(activeResult.input || '')}
+                          className="text-[10px] text-[#0757B8] dark:text-[#60A5FA] hover:underline cursor-pointer"
+                        >
+                          Copy
+                        </button>
                       </div>
-                    )}
-
-                    <div className="space-y-1.5 font-mono text-xs">
-                      <div className="text-xs font-bold text-[#EF4444]">Exception Stack Trace:</div>
-                      <pre className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-[#EF4444] overflow-x-auto whitespace-pre-wrap leading-relaxed">
-                        {activeResult.error || activeResult.stderr || 'Runtime error occurred.'}
+                      <pre className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
+                        {activeResult.input !== undefined && activeResult.input !== null && activeResult.input !== ''
+                          ? activeResult.input
+                          : '(No input)'}
                       </pre>
                     </div>
+
+                    {/* Your Output */}
+                    <div>
+                      <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Your Output:</div>
+                      {(() => {
+                        const rawOut = activeResult.stdout !== undefined ? activeResult.stdout : (activeResult.output !== undefined ? activeResult.output : '');
+                        const trimmedOut = typeof rawOut === 'string' ? rawOut.trim() : String(rawOut || '').trim();
+                        const hasOutput = trimmedOut !== '';
+                        const isError = isRuntimeError;
+
+                        return (
+                          <pre className={`p-2.5 rounded-xl border overflow-x-auto whitespace-pre-wrap font-mono ${
+                            isError
+                              ? 'bg-red-500/10 border-red-500/30 text-[#EF4444]'
+                              : hasOutput
+                              ? 'bg-[#F5F7FA] dark:bg-[#151A21] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] font-semibold'
+                              : 'bg-[#F5F7FA] dark:bg-[#151A21] border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8] italic'
+                          }`}>
+                            {hasOutput ? trimmedOut : '(No output)'}
+                          </pre>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Runtime Error if any on custom input */}
+                    {isRuntimeError && (
+                      <div className="space-y-2 pt-1">
+                        <div className="text-xs font-bold text-[#EF4444] font-sans flex items-center gap-1.5">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>Runtime Error on Custom Input:</span>
+                        </div>
+                        {diagnostics && diagnostics.length > 0 && (
+                          <div className="space-y-1.5">
+                            {diagnostics.map((diag, idx) => (
+                              <div
+                                key={idx}
+                                onClick={() => diag.line && onNavigateToLine && onNavigateToLine(diag.line, diag.column)}
+                                className={`p-2.5 rounded-xl border border-red-500/30 bg-red-500/10 text-xs text-[#EF4444] font-mono flex items-start justify-between gap-3 ${
+                                  diag.line && onNavigateToLine ? 'cursor-pointer hover:bg-red-500/20 transition' : ''
+                                }`}
+                              >
+                                <div className="flex items-start gap-2">
+                                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                  <div>
+                                    <div className="font-bold">
+                                      {diag.line ? `Runtime Error at Line ${diag.line}` : 'Runtime Exception'}
+                                    </div>
+                                    <div className="text-xs text-[#EF4444]/90 mt-0.5 whitespace-pre-wrap">{diag.message}</div>
+                                  </div>
+                                </div>
+                                {diag.line && onNavigateToLine && (
+                                  <ExternalLink className="w-3.5 h-3.5 opacity-60 shrink-0 mt-1" />
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <pre className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-[#EF4444] overflow-x-auto whitespace-pre-wrap leading-relaxed">
+                          {activeResult.error || activeResult.stderr || 'Runtime error occurred.'}
+                        </pre>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* 4. WRONG ANSWER / TESTCASE EVALUATION */}
-                {(isWrongAnswer || isAccepted || isTLE || isMLE || (!isCompileOrSyntaxError && !isRuntimeError)) && (
-                  <div className="space-y-3">
-                    {/* Test Results Breakdown (if multiple cases) */}
-                    {activeResult.test_results && activeResult.test_results.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                          {activeResult.test_results.map((tr, idx) => (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => setSelectedResultCaseIdx(idx)}
-                              className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
-                                selectedResultCaseIdx === idx
-                                  ? 'bg-[#0757B8] dark:bg-[#0066CC] text-white shadow-sm'
-                                  : 'bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#667085] dark:text-[#94A3B8]'
-                              }`}
-                            >
-                              {tr.passed ? (
-                                <CheckCircle2 className="w-3 h-3 text-[#22B573]" />
-                              ) : (
-                                <XCircle className="w-3 h-3 text-[#EF4444]" />
-                              )}
-                              <span>Case {idx + 1}</span>
-                            </button>
-                          ))}
-                        </div>
+                {/* 4. TEST CASE EVALUATION VIEW (For all sample test cases) */}
+                {!isCompileOrSyntaxError && !activeResult.is_custom && (() => {
+                  const testResults = activeResult.test_results || [];
+                  const hasTestResults = testResults.length > 0;
+                  const failedCases = hasTestResults ? testResults.filter((tr) => !tr.passed) : [];
 
-                        {activeResult.test_results[selectedResultCaseIdx] && (
-                          <div className="space-y-2.5 font-mono text-xs pt-1">
-                            {/* Input */}
-                            <div>
-                              <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Input:</div>
-                              <pre className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
-                                {activeResult.test_results[selectedResultCaseIdx].input || '(empty)'}
-                              </pre>
-                            </div>
+                  const renderTestCaseCard = (tc, idx) => {
+                    const isPassed = Boolean(tc.passed);
+                    const caseNum = tc.test_case || idx + 1;
+                    const caseStatus = tc.status || (isPassed ? 'Passed' : 'Failed');
+                    const isCaseRuntimeError = tc.status === 'Runtime Error' || tc.verdict === 'RUNTIME_ERROR' || Boolean(tc.error && tc.status !== 'Wrong Answer');
+                    const tcDiags = (tc.diagnostics && tc.diagnostics.length > 0) ? tc.diagnostics : (isCaseRuntimeError ? diagnostics : []);
+                    const errorDetails = tc.error || tc.stderr || (isCaseRuntimeError ? (activeResult.error || activeResult.stderr) : '');
 
-                            {/* Output */}
-                            <div>
-                              <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Your Output:</div>
-                              <pre className={`p-2.5 rounded-xl border overflow-x-auto whitespace-pre-wrap ${
-                                activeResult.test_results[selectedResultCaseIdx].passed
-                                  ? 'bg-[#F5F7FA] dark:bg-[#151A21] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
-                                  : 'bg-red-500/10 border-red-500/30 text-[#EF4444]'
-                              }`}>
-                                {activeResult.test_results[selectedResultCaseIdx].actual || activeResult.test_results[selectedResultCaseIdx].actual_output || '(No output)'}
-                              </pre>
-                            </div>
-
-                            {/* Expected */}
-                            {activeResult.test_results[selectedResultCaseIdx].expected && (
-                              <div>
-                                <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Expected Output:</div>
-                                <pre className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] font-bold overflow-x-auto whitespace-pre-wrap">
-                                  {activeResult.test_results[selectedResultCaseIdx].expected || activeResult.test_results[selectedResultCaseIdx].expected_output}
-                                </pre>
-                              </div>
+                    return (
+                      <div className="w-full min-w-0 space-y-3 font-mono text-xs">
+                        {/* Case Status Banner */}
+                        <div className={`flex min-w-0 items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold font-sans ${
+                          isPassed
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+                            : 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30'
+                        }`}>
+                          <span className="flex min-w-0 flex-1 items-center gap-2">
+                            {isPassed ? (
+                              <CheckCircle2 className="w-4 h-4 text-[#22B573] shrink-0" />
+                            ) : (
+                              <XCircle className="w-4 h-4 text-[#EF4444] shrink-0" />
                             )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Single run / custom input view fallback */}
-                    {(!activeResult.test_results || activeResult.test_results.length === 0) && (
-                      <div className="space-y-2.5 font-mono text-xs">
-                        {/* Input */}
-                        <div>
-                          <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Input:</div>
-                          <pre className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap">
-                            {activeResult.input !== undefined && activeResult.input !== null && activeResult.input !== ''
-                              ? activeResult.input
-                              : '(empty)'}
-                          </pre>
+                            <span className="min-w-0 text-sm font-extrabold tracking-tight break-words">
+                              {isPassed ? `✅ Test Case ${caseNum} Passed` : `❌ Test Case ${caseNum} Failed`}
+                            </span>
+                          </span>
+                          <span className="shrink-0 whitespace-nowrap uppercase tracking-wider font-extrabold px-2 py-0.5 rounded bg-black/5 dark:bg-white/10 text-[11px]">
+                            {caseStatus}
+                          </span>
                         </div>
 
-                        {/* Your Output */}
-                        <div>
-                          <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Your Output:</div>
-                          <pre className={`p-2.5 rounded-xl border overflow-x-auto whitespace-pre-wrap ${
-                            isAccepted
-                              ? 'bg-[#F5F7FA] dark:bg-[#151A21] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
-                              : 'bg-red-500/10 border-red-500/30 text-[#EF4444]'
-                          }`}>
-                            {activeResult.output || activeResult.error || '(No output)'}
+                        {/* Input */}
+                        <div className="w-full min-w-0">
+                          <div className="flex min-h-5 items-center justify-between gap-3 text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">
+                            <span>Input:</span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(tc.input || '')}
+                              className="text-[10px] text-[#0757B8] dark:text-[#60A5FA] hover:underline cursor-pointer"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                          <pre className="w-full min-w-0 p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC] overflow-x-auto whitespace-pre-wrap break-words">
+                            {tc.input !== undefined && tc.input !== null && tc.input !== '' ? tc.input : '(empty)'}
                           </pre>
                         </div>
 
                         {/* Expected Output */}
-                        {activeResult.expected_output && (
-                          <div>
+                        {(tc.expected !== undefined || tc.expected_output !== undefined) && (
+                          <div className="w-full min-w-0">
                             <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Expected Output:</div>
-                            <pre className="p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] font-bold overflow-x-auto whitespace-pre-wrap">
-                              {activeResult.expected_output}
+                            <pre className="w-full min-w-0 p-2.5 rounded-xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-[#22B573] font-bold overflow-x-auto whitespace-pre-wrap break-words">
+                              {tc.expected !== undefined && tc.expected !== null && tc.expected !== ''
+                                ? tc.expected
+                                : (tc.expected_output || '(empty)')}
                             </pre>
                           </div>
                         )}
+
+                        {/* Actual Output */}
+                        <div className="w-full min-w-0">
+                          <div className="text-[#667085] dark:text-[#94A3B8] font-sans font-bold mb-1">Actual Output:</div>
+                          <pre className={`w-full min-w-0 p-2.5 rounded-xl border overflow-x-auto whitespace-pre-wrap break-words font-bold ${
+                            isPassed
+                              ? 'bg-[#F5F7FA] dark:bg-[#151A21] border-[#D9E0E8] dark:border-[#30363D] text-[#172033] dark:text-[#F8FAFC]'
+                              : 'bg-red-500/10 border-red-500/30 text-[#EF4444]'
+                          }`}>
+                            {tc.actual !== undefined && tc.actual !== null && tc.actual !== ''
+                              ? tc.actual
+                              : (tc.actual_output !== undefined && tc.actual_output !== null && tc.actual_output !== ''
+                                ? tc.actual_output
+                                : '(No output)')}
+                          </pre>
+                        </div>
+
+                        {/* Runtime Error Details (if any on this testcase) */}
+                        {(!isPassed && (isCaseRuntimeError || errorDetails)) && (
+                          <div className="space-y-2 pt-1">
+                            <div className="text-xs font-bold text-[#EF4444] font-sans flex items-center gap-1.5">
+                              <AlertCircle className="w-4 h-4 shrink-0" />
+                              <span>Runtime Error Details for Test Case {caseNum}:</span>
+                            </div>
+
+                            {tcDiags && tcDiags.length > 0 && (
+                              <div className="space-y-1.5">
+                                {tcDiags.map((diag, dIdx) => (
+                                  <div
+                                    key={dIdx}
+                                    onClick={() => diag.line && onNavigateToLine && onNavigateToLine(diag.line, diag.column)}
+                                    className={`p-2.5 rounded-xl border border-red-500/30 bg-red-500/10 text-xs text-[#EF4444] font-mono flex items-start justify-between gap-3 ${
+                                      diag.line && onNavigateToLine ? 'cursor-pointer hover:bg-red-500/20 transition' : ''
+                                    }`}
+                                  >
+                                    <div className="flex items-start gap-2">
+                                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                      <div>
+                                        <div className="font-bold">
+                                          {diag.line ? `Runtime Error at Line ${diag.line}` : 'Runtime Exception'}
+                                        </div>
+                                        <div className="text-xs text-[#EF4444]/90 mt-0.5 whitespace-pre-wrap">{diag.message}</div>
+                                      </div>
+                                    </div>
+                                    {diag.line && onNavigateToLine && (
+                                      <ExternalLink className="w-3.5 h-3.5 opacity-60 shrink-0 mt-1" />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="space-y-1 font-mono text-xs">
+                              <div className="text-[11px] font-bold text-[#EF4444]/80 font-sans">Exception Stack Trace:</div>
+                              <pre className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-[#EF4444] overflow-x-auto whitespace-pre-wrap leading-relaxed">
+                                {errorDetails || 'Runtime error occurred.'}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                )}
+                    );
+                  };
+
+                  if (hasTestResults) {
+                    return (
+                      <div className="w-full min-w-0 space-y-4">
+                        {/* 1. Interactive Testcase Selector Tabs */}
+                        <div className="space-y-2">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="shrink-0 text-xs font-bold text-[#667085] dark:text-[#94A3B8] font-sans">
+                            Test Cases Status:
+                            </div>
+                            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                              {testResults.map((tr, idx) => {
+                                const isCurrent = selectedResultCaseIdx === idx;
+                                return (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => setSelectedResultCaseIdx(idx)}
+                                    className={`inline-flex min-h-8 items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 ${
+                                      isCurrent
+                                        ? tr.passed
+                                          ? 'bg-[#22B573] text-white shadow-sm ring-2 ring-emerald-400/30'
+                                          : 'bg-[#EF4444] text-white shadow-sm ring-2 ring-red-400/30'
+                                        : tr.passed
+                                        ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
+                                        : 'bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/20'
+                                    }`}
+                                  >
+                                    {tr.passed ? (
+                                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                    ) : (
+                                      <XCircle className="w-3.5 h-3.5 shrink-0" />
+                                    )}
+                                    <span className="whitespace-nowrap">Case {idx + 1}: {tr.passed ? '✅ Passed' : '❌ Failed'}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 2. Detail view for Selected Test Case */}
+                        {testResults[selectedResultCaseIdx] && (
+                          <div className="w-full min-w-0 p-4 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#F5F7FA]/30 dark:bg-[#151A21]/30">
+                            {renderTestCaseCard(testResults[selectedResultCaseIdx], selectedResultCaseIdx)}
+                          </div>
+                        )}
+
+                        {/* 3. Dedicated Listing for Multiple Failed Test Cases */}
+                        {failedCases.length > 1 && (
+                          <div className="space-y-3 pt-4 border-t border-[#D9E0E8] dark:border-[#30363D]">
+                            <div className="flex items-center justify-between">
+                              <div className="text-xs font-extrabold text-[#EF4444] uppercase tracking-wider flex items-center gap-2">
+                                <XCircle className="w-4 h-4 shrink-0" />
+                                <span>All Failed Test Cases ({failedCases.length}):</span>
+                              </div>
+                              <span className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                                Every failed test case listed separately
+                              </span>
+                            </div>
+
+                            <div className="space-y-3">
+                              {failedCases.map((fc, fIdx) => (
+                                <div
+                                  key={fIdx}
+                                  className="w-full min-w-0 p-4 rounded-2xl border border-red-500/30 bg-red-500/5 dark:bg-red-950/10 space-y-3"
+                                >
+                                  {renderTestCaseCard(fc, fc.test_case ? fc.test_case - 1 : fIdx)}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  // Fallback for single-case test result without test_results array
+                  return (
+                    <div className="p-4 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D]">
+                      {renderTestCaseCard(activeResult, 0)}
+                    </div>
+                  );
+                })()}
 
               </div>
             )}

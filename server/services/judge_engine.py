@@ -285,8 +285,8 @@ class OnlineJudgeEngine:
         for idx, tc in enumerate(test_cases):
             tc_input = inputs_list[idx]
             tc_expected = str(tc.get("expected_output", tc.get("output", ""))) if tc.get("expected_output") is not None else ""
-            is_hidden = bool(tc.get("is_hidden", False))
-            is_sample = bool(tc.get("is_sample", False)) or not is_hidden
+            is_hidden = False
+            is_sample = True
 
             res = raw_results[idx]
             exec_time = res.get("execution_time", 0.0)
@@ -319,26 +319,28 @@ class OnlineJudgeEngine:
             # Check Output Limit
             actual_raw_output = res.get("output", "")
             if len(actual_raw_output) > output_limit_chars:
-                final_status = "Output Limit Exceeded"
-                final_verdict = "OUTPUT_LIMIT_EXCEEDED"
-                first_error_msg = f"Output size exceeded limit of {output_limit_chars} characters."
-                failed_test_info = {
-                    "test_case_index": idx + 1,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
-                    "actual": "Output Limit Exceeded"
-                }
+                if final_status == "Accepted":
+                    final_status = "Output Limit Exceeded"
+                    final_verdict = "OUTPUT_LIMIT_EXCEEDED"
+                    first_error_msg = f"Output size exceeded limit of {output_limit_chars} characters on test case {idx + 1}."
+                    failed_test_info = {
+                        "test_case_index": idx + 1,
+                        "input": tc_input,
+                        "expected": tc_expected,
+                        "actual": "Output Limit Exceeded"
+                    }
                 test_results.append({
                     "test_case": idx + 1,
                     "status": "Output Limit Exceeded",
                     "verdict": "OUTPUT_LIMIT_EXCEEDED",
                     "passed": False,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
+                    "input": tc_input,
+                    "expected": tc_expected,
                     "actual": "Output Limit Exceeded",
+                    "error": f"Output size exceeded limit of {output_limit_chars} characters.",
                     "execution_time_ms": exec_time
                 })
-                break
+                continue
 
             # Check for Compilation / Syntax Error
             if res.get("status") in ["Compilation Error", "Syntax Error"]:
@@ -348,8 +350,8 @@ class OnlineJudgeEngine:
                 diagnostics = res.get("diagnostics", [])
                 failed_test_info = {
                     "test_case_index": idx + 1,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
+                    "input": tc_input,
+                    "expected": tc_expected,
                     "actual": first_error_msg
                 }
                 test_results.append({
@@ -357,61 +359,72 @@ class OnlineJudgeEngine:
                     "status": final_status,
                     "verdict": "COMPILATION_ERROR",
                     "passed": False,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
+                    "input": tc_input,
+                    "expected": tc_expected,
                     "actual": first_error_msg,
                     "error": first_error_msg,
+                    "diagnostics": diagnostics,
                     "execution_time_ms": exec_time
                 })
                 break
 
             # Check for Time Limit Exceeded (ONLY when user code genuinely timed out)
             if res.get("status") == "Time Limit Exceeded":
-                final_status = "Time Limit Exceeded"
-                final_verdict = "TIME_LIMIT_EXCEEDED"
-                first_error_msg = f"Time Limit Exceeded (> {time_limit}s)"
-                failed_test_info = {
-                    "test_case_index": idx + 1,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
-                    "actual": "Time Limit Exceeded"
-                }
+                if final_status == "Accepted":
+                    final_status = "Time Limit Exceeded"
+                    final_verdict = "TIME_LIMIT_EXCEEDED"
+                    first_error_msg = f"Time Limit Exceeded (> {time_limit}s) on test case {idx + 1}"
+                    failed_test_info = {
+                        "test_case_index": idx + 1,
+                        "input": tc_input,
+                        "expected": tc_expected,
+                        "actual": "Time Limit Exceeded"
+                    }
                 test_results.append({
                     "test_case": idx + 1,
                     "status": "Time Limit Exceeded",
                     "verdict": "TIME_LIMIT_EXCEEDED",
                     "passed": False,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
+                    "input": tc_input,
+                    "expected": tc_expected,
                     "actual": "Time Limit Exceeded",
+                    "error": f"Time Limit Exceeded (> {time_limit}s)",
                     "execution_time_ms": exec_time
                 })
-                break
+                continue
 
             # Check for Runtime Error
             if res.get("status") == "Runtime Error":
-                final_status = "Runtime Error"
-                final_verdict = "RUNTIME_ERROR"
-                first_error_msg = res.get("error") or res.get("stderr") or "Runtime Error"
-                diagnostics = res.get("diagnostics", [])
-                failed_test_info = {
-                    "test_case_index": idx + 1,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
-                    "actual": first_error_msg if is_sample else "(Runtime Error on Hidden Test Case)"
-                }
+                tc_err = res.get("error") or res.get("stderr") or "Runtime Error"
+                tc_diags = res.get("diagnostics", [])
+                tc_actual = res.get("output", "").strip() or "(No output)"
+                if final_status == "Accepted":
+                    final_status = "Runtime Error"
+                    final_verdict = "RUNTIME_ERROR"
+                    first_error_msg = tc_err
+                    diagnostics = tc_diags
+                    failed_test_info = {
+                        "test_case_index": idx + 1,
+                        "input": tc_input,
+                        "expected": tc_expected,
+                        "actual": tc_err,
+                        "error": tc_err,
+                        "diagnostics": tc_diags
+                    }
                 test_results.append({
                     "test_case": idx + 1,
                     "status": "Runtime Error",
                     "verdict": "RUNTIME_ERROR",
                     "passed": False,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
-                    "actual": first_error_msg if is_sample else "(Runtime Error on Hidden Test Case)",
-                    "error": first_error_msg,
+                    "input": tc_input,
+                    "expected": tc_expected,
+                    "actual": tc_actual,
+                    "error": tc_err,
+                    "stderr": res.get("stderr", ""),
+                    "diagnostics": tc_diags,
                     "execution_time_ms": exec_time
                 })
-                break
+                continue
 
             # Output Comparison
             actual_norm = OutputComparator.normalize_text(res.get("output", ""))
@@ -424,32 +437,33 @@ class OnlineJudgeEngine:
                     "status": "Passed",
                     "verdict": "ACCEPTED",
                     "passed": True,
-                    "input": tc_input if is_sample else "(Hidden)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
-                    "actual": actual_norm if is_sample else "(Hidden)",
+                    "input": tc_input,
+                    "expected": tc_expected,
+                    "actual": actual_norm,
                     "execution_time_ms": exec_time
                 })
             else:
-                final_status = "Wrong Answer"
-                final_verdict = "WRONG_ANSWER"
-                first_error_msg = f"Output mismatch on test case {idx + 1}"
-                failed_test_info = {
-                    "test_case_index": idx + 1,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
-                    "actual": actual_norm if is_sample else "(Output Mismatch on Hidden Test Case)"
-                }
+                if final_status == "Accepted":
+                    final_status = "Wrong Answer"
+                    final_verdict = "WRONG_ANSWER"
+                    first_error_msg = f"Output mismatch on test case {idx + 1}"
+                    failed_test_info = {
+                        "test_case_index": idx + 1,
+                        "input": tc_input,
+                        "expected": tc_expected,
+                        "actual": actual_norm
+                    }
                 test_results.append({
                     "test_case": idx + 1,
                     "status": "Wrong Answer",
                     "verdict": "WRONG_ANSWER",
                     "passed": False,
-                    "input": tc_input if is_sample else "(Hidden Test Case)",
-                    "expected": tc_expected if is_sample else "(Hidden)",
-                    "actual": actual_norm if is_sample else "(Output Mismatch on Hidden Test Case)",
+                    "input": tc_input,
+                    "expected": tc_expected,
+                    "actual": actual_norm if actual_norm else "(No output)",
                     "execution_time_ms": exec_time
                 })
-                break
+                continue
 
         # If any mandatory test case failed, verdict CANNOT be Accepted
         if passed_test_cases < total_test_cases and final_status == "Accepted":
@@ -478,6 +492,7 @@ class OnlineJudgeEngine:
             "total": total_test_cases,
             "passed_test_cases": passed_test_cases,
             "total_test_cases": total_test_cases,
+            "failed_test_cases": total_test_cases - passed_test_cases,
             "runtime": max_runtime_ms,
             "runtime_ms": max_runtime_ms,
             "memory": max_memory_mb,

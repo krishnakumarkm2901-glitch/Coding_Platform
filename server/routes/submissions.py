@@ -73,10 +73,6 @@ def run_code_custom():
     if not code:
         return jsonify({"error": "Code cannot be empty", "success": False}), 400
 
-    import logging
-    _logger = logging.getLogger(__name__)
-    _logger.info(f"[EXECUTION] request received: language={language}, is_custom={is_custom}, problem_id={problem_id}")
-
     # Extract user ID if auth header provided
     user_id = _get_user_id_for_rate_limit()
 
@@ -102,6 +98,7 @@ def run_code_custom():
             "all_passed": all_passed,
             "passed_test_cases": judge_res["passed_test_cases"],
             "total_test_cases": judge_res["total_test_cases"],
+            "failed_test_cases": judge_res.get("failed_test_cases", judge_res["total_test_cases"] - judge_res["passed_test_cases"]),
             "runtime": judge_res["runtime_ms"],
             "runtime_ms": judge_res["runtime_ms"],
             "memory_mb": judge_res["memory_mb"],
@@ -113,16 +110,55 @@ def run_code_custom():
             "is_custom": False,
         }), 200
 
-    # Custom input single run
+    # Normalize custom input line endings
+    norm_custom_input = str(custom_input or "").replace("\r\n", "\n").replace("\r", "\n")
+
+    # Custom input execution branch
+    if is_custom:
+        from services.compiler import get_compiler_provider
+        provider = get_compiler_provider()
+        exec_obj = provider.execute(language, code, norm_custom_input, timeout=8)
+        result = exec_obj.to_dict()
+        status = result["status"]
+        verdict = result.get("verdict", status.upper().replace(" ", "_"))
+
+        # If execution succeeded without runtime or compilation errors
+        if status == "OK":
+            status = "Executed Successfully"
+            verdict = "OK"
+
+        raw_stdout = result.get("stdout") if result.get("stdout") is not None else (result.get("output") or "")
+        trimmed_stdout = raw_stdout.strip() if isinstance(raw_stdout, str) else ""
+
+        return jsonify({
+            "success": True,
+            "status": status,
+            "verdict": verdict,
+            "all_passed": False,
+            "stdout": trimmed_stdout,
+            "output": trimmed_stdout,
+            "input": norm_custom_input,
+            "custom_input": norm_custom_input,
+            "expected_output": None,
+            "error": result.get("error", ""),
+            "stderr": result.get("stderr", ""),
+            "execution_time": result.get("execution_time", 0.0),
+            "runtime_ms": result.get("runtime_ms", result.get("execution_time", 0.0)),
+            "memory_mb": result.get("memory_mb", 14.2),
+            "diagnostics": result.get("diagnostics", []),
+            "code_hash": code_hash,
+            "is_custom": True,
+        }), 200
+
+    # Single test case execution branch (with expected output evaluation)
     from services.compiler import get_compiler_provider
     provider = get_compiler_provider()
-    exec_obj = provider.execute(language, code, custom_input, timeout=8)
+    exec_obj = provider.execute(language, code, norm_custom_input, timeout=8)
     result = exec_obj.to_dict()
     status = result["status"]
     verdict = result.get("verdict", status.upper().replace(" ", "_"))
 
     all_passed = False
-    # If code ran without crashing (status == "OK") and expected_output is provided, perform judge comparison!
     if status == "OK" and expected_output is not None and str(expected_output).strip() != "":
         actual_norm = normalize_output(result.get("output", ""))
         expected_norm = normalize_output(expected_output)
@@ -131,7 +167,7 @@ def run_code_custom():
         if OutputComparator.compare(actual_norm, expected_norm):
             status = "Accepted"
             verdict = "ACCEPTED"
-            all_passed = not is_custom
+            all_passed = True
         else:
             status = "Wrong Answer"
             verdict = "WRONG_ANSWER"
@@ -142,16 +178,18 @@ def run_code_custom():
         "status": status,
         "verdict": verdict,
         "all_passed": all_passed,
-        "output": result["output"],
+        "output": result.get("output", ""),
+        "stdout": result.get("stdout", result.get("output", "")),
         "expected_output": expected_output,
-        "error": result["error"],
+        "input": norm_custom_input,
+        "error": result.get("error", ""),
         "stderr": result.get("stderr", ""),
-        "execution_time": result["execution_time"],
-        "runtime_ms": result.get("runtime_ms", result["execution_time"]),
+        "execution_time": result.get("execution_time", 0.0),
+        "runtime_ms": result.get("runtime_ms", result.get("execution_time", 0.0)),
         "memory_mb": result.get("memory_mb", 14.2),
         "diagnostics": result.get("diagnostics", []),
         "code_hash": code_hash,
-        "is_custom": is_custom,
+        "is_custom": False,
     }), 200
 
 
@@ -197,10 +235,9 @@ def submit_solution():
     if not problem:
         return jsonify({"error": "Problem not found", "success": False}), 404
 
-    # Fetch test cases (from embedded list or separate collection)
-    test_cases = problem.get("test_cases", [])
-    if not test_cases:
-        test_cases = list(db.test_cases.find({"problem_id": str(problem["_id"])}))
+    # Fetch only sample test cases (no hidden test cases at all)
+    from services.testcase_helper import get_problem_sample_test_cases
+    test_cases = get_problem_sample_test_cases(problem)
 
     if not test_cases:
         sample_in = problem.get("sample_input", "")
@@ -209,11 +246,9 @@ def submit_solution():
 
     # =========================================================================
     # STRICT SUBMIT GATE — MANDATORY
-    # Pre-validate solution against ALL visible/sample test cases before allowing submission
+    # Pre-validate solution against ALL sample test cases before allowing submission
     # =========================================================================
-    visible_test_cases = [tc for tc in test_cases if tc.get("is_sample", False) or not tc.get("is_hidden", False)]
-    if not visible_test_cases:
-        visible_test_cases = [test_cases[0]]
+    visible_test_cases = test_cases
 
     gate_res = OnlineJudgeEngine.evaluate_solution(language, code, visible_test_cases, time_limit=5.0)
     if gate_res["status"] != "Accepted" or gate_res["passed_test_cases"] < len(visible_test_cases):
@@ -228,12 +263,6 @@ def submit_solution():
             "test_results": gate_res.get("test_results", []),
             "failed_case": gate_res.get("failed_case"),
         }), 403
-
-    if not test_cases:
-        # Fallback if no test cases defined: create a basic sample test case
-        sample_in = problem.get("sample_input", "")
-        sample_out = problem.get("sample_output", "")
-        test_cases = [{"input": sample_in, "expected_output": sample_out, "is_sample": True}]
 
     # ---- Async path: enqueue and return immediately ----
     if is_queue_available():
@@ -345,6 +374,8 @@ def _submit_synchronous(db, user, problem, test_cases, language, code):
         "complexity": complexity,
         "error_message": first_error,
         "diagnostics": diagnostics,
+        "test_results": test_results,
+        "failed_case": failed_test_case_info,
         "created_at": datetime.now(timezone.utc)
     }
 
@@ -440,6 +471,10 @@ def get_submission_status(submission_id):
         "total_test_cases": sub.get("total_test_cases", 0),
         "runtime": sub.get("runtime", 0),
         "error_message": sub.get("error_message", ""),
+        "test_results": sub.get("test_results", []),
+        "failed_case": sub.get("failed_case"),
+        "diagnostics": sub.get("diagnostics", []),
+        "all_passed": sub.get("status") == "Accepted" and sub.get("passed_test_cases", 0) == sub.get("total_test_cases", 0) and sub.get("total_test_cases", 0) > 0,
         "is_complete": status not in ("QUEUED", "PROCESSING"),
     }), 200
 

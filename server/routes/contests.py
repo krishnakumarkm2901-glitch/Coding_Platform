@@ -13,6 +13,7 @@ from utils.time_utils import (
 )
 from bson import ObjectId
 from datetime import datetime, timezone, timedelta
+from services.testcase_helper import get_problem_sample_test_cases
 
 contests_bp = Blueprint("contests", __name__)
 
@@ -381,6 +382,8 @@ def get_contest_details(contest_id):
                 "constraints": p.get("constraints", ""),
                 "sample_input": p.get("sample_input", ""),
                 "sample_output": p.get("sample_output", ""),
+                "sample_test_cases": get_problem_sample_test_cases(p),
+                "test_cases": get_problem_sample_test_cases(p),
                 "points": 50
             })
 
@@ -905,9 +908,9 @@ def submit_contest(contest_id):
         if not prob:
             continue
 
-        test_cases = prob.get("test_cases", [])
+        test_cases = get_problem_sample_test_cases(prob)
         if not test_cases:
-            test_cases = list(db.test_cases.find({"problem_id": str(prob["_id"])}))
+            test_cases = [{"input": prob.get("sample_input", ""), "expected_output": prob.get("sample_output", ""), "is_sample": True}]
         # Execute test cases using central OnlineJudgeEngine
         from services.judge_engine import OnlineJudgeEngine
         time_limit = float(prob.get("time_limit", prob.get("timeLimit", 5.0)))
@@ -1051,19 +1054,15 @@ def submit_contest_problem(contest_id, problem_id):
     if not prob:
         return jsonify({"error": "Problem not found", "success": False}), 404
 
-    test_cases = prob.get("test_cases", [])
+    test_cases = get_problem_sample_test_cases(prob)
     if not test_cases:
-        test_cases = list(db.test_cases.find({"problem_id": str(prob["_id"])}))
-    if not test_cases:
-        test_cases = [{"input": prob.get("sample_input", ""), "expected_output": prob.get("sample_output", "")}]
+        test_cases = [{"input": prob.get("sample_input", ""), "expected_output": prob.get("sample_output", ""), "is_sample": True}]
 
     # =========================================================================
     # STRICT SUBMIT GATE — MANDATORY
-    # Pre-validate solution against ALL visible/sample test cases before allowing submission
+    # Pre-validate solution against ALL sample test cases before allowing submission
     # =========================================================================
-    visible_test_cases = [tc for tc in test_cases if tc.get("is_sample", False) or not tc.get("is_hidden", False)]
-    if not visible_test_cases:
-        visible_test_cases = [test_cases[0]]
+    visible_test_cases = test_cases
 
     from services.judge_engine import OnlineJudgeEngine
     gate_res = OnlineJudgeEngine.evaluate_solution(

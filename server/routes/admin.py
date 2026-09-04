@@ -964,6 +964,32 @@ def create_problem():
         slug = f"{base_slug}-{counter}"
         counter += 1
 
+    raw_samples = data.get("samples") or data.get("sample_test_cases") or []
+    sample_cases = []
+    if isinstance(raw_samples, list) and len(raw_samples) > 0:
+        for s in raw_samples:
+            inp = str(s.get("input", "") if s.get("input") is not None else s.get("stdin", ""))
+            out = str(s.get("expected_output", "") if s.get("expected_output") is not None else s.get("output", ""))
+            sample_cases.append({
+                "input": inp,
+                "expected_output": out,
+                "explanation": s.get("explanation", ""),
+                "is_sample": True
+            })
+
+    if not sample_cases:
+        sample_input = data.get("sample_input", "").strip()
+        sample_output = data.get("sample_output", "").strip()
+        sample_cases = [{
+            "input": sample_input,
+            "expected_output": sample_output,
+            "explanation": "",
+            "is_sample": True
+        }]
+    else:
+        sample_input = sample_cases[0]["input"]
+        sample_output = sample_cases[0]["expected_output"]
+
     problem_doc = {
         "title": title,
         "slug": slug,
@@ -973,9 +999,11 @@ def create_problem():
         "input_format": data.get("input_format", "").strip(),
         "output_format": data.get("output_format", "").strip(),
         "constraints": data.get("constraints", "").strip(),
-        "sample_input": data.get("sample_input", "").strip(),
-        "sample_output": data.get("sample_output", "").strip(),
-        "test_cases": data.get("test_cases", []),
+        "sample_input": sample_input,
+        "sample_output": sample_output,
+        "sample_test_cases": sample_cases,
+        "test_cases": sample_cases,
+        "starter_code": data.get("starter_code", {}),
         "supported_languages": data.get("supported_languages", ["python", "c", "cpp", "java", "javascript", "go", "rust"]),
         "time_limit": float(data.get("time_limit", 2.0)),
         "memory_limit": int(data.get("memory_limit", 128)),
@@ -1000,10 +1028,40 @@ def update_problem(problem_id):
     for field in [
         "title", "difficulty", "topic", "description", "input_format", 
         "output_format", "constraints", "sample_input", "sample_output", 
-        "test_cases", "supported_languages", "time_limit", "memory_limit", "is_active"
+        "starter_code", "supported_languages", "time_limit", "memory_limit", "is_active"
     ]:
         if field in data:
             update_data[field] = data[field]
+
+    raw_samples = data.get("samples") or data.get("sample_test_cases")
+    if raw_samples is not None and isinstance(raw_samples, list):
+        sample_cases = []
+        for s in raw_samples:
+            inp = str(s.get("input", "") if s.get("input") is not None else s.get("stdin", ""))
+            out = str(s.get("expected_output", "") if s.get("expected_output") is not None else s.get("output", ""))
+            sample_cases.append({
+                "input": inp,
+                "expected_output": out,
+                "explanation": s.get("explanation", ""),
+                "is_sample": True
+            })
+        if sample_cases:
+            update_data["sample_test_cases"] = sample_cases
+            update_data["test_cases"] = sample_cases
+            update_data["sample_input"] = sample_cases[0]["input"]
+            update_data["sample_output"] = sample_cases[0]["expected_output"]
+    elif "sample_input" in update_data or "sample_output" in update_data:
+        existing = db.problems.find_one({"_id": ObjectId(problem_id)}) or {}
+        s_in = update_data.get("sample_input", existing.get("sample_input", "")).strip()
+        s_out = update_data.get("sample_output", existing.get("sample_output", "")).strip()
+        sample_cases = [{
+            "input": s_in,
+            "expected_output": s_out,
+            "explanation": "",
+            "is_sample": True
+        }]
+        update_data["sample_test_cases"] = sample_cases
+        update_data["test_cases"] = sample_cases
 
     if "difficulty" in update_data:
         update_data["difficulty"] = update_data["difficulty"].capitalize()

@@ -144,6 +144,7 @@ def process_submission_job(job):
                 "passed_test_cases": passed,
                 "total_test_cases": total,
                 "error_message": first_error,
+                "test_results": eval_res.get("test_results", eval_res.get("results", [])),
                 "evaluated_at": datetime.now(timezone.utc),
             }
             db.submissions.update_one(

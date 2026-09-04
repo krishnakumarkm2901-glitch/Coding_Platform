@@ -36,16 +36,18 @@ export const normalizeTestCases = (prob) => {
 
   let cases = [];
 
-  // 1. Check sample_test_cases
+  // 1. Check sample_test_cases (explicit samples, exclude any hidden)
   if (Array.isArray(prob.sample_test_cases) && prob.sample_test_cases.length > 0) {
     cases = prob.sample_test_cases
+      .filter((c) => c && c.is_hidden !== true)
       .map(extractItem)
       .filter((c) => c && (c.input !== '' || c.expected_output !== ''));
   }
 
-  // 2. Check test_cases if still empty
+  // 2. Check test_cases if still empty - ONLY include explicit sample cases!
   if (cases.length === 0 && Array.isArray(prob.test_cases) && prob.test_cases.length > 0) {
     cases = prob.test_cases
+      .filter((c) => c && (c.is_sample === true || c.is_sample === 'true') && c.is_hidden !== true)
       .map(extractItem)
       .filter((c) => c && (c.input !== '' || c.expected_output !== ''));
   }

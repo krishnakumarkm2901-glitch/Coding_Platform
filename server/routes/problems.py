@@ -120,47 +120,9 @@ def get_problem_by_id(problem_id):
     if not problem:
         return jsonify({"error": "Problem not found", "success": False}), 404
 
-    # Build response: Include public/sample test cases, exclude hidden test cases for students
     p_id = str(problem["_id"])
-    sample_test_cases = []
-    
-    # Check if problem has embedded test cases or separate collection
-    test_cases = problem.get("test_cases", [])
-    if not test_cases:
-        test_cases = list(db.test_cases.find({"problem_id": p_id}))
-
-    if test_cases:
-        for tc in test_cases:
-            if tc.get("is_sample", False) or tc.get("is_public", True):
-                inp = tc.get("input") if tc.get("input") is not None else tc.get("stdin", "")
-                out = tc.get("expected_output") if tc.get("expected_output") is not None else tc.get("output", "")
-                sample_test_cases.append({
-                    "input": str(inp) if inp is not None else "",
-                    "expected_output": str(out) if out is not None else "",
-                    "explanation": tc.get("explanation", "")
-                })
-
-        # If no sample flag was set, include the first 2 as samples
-        if not sample_test_cases:
-            for tc in test_cases[:2]:
-                inp = tc.get("input") if tc.get("input") is not None else tc.get("stdin", "")
-                out = tc.get("expected_output") if tc.get("expected_output") is not None else tc.get("output", "")
-                sample_test_cases.append({
-                    "input": str(inp) if inp is not None else "",
-                    "expected_output": str(out) if out is not None else "",
-                    "explanation": tc.get("explanation", "")
-                })
-
-    # If sample_test_cases is still empty, fallback to sample_input and sample_output
-    if not sample_test_cases:
-        s_in = problem.get("sample_input")
-        s_out = problem.get("sample_output")
-        if s_in is not None or s_out is not None:
-            sample_test_cases.append({
-                "input": str(s_in) if s_in is not None else "",
-                "expected_output": str(s_out) if s_out is not None else "",
-                "explanation": ""
-            })
+    from services.testcase_helper import get_problem_sample_test_cases
+    sample_test_cases = get_problem_sample_test_cases(problem)
 
     # Ensure sample_input/sample_output fields match sample_test_cases[0] if missing
     sample_in = problem.get("sample_input")
@@ -191,6 +153,7 @@ def get_problem_by_id(problem_id):
             "sample_input": sample_in if sample_in is not None else "",
             "sample_output": sample_out if sample_out is not None else "",
             "sample_test_cases": sample_test_cases,
+            "test_cases": sample_test_cases,
             "starter_code": starter_code,
             "supported_languages": problem.get("supported_languages", ["python", "c", "cpp", "java", "javascript", "go", "rust"]),
             "time_limit": problem.get("time_limit", 2.0),

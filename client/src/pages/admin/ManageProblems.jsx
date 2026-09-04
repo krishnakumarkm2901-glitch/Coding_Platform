@@ -50,13 +50,11 @@ export const ManageProblems = () => {
     input_format: '',
     output_format: '',
     constraints: '',
-    sample_input: '',
-    sample_output: '',
+    samples: [
+      { input: '', expected_output: '' }
+    ],
     time_limit: 2.0,
     memory_limit: 256,
-    test_cases: [
-      { input: '5\n1 2 3 4 5', expected_output: '15', is_sample: true, explanation: '' }
-    ],
     starter_code: {
       python: 'def solve():\n    # Write your solution here\n    pass\n',
       cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}\n',
@@ -188,13 +186,11 @@ export const ManageProblems = () => {
       input_format: '',
       output_format: '',
       constraints: '',
-      sample_input: '',
-      sample_output: '',
+      samples: [
+        { input: '', expected_output: '' }
+      ],
       time_limit: 2.0,
       memory_limit: 256,
-      test_cases: [
-        { input: '5\n1 2 3 4 5', expected_output: '15', is_sample: true, explanation: '' }
-      ],
       starter_code: {
         python: 'def solve():\n    # Write your solution here\n    pass\n',
         cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}\n',
@@ -215,6 +211,10 @@ export const ManageProblems = () => {
       if (res.data.success) {
         const p = res.data.problem;
         setEditingId(p.id);
+        const rawSamples = (p.sample_test_cases && p.sample_test_cases.length > 0)
+          ? p.sample_test_cases.map(s => ({ input: s.input || '', expected_output: s.expected_output || '' }))
+          : [{ input: p.sample_input || '', expected_output: p.sample_output || '' }];
+
         setFormData({
           title: p.title || '',
           difficulty: p.difficulty || 'Easy',
@@ -223,11 +223,9 @@ export const ManageProblems = () => {
           input_format: p.input_format || '',
           output_format: p.output_format || '',
           constraints: p.constraints || '',
-          sample_input: p.sample_input || '',
-          sample_output: p.sample_output || '',
+          samples: rawSamples.length > 0 ? rawSamples : [{ input: '', expected_output: '' }],
           time_limit: p.time_limit || 2.0,
           memory_limit: p.memory_limit || 256,
-          test_cases: p.test_cases?.length ? p.test_cases : [{ input: '', expected_output: '', is_sample: true }],
           starter_code: p.starter_code || {}
         });
         setIsModalOpen(true);
@@ -239,25 +237,27 @@ export const ManageProblems = () => {
     }
   };
 
-  const handleAddTestCase = () => {
+  const handleAddSample = () => {
     setFormData((prev) => ({
       ...prev,
-      test_cases: [...prev.test_cases, { input: '', expected_output: '', is_sample: false, explanation: '' }]
+      samples: [...(prev.samples || []), { input: '', expected_output: '' }]
     }));
   };
 
-  const handleRemoveTestCase = (index) => {
+  const handleRemoveSample = (index) => {
     setFormData((prev) => ({
       ...prev,
-      test_cases: prev.test_cases.filter((_, idx) => idx !== index)
+      samples: prev.samples.filter((_, idx) => idx !== index)
     }));
   };
 
-  const handleTestCaseChange = (index, field, value) => {
+  const handleSampleChange = (index, field, value) => {
     setFormData((prev) => {
-      const updated = [...prev.test_cases];
-      updated[index][field] = value;
-      return { ...prev, test_cases: updated };
+      const updated = [...(prev.samples || [])];
+      if (updated[index]) {
+        updated[index] = { ...updated[index], [field]: value };
+      }
+      return { ...prev, samples: updated };
     });
   };
 
@@ -267,8 +267,22 @@ export const ManageProblems = () => {
       setActionLoading(true);
       setErrorMsg('');
 
+      const cleanSamples = (formData.samples || []).map(s => ({
+        input: s.input || '',
+        expected_output: s.expected_output || '',
+        is_sample: true
+      }));
+
+      const payload = {
+        ...formData,
+        samples: cleanSamples,
+        sample_test_cases: cleanSamples,
+        sample_input: cleanSamples[0]?.input || '',
+        sample_output: cleanSamples[0]?.expected_output || '',
+      };
+
       if (editingId) {
-        const res = await api.put(`/admin/problems/${editingId}`, formData);
+        const res = await api.put(`/admin/problems/${editingId}`, payload);
         if (res.data.success) {
           setIsModalOpen(false);
           setGlobalSuccessMsg('Problem updated successfully!');
@@ -276,7 +290,7 @@ export const ManageProblems = () => {
           fetchProblems();
         }
       } else {
-        const res = await api.post('/admin/problems', formData);
+        const res = await api.post('/admin/problems', payload);
         if (res.data.success) {
           setIsModalOpen(false);
           setGlobalSuccessMsg('Problem created successfully!');
@@ -563,11 +577,12 @@ export const ManageProblems = () => {
       </div>
 
       {/* CREATE / EDIT PROBLEM MODAL */}
+      {/* CREATE / EDIT PROBLEM MODAL */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title={editingId ? 'Edit Coding Problem' : 'Create New Coding Problem'}
-        maxWidth="max-w-4xl"
+        maxWidth="max-w-5xl"
       >
         {errorMsg && (
           <div className="mb-4 p-3 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs flex items-center gap-2 font-bold">
@@ -577,208 +592,192 @@ export const ManageProblems = () => {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2">
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Problem Title *</label>
-              <input
-                type="text"
-                required
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                placeholder="e.g. Invert Binary Tree"
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Difficulty *</label>
-              <select
-                value={formData.difficulty}
-                onChange={(e) => setFormData({ ...formData, difficulty: e.target.value })}
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-bold"
-              >
-                <option value="Easy">Easy</option>
-                <option value="Medium">Medium</option>
-                <option value="Hard">Hard</option>
-              </select>
-            </div>
-          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            
+            {/* LEFT PANEL: Basic Info & Multi-Sample Testcases */}
+            <div className="lg:col-span-6 flex flex-col space-y-3.5 border-b lg:border-b-0 lg:border-r border-[#D9E0E8] dark:border-[#30363D] lg:pr-5">
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Problem Title *</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.title}
+                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                  placeholder="e.g. Invert Binary Tree"
+                  className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
+                />
+              </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Topic *</label>
-              <select
-                value={formData.topic}
-                onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-bold"
-              >
-                {availableTopics.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Time Limit (sec)</label>
-              <input
-                type="number"
-                step="0.1"
-                min="0.5"
-                max="10"
-                value={formData.time_limit}
-                onChange={(e) => setFormData({ ...formData, time_limit: parseFloat(e.target.value) || 2.0 })}
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Memory Limit (MB)</label>
-              <input
-                type="number"
-                min="64"
-                max="1024"
-                value={formData.memory_limit}
-                onChange={(e) => setFormData({ ...formData, memory_limit: parseInt(e.target.value, 10) || 256 })}
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Problem Description *</label>
-            <textarea
-              required
-              rows={4}
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              placeholder="Detailed markdown problem statement..."
-              className="w-full p-3 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Input Format</label>
-              <textarea
-                rows={2}
-                value={formData.input_format}
-                onChange={(e) => setFormData({ ...formData, input_format: e.target.value })}
-                placeholder="e.g. First line contains integer N..."
-                className="w-full p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Output Format</label>
-              <textarea
-                rows={2}
-                value={formData.output_format}
-                onChange={(e) => setFormData({ ...formData, output_format: e.target.value })}
-                placeholder="e.g. Print single integer representing..."
-                className="w-full p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Constraints</label>
-              <textarea
-                rows={2}
-                value={formData.constraints}
-                onChange={(e) => setFormData({ ...formData, constraints: e.target.value })}
-                placeholder="e.g. 1 <= N <= 10^5"
-                className="w-full p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Sample Input</label>
-              <textarea
-                rows={3}
-                value={formData.sample_input}
-                onChange={(e) => setFormData({ ...formData, sample_input: e.target.value })}
-                placeholder="Sample stdin input..."
-                className="w-full p-2.5 font-mono bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1.5">Sample Output</label>
-              <textarea
-                rows={3}
-                value={formData.sample_output}
-                onChange={(e) => setFormData({ ...formData, sample_output: e.target.value })}
-                placeholder="Expected stdout output..."
-                className="w-full p-2.5 font-mono bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-2xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
-              />
-            </div>
-          </div>
-
-          {/* Test Cases Section */}
-          <div className="space-y-3 pt-2 border-t border-[#D9E0E8] dark:border-[#30363D]">
-            <div className="flex items-center justify-between">
-              <label className="font-bold text-[#172033] dark:text-[#F8FAFC]">
-                Judge Test Cases ({formData.test_cases.length}) *
-              </label>
-              <button
-                type="button"
-                onClick={handleAddTestCase}
-                className="px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-500/30 flex items-center gap-1 hover:bg-emerald-500/20 transition"
-              >
-                <PlusCircle className="w-3.5 h-3.5" />
-                <span>Add Test Case</span>
-              </button>
-            </div>
-
-            <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-              {formData.test_cases.map((tc, idx) => (
-                <div key={idx} className="p-3.5 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#F5F7FA] dark:bg-[#151A21] space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-[#172033] dark:text-[#F8FAFC] text-[11px] font-mono">
-                      Test Case #{idx + 1} {tc.is_sample && '(Sample Preview)'}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#667085] dark:text-[#94A3B8]">
-                        <input
-                          type="checkbox"
-                          checked={tc.is_sample || false}
-                          onChange={(e) => handleTestCaseChange(idx, 'is_sample', e.target.checked)}
-                          className="rounded text-[#0757B8]"
-                        />
-                        <span>Is Sample</span>
-                      </label>
-                      {formData.test_cases.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveTestCase(idx)}
-                          className="text-[#EF4444] p-1 hover:bg-[#EF4444]/15 rounded-lg"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8] mb-1 font-semibold">Input (stdin)</span>
-                      <textarea
-                        rows={2}
-                        required
-                        value={tc.input}
-                        onChange={(e) => handleTestCaseChange(idx, 'input', e.target.value)}
-                        className="w-full p-2 font-mono text-[11px] bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC]"
-                      />
-                    </div>
-                    <div>
-                      <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8] mb-1 font-semibold">Expected Output (stdout)</span>
-                      <textarea
-                        rows={2}
-                        required
-                        value={tc.expected_output}
-                        onChange={(e) => handleTestCaseChange(idx, 'expected_output', e.target.value)}
-                        className="w-full p-2 font-mono text-[11px] bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC]"
-                      />
-                    </div>
-                  </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Difficulty *</label>
+                  <select
+                    value={formData.difficulty}
+                    onChange={(e) => setFormData({ ...formData, difficulty: e.target.value })}
+                    className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-bold"
+                  >
+                    <option value="Easy">Easy</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Hard">Hard</option>
+                  </select>
                 </div>
-              ))}
+                <div>
+                  <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Topic *</label>
+                  <select
+                    value={formData.topic}
+                    onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
+                    className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-bold"
+                  >
+                    {availableTopics.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Time Limit (sec)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="10"
+                    value={formData.time_limit}
+                    onChange={(e) => setFormData({ ...formData, time_limit: parseFloat(e.target.value) || 2.0 })}
+                    className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Memory Limit (MB)</label>
+                  <input
+                    type="number"
+                    min="64"
+                    max="1024"
+                    value={formData.memory_limit}
+                    onChange={(e) => setFormData({ ...formData, memory_limit: parseInt(e.target.value, 10) || 256 })}
+                    className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
+                  />
+                </div>
+              </div>
+
+              {/* Multiple Sample Cases Section in Left Panel */}
+              <div className="space-y-2.5 pt-2 border-t border-[#D9E0E8] dark:border-[#30363D] flex-1">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="font-bold text-[#172033] dark:text-[#F8FAFC] text-xs">
+                      Sample Cases ({formData.samples?.length || 1}) *
+                    </label>
+                    <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                      Evaluated against user code during testing & submit
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddSample}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-500/30 flex items-center gap-1.5 hover:bg-emerald-500/20 transition cursor-pointer text-xs shadow-sm"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5" />
+                    <span>+ Add Sample</span>
+                  </button>
+                </div>
+
+                <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+                  {(formData.samples || []).map((sample, idx) => (
+                    <div key={idx} className="p-3 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#F5F7FA] dark:bg-[#151A21] space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-[#172033] dark:text-[#F8FAFC] text-[11px] font-mono">
+                          Sample Case #{idx + 1}
+                        </span>
+                        {(formData.samples?.length || 1) > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSample(idx)}
+                            className="text-[#EF4444] px-2 py-0.5 hover:bg-[#EF4444]/15 rounded-lg flex items-center gap-1 text-[11px] font-semibold cursor-pointer transition"
+                            title="Remove Sample Case"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Remove</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8] mb-1 font-semibold">Sample Input (stdin)</span>
+                          <textarea
+                            rows={3}
+                            value={sample.input}
+                            onChange={(e) => handleSampleChange(idx, 'input', e.target.value)}
+                            placeholder="Sample stdin input..."
+                            className="w-full p-2 font-mono text-xs bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
+                          />
+                        </div>
+                        <div>
+                          <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8] mb-1 font-semibold">Sample Output (stdout)</span>
+                          <textarea
+                            rows={3}
+                            value={sample.expected_output}
+                            onChange={(e) => handleSampleChange(idx, 'expected_output', e.target.value)}
+                            placeholder="Expected stdout output..."
+                            className="w-full p-2 font-mono text-xs bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
+
+            {/* RIGHT PANEL: Problem Description, Formats & Constraints */}
+            <div className="lg:col-span-6 flex flex-col space-y-3">
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Problem Description *</label>
+                <textarea
+                  required
+                  rows={6}
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Detailed markdown problem statement, task details, requirements..."
+                  className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Input Format</label>
+                <textarea
+                  rows={2}
+                  value={formData.input_format}
+                  onChange={(e) => setFormData({ ...formData, input_format: e.target.value })}
+                  placeholder="e.g. First line contains integer N..."
+                  className="w-full p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Output Format</label>
+                <textarea
+                  rows={2}
+                  value={formData.output_format}
+                  onChange={(e) => setFormData({ ...formData, output_format: e.target.value })}
+                  placeholder="e.g. Print single integer representing..."
+                  className="w-full p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Constraints</label>
+                <textarea
+                  rows={2}
+                  value={formData.constraints}
+                  onChange={(e) => setFormData({ ...formData, constraints: e.target.value })}
+                  placeholder="e.g. 1 <= N <= 10^5"
+                  className="w-full p-2 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
+                />
+              </div>
+            </div>
+
           </div>
 
           <div className="pt-3 border-t border-[#D9E0E8] dark:border-[#30363D] flex items-center justify-end gap-2.5">

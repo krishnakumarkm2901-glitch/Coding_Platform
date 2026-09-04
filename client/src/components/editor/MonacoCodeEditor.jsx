@@ -200,9 +200,6 @@ export const MonacoCodeEditor = forwardRef(({
               <span>Reset</span>
             </button>
           )}
-          <span className="hidden sm:inline-block text-[11px] text-[#667085] dark:text-[#94A3B8] font-mono">
-            {fontSize}px
-          </span>
         </div>
       </div>
 

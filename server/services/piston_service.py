@@ -104,9 +104,12 @@ def _run(command, cwd, stdin_input, timeout):
         environment["PATH"] = os.path.dirname(gcc) + os.pathsep + environment.get("PATH", "")
 
     # Ensure stdin has terminating newline if non-empty to prevent Scanner/getline hangs
-    input_str = stdin_input or ""
-    if input_str and not input_str.endswith("\n"):
-        input_str += "\n"
+    # Also normalize line endings to standard Unix newline \n for cross-platform execution
+    input_str = stdin_input if stdin_input is not None else ""
+    if input_str:
+        input_str = input_str.replace("\r\n", "\n").replace("\r", "\n")
+        if not input_str.endswith("\n"):
+            input_str += "\n"
 
     return subprocess.run(
         command,
@@ -114,6 +117,8 @@ def _run(command, cwd, stdin_input, timeout):
         input=input_str,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         shell=False,
         env=environment

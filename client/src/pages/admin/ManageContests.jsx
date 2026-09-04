@@ -227,13 +227,11 @@ export const ManageContests = () => {
     input_format: '',
     output_format: '',
     constraints: '',
-    sample_input: '',
-    sample_output: '',
+    samples: [
+      { input: '', expected_output: '' }
+    ],
     time_limit: 2.0,
     memory_limit: 256,
-    test_cases: [
-      { input: '', expected_output: '', is_sample: true, explanation: '' }
-    ],
     starter_code: {
       python: 'def solve():\n    # Write your solution here\n    pass\n',
       cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}\n',
@@ -308,25 +306,27 @@ export const ManageContests = () => {
     setIsCreateMCQModalOpen(true);
   };
 
-  const handleProblemAddTestCase = () => {
+  const handleProblemAddSample = () => {
     setProblemFormData((prev) => ({
       ...prev,
-      test_cases: [...prev.test_cases, { input: '', expected_output: '', is_sample: false, explanation: '' }]
+      samples: [...(prev.samples || []), { input: '', expected_output: '' }]
     }));
   };
 
-  const handleProblemRemoveTestCase = (index) => {
+  const handleProblemRemoveSample = (index) => {
     setProblemFormData((prev) => ({
       ...prev,
-      test_cases: prev.test_cases.filter((_, idx) => idx !== index)
+      samples: prev.samples.filter((_, idx) => idx !== index)
     }));
   };
 
-  const handleProblemTestCaseChange = (index, field, value) => {
+  const handleProblemSampleChange = (index, field, value) => {
     setProblemFormData((prev) => {
-      const updated = [...prev.test_cases];
-      updated[index][field] = value;
-      return { ...prev, test_cases: updated };
+      const updated = [...(prev.samples || [])];
+      if (updated[index]) {
+        updated[index] = { ...updated[index], [field]: value };
+      }
+      return { ...prev, samples: updated };
     });
   };
 
@@ -353,7 +353,21 @@ export const ManageContests = () => {
       setProblemActionLoading(true);
       setProblemErrorMsg('');
 
-      const res = await api.post('/admin/problems', problemFormData);
+      const cleanSamples = (problemFormData.samples || []).map(s => ({
+        input: s.input || '',
+        expected_output: s.expected_output || '',
+        is_sample: true
+      }));
+
+      const payload = {
+        ...problemFormData,
+        samples: cleanSamples,
+        sample_test_cases: cleanSamples,
+        sample_input: cleanSamples[0]?.input || '',
+        sample_output: cleanSamples[0]?.expected_output || '',
+      };
+
+      const res = await api.post('/admin/problems', payload);
       if (res.data.success) {
         const newProblemId = String(res.data.id || res.data.problem?.id || res.data.problem?._id);
         const newProblemObj = res.data.problem || {
@@ -2178,11 +2192,12 @@ export const ManageContests = () => {
       </Modal>
 
       {/* MANUAL CREATE CODING PROBLEM MODAL */}
+      {/* MANUAL CREATE CODING PROBLEM MODAL */}
       <Modal
         isOpen={isCreateProblemModalOpen}
         onClose={() => setIsCreateProblemModalOpen(false)}
         title="Create Coding Problem"
-        maxWidth="max-w-4xl"
+        maxWidth="max-w-5xl"
       >
         {problemErrorMsg && (
           <div className="mb-4 p-3 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/30 text-[#EF4444] text-xs flex items-center gap-2 font-bold">
@@ -2192,205 +2207,193 @@ export const ManageContests = () => {
         )}
 
         <form onSubmit={handleCreateProblemSubmit} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="md:col-span-2">
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Problem Title *</label>
-              <input
-                type="text"
-                required
-                value={problemFormData.title}
-                onChange={(e) => setProblemFormData({ ...problemFormData, title: e.target.value })}
-                placeholder="e.g. Reverse Linked List"
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC]"
-              />
-            </div>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            
+            {/* LEFT PANEL: Basic Info & Multi-Sample Testcases */}
+            <div className="lg:col-span-6 flex flex-col space-y-3.5 border-b lg:border-b-0 lg:border-r border-[#D9E0E8] dark:border-[#30363D] lg:pr-5">
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Problem Title *</label>
+                <input
+                  type="text"
+                  required
+                  value={problemFormData.title}
+                  onChange={(e) => setProblemFormData({ ...problemFormData, title: e.target.value })}
+                  placeholder="e.g. Reverse Linked List"
+                  className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8] dark:focus:border-[#0066CC]"
+                />
+              </div>
 
-            <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Difficulty</label>
-              <select
-                value={problemFormData.difficulty}
-                onChange={(e) => setProblemFormData({ ...problemFormData, difficulty: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
-              >
-                <option value="Easy">Easy</option>
-                <option value="Medium">Medium</option>
-                <option value="Hard">Hard</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Topic</label>
-              <select
-                value={problemFormData.topic}
-                onChange={(e) => setProblemFormData({ ...problemFormData, topic: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
-              >
-                {availableTopics.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Time Limit (seconds)</label>
-              <input
-                type="number"
-                step="0.5"
-                value={problemFormData.time_limit}
-                onChange={(e) => setProblemFormData({ ...problemFormData, time_limit: parseFloat(e.target.value) })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Memory Limit (MB)</label>
-              <input
-                type="number"
-                value={problemFormData.memory_limit}
-                onChange={(e) => setProblemFormData({ ...problemFormData, memory_limit: parseInt(e.target.value) })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Problem Description *</label>
-            <textarea
-              required
-              rows={4}
-              value={problemFormData.description}
-              onChange={(e) => setProblemFormData({ ...problemFormData, description: e.target.value })}
-              placeholder="Describe problem scenario, requirements..."
-              className="w-full p-3.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-sans"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Input Format</label>
-              <textarea
-                rows={2}
-                value={problemFormData.input_format}
-                onChange={(e) => setProblemFormData({ ...problemFormData, input_format: e.target.value })}
-                placeholder="e.g. First line contains integer N..."
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Output Format</label>
-              <textarea
-                rows={2}
-                value={problemFormData.output_format}
-                onChange={(e) => setProblemFormData({ ...problemFormData, output_format: e.target.value })}
-                placeholder="e.g. Print space-separated integers..."
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Constraints</label>
-            <textarea
-              rows={2}
-              value={problemFormData.constraints}
-              onChange={(e) => setProblemFormData({ ...problemFormData, constraints: e.target.value })}
-              placeholder="1 <= N <= 10^5&#10;-10^9 <= nums[i] <= 10^9"
-              className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Sample Input</label>
-              <textarea
-                rows={2}
-                value={problemFormData.sample_input}
-                onChange={(e) => setProblemFormData({ ...problemFormData, sample_input: e.target.value })}
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Sample Output</label>
-              <textarea
-                rows={2}
-                value={problemFormData.sample_output}
-                onChange={(e) => setProblemFormData({ ...problemFormData, sample_output: e.target.value })}
-                className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
-              />
-            </div>
-          </div>
-
-          {/* Test Cases Builder */}
-          <div className="pt-4 border-t border-[#D9E0E8] dark:border-[#30363D] space-y-3">
-            <div className="flex items-center justify-between">
-              <h4 className="font-bold text-[#172033] dark:text-[#F8FAFC]">Evaluation Test Cases ({problemFormData.test_cases.length})</h4>
-              <button
-                type="button"
-                onClick={handleProblemAddTestCase}
-                className="px-2.5 py-1 rounded-lg bg-[#DDF2FF] dark:bg-[#142A43] text-[#0757B8] dark:text-[#60A5FA] font-bold text-[11px] flex items-center gap-1 border border-[#0757B8]/20 dark:border-[#0066CC]/40"
-              >
-                <PlusCircle className="w-3.5 h-3.5" />
-                Add Test Case
-              </button>
-            </div>
-
-            {problemFormData.test_cases.map((tc, idx) => (
-              <div key={idx} className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] space-y-2 relative">
-                <div className="flex items-center justify-between text-[11px] font-bold text-[#667085] dark:text-[#94A3B8]">
-                  <span>Test Case #{idx + 1}</span>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-1.5 cursor-pointer text-[#172033] dark:text-[#F8FAFC]">
-                      <input
-                        type="checkbox"
-                        checked={tc.is_sample || false}
-                        onChange={(e) => handleProblemTestCaseChange(idx, 'is_sample', e.target.checked)}
-                        className="rounded"
-                      />
-                      <span>Sample Case</span>
-                    </label>
-                    {problemFormData.test_cases.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => handleProblemRemoveTestCase(idx)}
-                        className="text-[#EF4444] hover:opacity-80"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Difficulty</label>
+                  <select
+                    value={problemFormData.difficulty}
+                    onChange={(e) => setProblemFormData({ ...problemFormData, difficulty: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                  >
+                    <option value="Easy">Easy</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Hard">Hard</option>
+                  </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 font-mono">
-                  <div>
-                    <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-sans font-semibold">Input:</span>
-                    <textarea
-                      rows={2}
-                      value={tc.input}
-                      onChange={(e) => handleProblemTestCaseChange(idx, 'input', e.target.value)}
-                      placeholder="stdin"
-                      className="w-full p-2 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-lg text-[#172033] dark:text-[#F8FAFC] text-xs font-semibold"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-sans font-semibold">Expected Output:</span>
-                    <textarea
-                      rows={2}
-                      value={tc.expected_output}
-                      onChange={(e) => handleProblemTestCaseChange(idx, 'expected_output', e.target.value)}
-                      placeholder="expected stdout"
-                      className="w-full p-2 bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-lg text-[#22B573] text-xs font-bold"
-                    />
-                  </div>
+                <div>
+                  <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Topic</label>
+                  <select
+                    value={problemFormData.topic}
+                    onChange={(e) => setProblemFormData({ ...problemFormData, topic: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                  >
+                    {availableTopics.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
-            ))}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Time Limit (sec)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={problemFormData.time_limit}
+                    onChange={(e) => setProblemFormData({ ...problemFormData, time_limit: parseFloat(e.target.value) })}
+                    className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Memory Limit (MB)</label>
+                  <input
+                    type="number"
+                    value={problemFormData.memory_limit}
+                    onChange={(e) => setProblemFormData({ ...problemFormData, memory_limit: parseInt(e.target.value) })}
+                    className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
+                  />
+                </div>
+              </div>
+
+              {/* Multiple Sample Cases Section in Left Panel */}
+              <div className="space-y-2.5 pt-2 border-t border-[#D9E0E8] dark:border-[#30363D] flex-1">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="font-bold text-[#172033] dark:text-[#F8FAFC] text-xs">
+                      Sample Cases ({problemFormData.samples?.length || 1}) *
+                    </label>
+                    <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                      Evaluated against user code during testing & submit
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleProblemAddSample}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-500/30 flex items-center gap-1.5 hover:bg-emerald-500/20 transition cursor-pointer text-xs shadow-sm"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5" />
+                    <span>+ Add Sample</span>
+                  </button>
+                </div>
+
+                <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+                  {(problemFormData.samples || []).map((sample, idx) => (
+                    <div key={idx} className="p-3 rounded-2xl border border-[#D9E0E8] dark:border-[#30363D] bg-[#F5F7FA] dark:bg-[#151A21] space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-[#172033] dark:text-[#F8FAFC] text-[11px] font-mono">
+                          Sample Case #{idx + 1}
+                        </span>
+                        {(problemFormData.samples?.length || 1) > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleProblemRemoveSample(idx)}
+                            className="text-[#EF4444] px-2 py-0.5 hover:bg-[#EF4444]/15 rounded-lg flex items-center gap-1 text-[11px] font-semibold cursor-pointer transition"
+                            title="Remove Sample Case"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Remove</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8] mb-1 font-semibold">Sample Input (stdin)</span>
+                          <textarea
+                            rows={3}
+                            value={sample.input}
+                            onChange={(e) => handleProblemSampleChange(idx, 'input', e.target.value)}
+                            placeholder="Sample stdin input..."
+                            className="w-full p-2 font-mono text-xs bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
+                          />
+                        </div>
+                        <div>
+                          <span className="block text-[10px] text-[#667085] dark:text-[#94A3B8] mb-1 font-semibold">Sample Output (stdout)</span>
+                          <textarea
+                            rows={3}
+                            value={sample.expected_output}
+                            onChange={(e) => handleProblemSampleChange(idx, 'expected_output', e.target.value)}
+                            placeholder="Expected stdout output..."
+                            className="w-full p-2 font-mono text-xs bg-[#FFFFFF] dark:bg-[#20252C] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] focus:outline-none focus:border-[#0757B8]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT PANEL: Problem Description, Formats & Constraints */}
+            <div className="lg:col-span-6 flex flex-col space-y-3">
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Problem Description *</label>
+                <textarea
+                  required
+                  rows={6}
+                  value={problemFormData.description}
+                  onChange={(e) => setProblemFormData({ ...problemFormData, description: e.target.value })}
+                  placeholder="Describe problem scenario, requirements..."
+                  className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold focus:outline-none focus:border-[#0757B8]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Input Format</label>
+                <textarea
+                  rows={2}
+                  value={problemFormData.input_format}
+                  onChange={(e) => setProblemFormData({ ...problemFormData, input_format: e.target.value })}
+                  placeholder="e.g. First line contains integer N..."
+                  className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Output Format</label>
+                <textarea
+                  rows={2}
+                  value={problemFormData.output_format}
+                  onChange={(e) => setProblemFormData({ ...problemFormData, output_format: e.target.value })}
+                  placeholder="e.g. Print single integer representing..."
+                  className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">Constraints</label>
+                <textarea
+                  rows={2}
+                  value={problemFormData.constraints}
+                  onChange={(e) => setProblemFormData({ ...problemFormData, constraints: e.target.value })}
+                  placeholder="1 <= N <= 10^5&#10;-10^9 <= nums[i] <= 10^9"
+                  className="w-full p-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-mono"
+                />
+              </div>
+            </div>
+
           </div>
 
-          <div className="pt-4 flex items-center justify-end gap-2 border-t border-[#D9E0E8] dark:border-[#30363D]">
+          <div className="pt-3 flex items-center justify-end gap-2.5 border-t border-[#D9E0E8] dark:border-[#30363D]">
             <button
               type="button"
               onClick={() => setIsCreateProblemModalOpen(false)}
@@ -2401,7 +2404,7 @@ export const ManageContests = () => {
             <button
               type="submit"
               disabled={problemActionLoading}
-              className="px-5 py-2.5 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold shadow-md shadow-emerald-500/20"
+              className="px-5 py-2 rounded-xl bg-[#22B573] hover:opacity-95 text-white font-bold shadow-md shadow-emerald-500/20"
             >
               {problemActionLoading ? 'Creating...' : 'Create Problem'}
             </button>
