@@ -366,7 +366,7 @@ export const StudentContestResult = () => {
                       : 'bg-red-500/15 text-red-600 border border-red-500/30'
                   }`}>
                     {q.is_correct ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
-                    <span>{q.is_correct ? '+10 Marks (Correct)' : '0 Marks (Incorrect)'}</span>
+                    <span>{q.is_correct ? `+${contest?.marks_per_mcq != null ? contest.marks_per_mcq : 10} Marks (Correct)` : '0 Marks (Incorrect)'}</span>
                   </span>
                 </div>
 
@@ -473,7 +473,9 @@ export const StudentContestResult = () => {
                   <div className="p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D]">
                     <div className="text-[10px] font-bold text-[#667085] uppercase">Marks Awarded</div>
                     <div className="text-base font-extrabold font-mono text-[#22B573] mt-0.5">
-                      {p.status === 'Accepted' ? '50 Marks' : `${Math.round((p.passed_test_cases / Math.max(p.total_test_cases, 1)) * 50)} Marks`}
+                      {p.status === 'Accepted'
+                        ? `${contest?.marks_per_coding_problem != null ? contest.marks_per_coding_problem : 50} Marks`
+                        : `${Math.round((p.passed_test_cases / Math.max(p.total_test_cases, 1)) * (contest?.marks_per_coding_problem != null ? contest.marks_per_coding_problem : 50))} Marks`}
                     </div>
                   </div>
 

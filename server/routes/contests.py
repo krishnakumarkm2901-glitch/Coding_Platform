@@ -91,8 +91,10 @@ def get_contests():
             "contestType": c_type,
             "problems_count": len(c.get("problem_ids", [])),
             "mcqs_count": len(c.get("mcq_ids", [])),
-            "mcqs_per_student": c.get("mcqs_per_student", 20),
-            "total_points": c.get("total_points", 100),
+            "mcqs_per_student": int(c["mcqs_per_student"]) if (c.get("mcqs_per_student") is not None and str(c.get("mcqs_per_student")).strip() != "") else None,
+            "marks_per_mcq": float(c["marks_per_mcq"]) if (c.get("marks_per_mcq") is not None and str(c.get("marks_per_mcq")).strip() != "") else None,
+            "marks_per_coding_problem": float(c["marks_per_coding_problem"]) if (c.get("marks_per_coding_problem") is not None and str(c.get("marks_per_coding_problem")).strip() != "") else None,
+            "total_points": int(c["total_points"]) if (c.get("total_points") is not None and str(c.get("total_points")).strip() != "" and int(c.get("total_points", 0)) > 0) else int(round((((int(c["mcqs_per_student"]) if (c.get("mcqs_per_student") is not None and str(c.get("mcqs_per_student")).strip() != "") else len(c.get("mcq_ids", []))) * (float(c["marks_per_mcq"]) if (c.get("marks_per_mcq") is not None and str(c.get("marks_per_mcq")).strip() != "") else 10.0)) if c.get("mcq_ids") else 0) + ((len(c.get("problem_ids", [])) * (float(c["marks_per_coding_problem"]) if (c.get("marks_per_coding_problem") is not None and str(c.get("marks_per_coding_problem")).strip() != "") else 50.0)) if c.get("problem_ids") else 0))),
             "status": status,
             "participants_count": participants_count,
             "has_joined": has_joined,
@@ -110,10 +112,13 @@ import random
 def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None, attempt_number=1, exclude_previous_ids=None):
     """
     Fetch or generate a fixed, randomized subset of MCQs for a student.
-    - If pool is 40 questions, selects 20 questions (or contest.mcqs_per_student).
-    - Shuffles the selected questions into a random order.
-    - Persists the assigned question IDs so the exact same 20 questions and order remain fixed.
-    - For retests: excludes questions from previous attempts (if exclude_previous_ids provided)
+    - Uses ONLY questions explicitly assigned/imported to the contest (contest['mcq_ids']).
+    - Does NOT automatically pull questions from the global question bank.
+    - If no questions are assigned to the contest, returns 0 questions ([]).
+    - If configured MCQs exist, selects up to contest.mcqs_per_student (or all configured MCQs if fewer).
+    - Shuffles the selected questions so question order is randomized per student.
+    - Persists the assigned question IDs so the exact same questions and order remain fixed for the attempt.
+    - For retests: excludes questions from previous attempts (if exclude_previous_ids provided).
     """
     if now is None:
         now = get_utc_now()
@@ -121,8 +126,10 @@ def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None, 
         exclude_previous_ids = []
 
     contest_id_str = str(contest.get("_id") or contest.get("id"))
-    all_mcq_ids = [str(mid) for mid in contest.get("mcq_ids", []) if mid]
-    if not all_mcq_ids:
+    configured_ids = [str(mid) for mid in contest.get("mcq_ids", []) if mid]
+
+    # If no questions were selected/imported for this contest, assign 0 questions
+    if not configured_ids:
         return []
 
     user_id_objs = [str(user_id)]
@@ -144,8 +151,10 @@ def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None, 
             "user_id": {"$in": user_id_objs},
             "attempt_number": {"$exists": False}  # Legacy/original attempt
         })
-        if assigned_doc and assigned_doc.get("question_ids"):
-            return assigned_doc["question_ids"]
+        if assigned_doc and assigned_doc.get("question_ids") is not None:
+            valid_existing = [qid for qid in assigned_doc["question_ids"] if qid in configured_ids]
+            if valid_existing:
+                return valid_existing
 
         # Also check existing contest_participants doc
         participant = db.contest_participants.find_one({
@@ -153,31 +162,39 @@ def get_or_assign_student_mcqs(db, contest, user_id, student_id=None, now=None, 
             "user_id": {"$in": user_id_objs},
             "is_active_attempt": True
         })
-        if participant and participant.get("assigned_mcq_ids"):
-            return participant["assigned_mcq_ids"]
+        if participant and participant.get("assigned_mcq_ids") is not None:
+            valid_existing = [qid for qid in participant["assigned_mcq_ids"] if qid in configured_ids]
+            if valid_existing:
+                return valid_existing
 
-    # 2. Determine target count (default 20, or min(20, total) if pool is smaller, or custom mcqs_per_student)
-    target_count = int(contest.get("mcqs_per_student") or 20)
-    if target_count <= 0 or target_count > len(all_mcq_ids):
-        target_count = min(20, len(all_mcq_ids)) if len(all_mcq_ids) >= 20 else len(all_mcq_ids)
+    # 2. Filter out previously assigned questions (for retests)
+    available_configured = [qid for qid in configured_ids if qid not in exclude_previous_ids]
+    if not available_configured:
+        # If all configured questions were already used in previous attempts, fallback to configured_ids
+        available_configured = list(configured_ids)
 
-    # Filter out previously assigned questions (for retests)
-    available_ids = [qid for qid in all_mcq_ids if qid not in exclude_previous_ids]
-    
-    # 3. Randomly select target_count questions from available pool
-    if len(available_ids) >= target_count:
-        selected_ids = random.sample(available_ids, target_count)
-    elif len(available_ids) > 0:
-        # Use whatever is available if not enough unused questions
-        selected_ids = list(available_ids)
-    else:
-        # Fallback: if no unused questions, use all (shouldn't happen in normal flow)
-        selected_ids = random.sample(all_mcq_ids, min(target_count, len(all_mcq_ids)))
+    # 3. Determine target count: applied ONLY when the admin has explicitly configured mcqs_per_student
+    configured_per_student = contest.get("mcqs_per_student")
+    if configured_per_student is None or str(configured_per_student).strip() == "":
+        # Questions/Student is unset; no questions should be automatically assigned to students
+        return []
 
-    # 4. Shuffle the selected subset so question #1 is randomized across candidates
+    try:
+        per_student = int(configured_per_student)
+    except (ValueError, TypeError):
+        return []
+
+    if per_student <= 0:
+        return []
+
+    target_count = min(per_student, len(available_configured))
+
+    selected_ids = random.sample(available_configured, target_count) if target_count < len(available_configured) else list(available_configured)
+
+    # 4. Shuffle the selected subset so question order is randomized across candidates
     random.shuffle(selected_ids)
 
-    # 5. Persist with attempt number tracking
+    # 4. Persist with attempt number tracking
     try:
         db.contest_assigned_questions.insert_one({
             "contest_id": contest_id_str,
@@ -366,6 +383,22 @@ def get_contest_details(contest_id):
     # Fetch problems
     problems = []
     prob_ids = [ObjectId(pid) for pid in contest.get("problem_ids", []) if ObjectId.is_valid(pid)]
+    
+    raw_coding = contest.get("marks_per_coding_problem")
+    raw_mcq = contest.get("marks_per_mcq")
+    try:
+        marks_per_coding = float(raw_coding) if raw_coding is not None and str(raw_coding).strip() != "" else None
+    except (ValueError, TypeError):
+        marks_per_coding = None
+
+    try:
+        marks_per_mcq = float(raw_mcq) if raw_mcq is not None and str(raw_mcq).strip() != "" else None
+    except (ValueError, TypeError):
+        marks_per_mcq = None
+
+    problem_points = marks_per_coding if marks_per_coding is not None else 50.0
+    mcq_points = marks_per_mcq if marks_per_mcq is not None else 10.0
+
     if prob_ids:
         prob_docs = list(db.problems.find({"_id": {"$in": prob_ids}}))
         for p in prob_docs:
@@ -384,7 +417,7 @@ def get_contest_details(contest_id):
                 "sample_output": p.get("sample_output", ""),
                 "sample_test_cases": get_problem_sample_test_cases(p),
                 "test_cases": get_problem_sample_test_cases(p),
-                "points": 50
+                "points": problem_points
             })
 
     # Fetch Personalized Assigned MCQs for student (or all if admin)
@@ -395,7 +428,7 @@ def get_contest_details(contest_id):
         # Student has an active attempt - use their assigned questions
         assigned_mcq_ids = [str(mid) for mid in participant.get("assigned_mcq_ids", []) if mid]
     else:
-        # Student has no active attempt - assign fresh questions
+        # Student has no active attempt - assign questions from contest's configured MCQs
         assigned_mcq_ids = get_or_assign_student_mcqs(db, contest, user_id, request.current_user.get("student_id"), now)
 
     if assigned_mcq_ids:
@@ -413,10 +446,29 @@ def get_contest_details(contest_id):
                     "options": m.get("options", []),
                     "topic": m.get("topic"),
                     "difficulty": m.get("difficulty", "Easy"),
-                    "points": 10
+                    "points": mcq_points
                 })
 
-    return jsonify({
+    raw_mps = contest.get("mcqs_per_student")
+    try:
+        effective_mcq_count = int(raw_mps) if raw_mps is not None and str(raw_mps).strip() != "" else len(contest.get("mcq_ids", []))
+    except (ValueError, TypeError):
+        effective_mcq_count = len(contest.get("mcq_ids", []))
+
+    raw_tot = contest.get("total_points")
+    try:
+        stored_total = int(raw_tot) if raw_tot is not None and str(raw_tot).strip() != "" else 0
+    except (ValueError, TypeError):
+        stored_total = 0
+
+    if stored_total <= 0:
+        mcq_pts = (effective_mcq_count * mcq_points) if contest.get("mcq_ids") else 0.0
+        coding_pts = (len(prob_ids) * problem_points) if prob_ids else 0.0
+        final_total_points = int(round(mcq_pts + coding_pts))
+    else:
+        final_total_points = stored_total
+
+    resp = jsonify({
         "success": True,
         "contest": {
             "id": contest_id,
@@ -445,11 +497,18 @@ def get_contest_details(contest_id):
             "score": participant.get("score", 0) if participant else 0,
             "problems": problems,
             "mcqs": mcqs,
-            "mcqs_per_student": contest.get("mcqs_per_student", 20),
+            "mcqs_per_student": effective_mcq_count if (raw_mps is not None and str(raw_mps).strip() != "") else None,
+            "marks_per_mcq": mcq_points,
+            "marks_per_coding_problem": problem_points,
+            "total_points": final_total_points,
             "allow_calculator": bool(contest.get("allow_calculator", False)),
             "allowCalculator": bool(contest.get("allow_calculator", False))
         }
-    }), 200
+    })
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp, 200
 
 @contests_bp.route("/<contest_id>/join", methods=["POST"])
 @student_required
@@ -886,6 +945,9 @@ def submit_contest(contest_id):
         return jsonify({"error": "Terminated attempts cannot be submitted.", "is_terminated": True, "success": False}), 403
     assigned_mcq_ids = participant.get("assigned_mcq_ids") if participant else get_or_assign_student_mcqs(db, contest, user_id, user.get("student_id"), now)
     
+    marks_per_mcq = float(contest.get("marks_per_mcq") or 10.0)
+    marks_per_coding_problem = float(contest.get("marks_per_coding_problem") or 50.0)
+
     if mcq_answers:
         mcq_ids_eval = [ObjectId(mid) for mid in assigned_mcq_ids if ObjectId.is_valid(mid)]
         mcq_docs = list(db.mcqs.find({"_id": {"$in": mcq_ids_eval}}))
@@ -893,10 +955,12 @@ def submit_contest(contest_id):
             mid_str = str(m["_id"])
             if str(mcq_answers.get(mid_str, "")).strip().lower() == str(m.get("correct_answer", "")).strip().lower():
                 mcqs_correct += 1
-                total_score += 10 # 10 points per MCQ
+                total_score += marks_per_mcq
 
     # 2. Evaluate Code Solutions with Parallel Compiler Worker Pool
     coding_results = {}
+    assigned_prob_ids = [str(p) for p in contest.get("problem_ids", []) if p]
+
     for pid, sol in code_solutions.items():
         lang = sol.get("language", "python")
         code = sol.get("code", "").strip()
@@ -906,6 +970,12 @@ def submit_contest(contest_id):
         q = {"_id": ObjectId(pid)} if ObjectId.is_valid(pid) else {"slug": pid}
         prob = db.problems.find_one(q)
         if not prob:
+            continue
+
+        # Evaluate ONLY problems explicitly assigned to this contest
+        prob_id_str = str(prob["_id"])
+        prob_slug_str = str(prob.get("slug", ""))
+        if (prob_id_str not in assigned_prob_ids and prob_slug_str not in assigned_prob_ids and str(pid) not in assigned_prob_ids):
             continue
 
         test_cases = get_problem_sample_test_cases(prob)
@@ -929,7 +999,7 @@ def submit_contest(contest_id):
 
         if status == "Accepted" and passed == total_tcs and total_tcs > 0:
             problems_solved += 1
-            total_score += 50 # 50 points per solved problem
+            total_score += marks_per_coding_problem
             coding_results[pid] = {
                 "status": "Accepted",
                 "verdict": "ACCEPTED",
@@ -940,7 +1010,7 @@ def submit_contest(contest_id):
             }
         else:
             # Partial scoring based on real passed tests
-            partial_points = int((passed / total_tcs) * 50) if total_tcs > 0 else 0
+            partial_points = round((passed / total_tcs) * marks_per_coding_problem, 2) if total_tcs > 0 else 0
             total_score += partial_points
             coding_results[pid] = {
                 "status": status,
@@ -951,8 +1021,9 @@ def submit_contest(contest_id):
                 "complexity": eval_res.get("complexity")
             }
 
-    mcq_score = mcqs_correct * 10
-    coding_score = max(total_score - mcq_score, 0)
+    mcq_score = round(mcqs_correct * marks_per_mcq, 2)
+    coding_score = round(max(total_score - mcq_score, 0), 2)
+    total_score = round(mcq_score + coding_score, 2)
     total_contest_mcqs = len(assigned_mcq_ids)
     total_contest_problems = len(contest.get("problem_ids", []))
 
@@ -1053,6 +1124,16 @@ def submit_contest_problem(contest_id, problem_id):
     prob = db.problems.find_one(q)
     if not prob:
         return jsonify({"error": "Problem not found", "success": False}), 404
+
+    contest = db.contests.find_one({"_id": ObjectId(contest_id)}) if ObjectId.is_valid(contest_id) else None
+    if not contest:
+        return jsonify({"error": "Contest not found", "success": False}), 404
+
+    assigned_prob_ids = [str(p) for p in contest.get("problem_ids", []) if p]
+    prob_id_str = str(prob["_id"])
+    prob_slug_str = str(prob.get("slug", ""))
+    if prob_id_str not in assigned_prob_ids and prob_slug_str not in assigned_prob_ids and str(problem_id) not in assigned_prob_ids:
+        return jsonify({"error": "This problem is not assigned to this contest", "success": False}), 403
 
     test_cases = get_problem_sample_test_cases(prob)
     if not test_cases:
@@ -1268,9 +1349,11 @@ def get_student_contest_report(contest_id):
             "code": sol.get("code", "")
         })
 
-    total_mcqs = len(mcq_docs) or len(contest.get("mcq_ids", []))
+    total_mcqs = len(mcq_docs) if mcq_docs else (int(contest.get("mcqs_per_student")) if contest.get("mcqs_per_student") is not None else len(contest.get("mcq_ids", [])))
     total_problems = len(problems) or len(prob_ids)
-    mcq_score = float(participant.get("mcq_score", mcqs_correct_count * 10))
+    marks_per_mcq = float(contest.get("marks_per_mcq") or 10.0)
+    marks_per_coding = float(contest.get("marks_per_coding_problem") or 50.0)
+    mcq_score = float(participant.get("mcq_score", mcqs_correct_count * marks_per_mcq))
     coding_score = float(participant.get("coding_score", max(float(participant.get("score", 0)) - mcq_score, 0.0)))
     overall_score = float(participant.get("score", mcq_score + coding_score))
     
@@ -1325,7 +1408,10 @@ def get_student_contest_report(contest_id):
             "start_time": format_utc_iso(parse_to_utc_datetime(contest.get("start_time"))),
             "end_time": format_utc_iso(parse_to_utc_datetime(contest.get("end_time"))),
             "total_mcqs": total_mcqs,
-            "total_problems": total_problems
+            "total_problems": total_problems,
+            "marks_per_mcq": contest.get("marks_per_mcq"),
+            "marks_per_coding_problem": contest.get("marks_per_coding_problem"),
+            "total_points": contest.get("total_points")
         },
         "student": {
             "name": user.get("name"),

@@ -161,26 +161,43 @@ export const ContestList = () => {
                 </p>
 
                 {/* Specs */}
-                <div className="grid grid-cols-3 gap-2 py-3 px-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 py-3 px-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs">
                   <div>
                     <div className="text-[#667085] dark:text-[#94A3B8] text-[10px] uppercase font-bold">Coding</div>
                     <div className="font-bold text-[#172033] dark:text-[#F8FAFC] font-mono flex items-center gap-1 mt-0.5">
                       <Code2 className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />
                       {c.problems_count} Problems
                     </div>
+                    {c.marks_per_coding_problem != null && (
+                      <div className="text-[10px] text-[#0757B8]/80 dark:text-[#60A5FA]/80 font-mono mt-0.5">
+                        {c.marks_per_coding_problem} pts/prob
+                      </div>
+                    )}
                   </div>
                   <div>
                     <div className="text-[#667085] dark:text-[#94A3B8] text-[10px] uppercase font-bold">MCQs</div>
                     <div className="font-bold text-[#172033] dark:text-[#F8FAFC] font-mono flex items-center gap-1 mt-0.5">
                       <HelpCircle className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
-                      {c.mcqs_per_student || 20} Questions
+                      {c.mcqs_per_student != null ? `${c.mcqs_per_student} Qs` : `${c.mcqs_count || 0} Qs`}
                     </div>
+                    {c.marks_per_mcq != null && (
+                      <div className="text-[10px] text-purple-600/80 dark:text-purple-400/80 font-mono mt-0.5">
+                        {c.marks_per_mcq} pts/MCQ
+                      </div>
+                    )}
                   </div>
                   <div>
                     <div className="text-[#667085] dark:text-[#94A3B8] text-[10px] uppercase font-bold">Duration</div>
                     <div className="font-bold text-[#172033] dark:text-[#F8FAFC] font-mono flex items-center gap-1 mt-0.5">
                       <Clock className="w-3.5 h-3.5 text-[#F2B705]" />
                       {c.duration_minutes} Mins
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[#667085] dark:text-[#94A3B8] text-[10px] uppercase font-bold">Total Marks</div>
+                    <div className="font-bold text-emerald-600 dark:text-emerald-400 font-mono flex items-center gap-1 mt-0.5">
+                      <Award className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      {c.total_points != null ? `${c.total_points} Pts` : 'N/A'}
                     </div>
                   </div>
                 </div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import { 
   Trophy, 
+  Award,
   Plus, 
   Edit, 
   Trash2, 
@@ -567,7 +568,9 @@ export const ManageContests = () => {
     title: '',
     description: '',
     duration_minutes: 60,
-    mcqs_per_student: 20,
+    mcqs_per_student: '',
+    marks_per_mcq: '',
+    marks_per_coding_problem: '',
     start_time: '',
     end_time: '',
     is_published: true,
@@ -673,7 +676,9 @@ export const ManageContests = () => {
       title: '',
       description: '',
       duration_minutes: 60,
-      mcqs_per_student: 20,
+      mcqs_per_student: '',
+      marks_per_mcq: '',
+      marks_per_coding_problem: '',
       start_time: toISTDateTimeInput(now),
       end_time: toISTDateTimeInput(future),
       is_published: true,
@@ -744,7 +749,9 @@ export const ManageContests = () => {
       title: contest.title || '',
       description: contest.description || '',
       duration_minutes: contest.duration_minutes || 60,
-      mcqs_per_student: contest.mcqs_per_student || 20,
+      mcqs_per_student: contest.mcqs_per_student !== undefined && contest.mcqs_per_student !== null ? contest.mcqs_per_student : '',
+      marks_per_mcq: contest.marks_per_mcq !== undefined && contest.marks_per_mcq !== null ? contest.marks_per_mcq : '',
+      marks_per_coding_problem: contest.marks_per_coding_problem !== undefined && contest.marks_per_coding_problem !== null ? contest.marks_per_coding_problem : '',
       start_time: toISTDateTimeInput(contest.start_time),
       end_time: toISTDateTimeInput(contest.end_time),
       is_published: Boolean(contest.is_published),
@@ -783,6 +790,10 @@ export const ManageContests = () => {
         return [...prev, fullObj];
       }
     });
+
+    setBrowserSelectedProblemIds((prev) =>
+      prev.includes(idStr) ? prev.filter((id) => id !== idStr) : [...prev, idStr]
+    );
   };
 
   const handleToggleMCQSelect = (mcq) => {
@@ -808,6 +819,10 @@ export const ManageContests = () => {
         return [...prev, fullObj];
       }
     });
+
+    setBrowserSelectedMcqIds((prev) =>
+      prev.includes(idStr) ? prev.filter((id) => id !== idStr) : [...prev, idStr]
+    );
   };
 
   const handleDeleteSingleProblem = (pId) => {
@@ -964,22 +979,60 @@ export const ManageContests = () => {
 
     if (hasMCQ) {
       const mcqCount = formData.mcq_ids?.length || 0;
-      const perStudent = Number(formData.mcqs_per_student || 20);
-      if (perStudent <= 0) {
-        setErrorMsg('Questions per student must be greater than 0.');
-        return;
-      }
-      if (perStudent > mcqCount) {
-        setErrorMsg(`Questions per student (${perStudent}) cannot exceed the configured question count (${mcqCount}).`);
-        return;
+      const rawVal = formData.mcqs_per_student;
+      if (rawVal !== '' && rawVal !== null && rawVal !== undefined) {
+        const perStudentNum = Number(rawVal);
+        if (isNaN(perStudentNum) || perStudentNum < 1) {
+          setErrorMsg('Questions per student must be at least 1.');
+          return;
+        }
+        if (perStudentNum > mcqCount) {
+          setErrorMsg(`Questions per student (${perStudentNum}) cannot be greater than the number of MCQs assigned to the contest (${mcqCount}).`);
+          return;
+        }
       }
     }
 
     const contestType = (hasCoding && hasMCQ) ? 'BOTH' : hasCoding ? 'CODING' : 'MCQ';
+    const rawVal = formData.mcqs_per_student;
+    const perStudent = (hasMCQ && rawVal !== '' && rawVal !== null && rawVal !== undefined) ? Number(rawVal) : null;
+
+    const rawMcqMarks = formData.marks_per_mcq;
+    const rawCodingMarks = formData.marks_per_coding_problem;
+
+    let marksPerMcq = null;
+    if (hasMCQ && rawMcqMarks !== '' && rawMcqMarks !== null && rawMcqMarks !== undefined) {
+      const parsed = Number(rawMcqMarks);
+      if (isNaN(parsed) || parsed <= 0) {
+        setErrorMsg('Marks per MCQ must be a positive number.');
+        return;
+      }
+      marksPerMcq = parsed;
+    }
+
+    let marksPerCoding = null;
+    if (hasCoding && rawCodingMarks !== '' && rawCodingMarks !== null && rawCodingMarks !== undefined) {
+      const parsed = Number(rawCodingMarks);
+      if (isNaN(parsed) || parsed <= 0) {
+        setErrorMsg('Marks per Coding Problem must be a positive number.');
+        return;
+      }
+      marksPerCoding = parsed;
+    }
+
+    const effectiveMcqCount = perStudent !== null ? perStudent : (hasMCQ ? (formData.mcq_ids?.length || 0) : 0);
+    const mcqTotal = (hasMCQ && marksPerMcq !== null) ? (effectiveMcqCount * marksPerMcq) : 0;
+    const codingTotal = (hasCoding && marksPerCoding !== null) ? ((formData.problem_ids?.length || 0) * marksPerCoding) : 0;
+    const calculatedTotalPoints = Math.round(mcqTotal + codingTotal);
+
     const payload = {
       ...formData,
       contest_type: contestType,
       contestType: contestType,
+      mcqs_per_student: perStudent,
+      marks_per_mcq: marksPerMcq,
+      marks_per_coding_problem: marksPerCoding,
+      total_points: calculatedTotalPoints,
       problem_ids: hasCoding ? formData.problem_ids : [],
       codingProblemIds: hasCoding ? formData.problem_ids : [],
       mcq_ids: hasMCQ ? formData.mcq_ids : [],
@@ -1017,7 +1070,9 @@ export const ManageContests = () => {
           title: '',
           description: '',
           duration_minutes: 60,
-          mcqs_per_student: 20,
+          mcqs_per_student: '',
+          marks_per_mcq: '',
+          marks_per_coding_problem: '',
           start_time: toISTDateTimeInput(new Date()),
           end_time: toISTDateTimeInput(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
           is_published: true,
@@ -1158,18 +1213,37 @@ export const ManageContests = () => {
                   <h3 className="text-lg font-bold text-[#172033] dark:text-[#F8FAFC] mb-1">{c.title}</h3>
                   <p className="text-xs text-[#667085] dark:text-[#94A3B8] line-clamp-2 mb-3 font-sans">{c.description}</p>
 
-                  <div className="grid grid-cols-3 gap-2 p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-xs">
                     <div>
                       <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Coding</div>
                       <div className="font-bold text-[#0757B8] dark:text-[#60A5FA] font-mono mt-0.5">{probCount} Problems</div>
+                      {c.marks_per_coding_problem != null && (
+                        <div className="text-[10px] text-[#0757B8]/80 dark:text-[#60A5FA]/80 font-mono">{c.marks_per_coding_problem} pts/prob</div>
+                      )}
                     </div>
                     <div>
                       <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">MCQs</div>
-                      <div className="font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">{mcqCount} MCQs Assigned & {c.mcqs_per_student || 20} Questions/Student</div>
+                      <div className="font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">
+                        {mcqCount} MCQs
+                        {mcqCount > 0 ? (
+                          c.mcqs_per_student != null
+                            ? ` (${c.mcqs_per_student}/std)`
+                            : ' (Unset)'
+                        ) : ''}
+                      </div>
+                      {c.marks_per_mcq != null && (
+                        <div className="text-[10px] text-purple-600/80 dark:text-purple-400/80 font-mono">{c.marks_per_mcq} pts/MCQ</div>
+                      )}
                     </div>
                     <div>
                       <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Duration</div>
                       <div className="font-bold text-[#172033] dark:text-[#F8FAFC] font-mono mt-0.5">{c.duration_minutes} Mins</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Total Marks</div>
+                      <div className="font-bold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">
+                        {c.total_points != null ? `${c.total_points} Pts` : 'N/A'}
+                      </div>
                     </div>
                   </div>
 
@@ -1270,7 +1344,7 @@ export const ManageContests = () => {
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide">Duration (Mins)</label>
               <input
@@ -1279,17 +1353,6 @@ export const ManageContests = () => {
                 max="600"
                 value={formData.duration_minutes}
                 onChange={(e) => setFormData({ ...formData, duration_minutes: Number(e.target.value) })}
-                className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
-              />
-            </div>
-            <div>
-              <label className="block text-[#667085] dark:text-[#94A3B8] font-bold mb-1 uppercase tracking-wide text-[10px] leading-tight">MCQs / Student</label>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={formData.mcqs_per_student || 20}
-                onChange={(e) => setFormData({ ...formData, mcqs_per_student: Number(e.target.value) })}
                 className="w-full px-3.5 py-2.5 bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold"
               />
             </div>
@@ -1356,6 +1419,36 @@ export const ManageContests = () => {
           {/* Coding Problem Selector */}
           {hasCoding && (
             <div className="animate-fadeIn space-y-3">
+              {/* Coding Configuration: Marks per Coding Problem */}
+              <div className="p-3.5 rounded-2xl bg-[#DDF2FF]/40 dark:bg-[#142A43]/40 border border-[#0757B8]/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Code2 className="w-4 h-4 text-[#0757B8] dark:text-[#60A5FA]" />
+                    <label className="block text-[#0757B8] dark:text-[#60A5FA] font-bold text-xs uppercase tracking-wide">
+                      Marks per Coding Problem
+                    </label>
+                  </div>
+                  <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                    Manually configure marks awarded for each coding problem in this contest.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.5"
+                    placeholder="e.g. 50 or 25"
+                    value={formData.marks_per_coding_problem !== undefined && formData.marks_per_coding_problem !== null ? formData.marks_per_coding_problem : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData({ ...formData, marks_per_coding_problem: val === '' ? '' : Math.max(0, Number(val)) });
+                    }}
+                    className="w-32 px-3 py-2 bg-[#FFFFFF] dark:bg-[#151A21] border border-[#0757B8]/30 dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-bold text-sm text-center"
+                  />
+                  <span className="text-xs font-bold text-[#0757B8] dark:text-[#60A5FA]">Marks</span>
+                </div>
+              </div>
+
               <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
                 <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
                   ASSIGN CODING PROBLEMS ({formData.problem_ids.length} SELECTED)
@@ -1497,13 +1590,27 @@ export const ManageContests = () => {
                         type="checkbox"
                         checked={
                           filteredProblems.length > 0 &&
-                          filteredProblems.every((p) => browserSelectedProblemIds.includes(String(p.id || p._id)))
+                          filteredProblems.every((p) => formData.problem_ids.includes(String(p.id || p._id)))
                         }
                         onChange={(e) => {
                           const filteredIds = filteredProblems.map((p) => String(p.id || p._id));
                           if (e.target.checked) {
+                            setFormData((prev) => ({
+                              ...prev,
+                              problem_ids: Array.from(new Set([...prev.problem_ids, ...filteredIds]))
+                            }));
+                            setSelectedProblems((prev) => {
+                              const map = new Map(prev.map((p) => [String(p.id || p._id), p]));
+                              filteredProblems.forEach((p) => map.set(String(p.id || p._id), p));
+                              return Array.from(map.values());
+                            });
                             setBrowserSelectedProblemIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
                           } else {
+                            setFormData((prev) => ({
+                              ...prev,
+                              problem_ids: prev.problem_ids.filter((id) => !filteredIds.includes(id))
+                            }));
+                            setSelectedProblems((prev) => prev.filter((p) => !filteredIds.includes(String(p.id || p._id))));
                             setBrowserSelectedProblemIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
                           }
                         }}
@@ -1588,12 +1695,10 @@ export const ManageContests = () => {
                             <div className="flex items-center gap-2 truncate pr-2">
                               <input
                                 type="checkbox"
-                                checked={isCheckedForDelete}
+                                checked={isSelected}
                                 onChange={(e) => {
                                   e.stopPropagation();
-                                  setBrowserSelectedProblemIds((prev) =>
-                                    prev.includes(pIdStr) ? prev.filter((id) => id !== pIdStr) : [...prev, pIdStr]
-                                  );
+                                  handleToggleProblemSelect(p);
                                 }}
                                 onClick={(e) => e.stopPropagation()}
                                 className="w-3.5 h-3.5 rounded text-[#0757B8] focus:ring-[#0757B8] dark:bg-[#151A21] dark:border-[#30363D] shrink-0 cursor-pointer"
@@ -1624,6 +1729,70 @@ export const ManageContests = () => {
           {/* Technical MCQ Selector */}
           {hasMCQ && (
             <div className="animate-fadeIn space-y-3">
+              {/* MCQ Configuration: Marks per MCQ & Questions per Student */}
+              <div className="p-3.5 rounded-2xl bg-purple-500/10 border border-purple-500/20 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5">
+                      <HelpCircle className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                      <label className="block text-purple-700 dark:text-purple-300 font-bold uppercase tracking-wide text-[10px]">
+                        Marks per MCQ
+                      </label>
+                    </div>
+                    <span className="text-[10px] font-mono font-semibold text-purple-600 dark:text-purple-400">
+                      {formData.marks_per_mcq !== '' && formData.marks_per_mcq !== null && formData.marks_per_mcq !== undefined
+                        ? `${formData.marks_per_mcq} Marks / MCQ`
+                        : 'Unset'}
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    min="0.5"
+                    step="0.5"
+                    placeholder="e.g. 10, 5, or 2"
+                    value={formData.marks_per_mcq !== undefined && formData.marks_per_mcq !== null ? formData.marks_per_mcq : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData({ ...formData, marks_per_mcq: val === '' ? '' : Math.max(0, Number(val)) });
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-[#FFFFFF] dark:bg-[#151A21] border border-purple-500/30 dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold text-sm"
+                  />
+                  <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] mt-1">
+                    Manually configure marks awarded for each correct MCQ answer.
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-purple-700 dark:text-purple-300 font-bold uppercase tracking-wide text-[10px]">
+                      Questions / Student (Manual Config)
+                    </label>
+                    <span className="text-[10px] font-mono font-semibold text-purple-600 dark:text-purple-400">
+                      {formData.mcqs_per_student !== '' && formData.mcqs_per_student !== null && formData.mcqs_per_student !== undefined
+                        ? `${formData.mcqs_per_student} Questions`
+                        : 'Unset'}
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    min="1"
+                    max={formData.mcq_ids?.length || 1000}
+                    placeholder="Unset (e.g. 10 or 20)"
+                    value={formData.mcqs_per_student !== undefined && formData.mcqs_per_student !== null ? formData.mcqs_per_student : ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData({ ...formData, mcqs_per_student: val === '' ? '' : Math.max(0, Number(val)) });
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-[#FFFFFF] dark:bg-[#151A21] border border-purple-500/30 dark:border-[#30363D] rounded-xl text-[#172033] dark:text-[#F8FAFC] font-semibold text-sm"
+                  />
+                  <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] mt-1">
+                    {formData.mcqs_per_student !== '' && formData.mcqs_per_student !== null && formData.mcqs_per_student !== undefined
+                      ? `Each student will receive ${formData.mcqs_per_student} question(s) from the assigned pool.`
+                      : 'Leave empty until decided. Cannot exceed total assigned MCQs.'}
+                  </p>
+                </div>
+              </div>
+
               <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
                 <label className="text-[#667085] dark:text-[#94A3B8] font-bold uppercase tracking-wide">
                   ASSIGN TECHNICAL MCQs ({formData.mcq_ids.length} SELECTED)
@@ -1659,6 +1828,7 @@ export const ManageContests = () => {
                   </button>
                 </div>
               </div>
+
 
               {/* Currently Selected MCQs List (Rendered ONLY if selected) */}
               {formData.mcq_ids.length > 0 && (
@@ -1764,13 +1934,27 @@ export const ManageContests = () => {
                         type="checkbox"
                         checked={
                           filteredMCQs.length > 0 &&
-                          filteredMCQs.every((m) => browserSelectedMcqIds.includes(String(m.id || m._id)))
+                          filteredMCQs.every((m) => formData.mcq_ids.includes(String(m.id || m._id)))
                         }
                         onChange={(e) => {
                           const filteredIds = filteredMCQs.map((m) => String(m.id || m._id));
                           if (e.target.checked) {
+                            setFormData((prev) => ({
+                              ...prev,
+                              mcq_ids: Array.from(new Set([...prev.mcq_ids, ...filteredIds]))
+                            }));
+                            setSelectedMCQs((prev) => {
+                              const map = new Map(prev.map((m) => [String(m.id || m._id), m]));
+                              filteredMCQs.forEach((m) => map.set(String(m.id || m._id), m));
+                              return Array.from(map.values());
+                            });
                             setBrowserSelectedMcqIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
                           } else {
+                            setFormData((prev) => ({
+                              ...prev,
+                              mcq_ids: prev.mcq_ids.filter((id) => !filteredIds.includes(id))
+                            }));
+                            setSelectedMCQs((prev) => prev.filter((m) => !filteredIds.includes(String(m.id || m._id))));
                             setBrowserSelectedMcqIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
                           }
                         }}
@@ -1855,12 +2039,10 @@ export const ManageContests = () => {
                             <div className="flex items-center gap-2 truncate pr-2">
                               <input
                                 type="checkbox"
-                                checked={isCheckedForDelete}
+                                checked={isSelected}
                                 onChange={(e) => {
                                   e.stopPropagation();
-                                  setBrowserSelectedMcqIds((prev) =>
-                                    prev.includes(mIdStr) ? prev.filter((id) => id !== mIdStr) : [...prev, mIdStr]
-                                  );
+                                  handleToggleMCQSelect(m);
                                 }}
                                 onClick={(e) => e.stopPropagation()}
                                 className="w-3.5 h-3.5 rounded text-purple-600 focus:ring-purple-600 dark:bg-[#151A21] dark:border-[#30363D] shrink-0 cursor-pointer"
@@ -1882,6 +2064,61 @@ export const ManageContests = () => {
               )}
             </div>
           )}
+
+          {/* Total Maximum Marks Live Calculation Banner */}
+          {(() => {
+            const rawMcqMarks = formData.marks_per_mcq;
+            const rawCodingMarks = formData.marks_per_coding_problem;
+            const mcqMarks = (hasMCQ && rawMcqMarks !== '' && rawMcqMarks !== null && rawMcqMarks !== undefined) ? Number(rawMcqMarks) : null;
+            const codingMarks = (hasCoding && rawCodingMarks !== '' && rawCodingMarks !== null && rawCodingMarks !== undefined) ? Number(rawCodingMarks) : null;
+            const effMcqCount = (hasMCQ && formData.mcqs_per_student !== '' && formData.mcqs_per_student !== null && formData.mcqs_per_student !== undefined)
+              ? Number(formData.mcqs_per_student)
+              : (hasMCQ ? (formData.mcq_ids?.length || 0) : 0);
+            const codingProbCount = hasCoding ? (formData.problem_ids?.length || 0) : 0;
+            const mcqTotal = (hasMCQ && mcqMarks !== null) ? (effMcqCount * mcqMarks) : 0;
+            const codingTotal = (hasCoding && codingMarks !== null) ? (codingProbCount * codingMarks) : 0;
+            const maxMarks = Math.round(mcqTotal + codingTotal);
+
+            return (
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-[#0757B8]/10 via-purple-500/10 to-emerald-500/10 border border-[#0757B8]/30 dark:border-[#0066CC]/40 space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Award className="w-5 h-5 text-[#0757B8] dark:text-[#60A5FA]" />
+                    <span className="font-extrabold text-sm text-[#172033] dark:text-[#F8FAFC]">
+                      Total Maximum Marks
+                    </span>
+                  </div>
+                  <div className="text-xl font-extrabold font-mono text-[#0757B8] dark:text-[#60A5FA]">
+                    {maxMarks} Marks
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 text-xs font-mono text-[#667085] dark:text-[#94A3B8] flex-wrap pt-1 border-t border-slate-200 dark:border-slate-800">
+                  {hasCoding && (
+                    <div className="flex items-center gap-1.5">
+                      <Code2 className="w-3.5 h-3.5 text-[#0757B8] dark:text-[#60A5FA]" />
+                      <span>
+                        Coding: <strong>{codingProbCount}</strong> problems × <strong>{codingMarks !== null ? codingMarks : 'Unset'}</strong> marks = <strong className="text-[#0757B8] dark:text-[#60A5FA]">{codingTotal} pts</strong>
+                      </span>
+                    </div>
+                  )}
+                  {hasMCQ && (
+                    <div className="flex items-center gap-1.5">
+                      <HelpCircle className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                      <span>
+                        MCQ: <strong>{effMcqCount}</strong> questions × <strong>{mcqMarks !== null ? mcqMarks : 'Unset'}</strong> marks = <strong className="text-purple-600 dark:text-purple-400">{mcqTotal} pts</strong>
+                      </span>
+                    </div>
+                  )}
+                  {(!hasCoding || codingMarks === null) && (!hasMCQ || mcqMarks === null) && (
+                    <span className="text-[11px] text-amber-600 dark:text-amber-400 font-sans">
+                      (Configure marks per question above to set total maximum marks)
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Published Checkbox */}
           <div className="pt-2">

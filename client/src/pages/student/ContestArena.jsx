@@ -4,6 +4,7 @@ import api from '../../services/api';
 import confetti from 'canvas-confetti';
 import { 
   Trophy, 
+  Award,
   Clock, 
   Code2, 
   HelpCircle, 
@@ -126,7 +127,7 @@ export const ContestArena = () => {
       if (showLoader) setLoading(true);
       setError('');
       console.log('Fetching contest details for ID:', id);
-      const res = await api.get(`/contests/${id}`);
+      const res = await api.get(`/contests/${id}?t=${Date.now()}`);
       if (res.data?.success && res.data?.contest) {
         const c = res.data.contest;
         setContest(c);
@@ -1129,12 +1130,17 @@ export const ContestArena = () => {
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-3 pt-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
             <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-center">
               <div className="text-[10px] font-bold uppercase text-[#667085] dark:text-[#94A3B8]">Coding Problems</div>
               <div className="text-xl font-extrabold font-mono text-[#0757B8] dark:text-[#60A5FA] mt-0.5">
                 {contest.problems?.length || 0}
               </div>
+              {contest.marks_per_coding_problem != null && (
+                <div className="text-[10px] font-mono text-[#0757B8] dark:text-[#60A5FA] mt-0.5">
+                  {contest.marks_per_coding_problem} {Number(contest.marks_per_coding_problem) === 1 ? 'pt' : 'pts'} each
+                </div>
+              )}
             </div>
 
             <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-center">
@@ -1142,12 +1148,32 @@ export const ContestArena = () => {
               <div className="text-xl font-extrabold font-mono text-purple-600 dark:text-purple-400 mt-0.5">
                 {contest.mcqs?.length || 0}
               </div>
+              {contest.marks_per_mcq != null && (
+                <div className="text-[10px] font-mono text-purple-600 dark:text-purple-400 mt-0.5">
+                  {contest.marks_per_mcq} {Number(contest.marks_per_mcq) === 1 ? 'pt' : 'pts'} each
+                </div>
+              )}
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-center">
+              <div className="text-[10px] font-bold uppercase text-[#667085] dark:text-[#94A3B8]">Total Marks</div>
+              <div className="text-xl font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5">
+                {contest.total_points != null 
+                  ? `${contest.total_points} Pts` 
+                  : `${((contest.problems?.length || 0) * (contest.marks_per_coding_problem != null ? Number(contest.marks_per_coding_problem) : 50)) + ((contest.mcqs?.length || 0) * (contest.marks_per_mcq != null ? Number(contest.marks_per_mcq) : 10))} Pts`}
+              </div>
+              <div className="text-[10px] font-mono text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                Max Score
+              </div>
             </div>
 
             <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] text-center">
               <div className="text-[10px] font-bold uppercase text-[#667085] dark:text-[#94A3B8]">Allowed Attempts</div>
               <div className="text-xl font-extrabold font-mono text-[#22B573] mt-0.5">
                 1 Attempt
+              </div>
+              <div className="text-[10px] font-mono text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                Proctored
               </div>
             </div>
           </div>
@@ -1279,8 +1305,14 @@ export const ContestArena = () => {
           </div>
         )}
 
-        {/* Right: Calculator, Timer & Submit Button */}
+        {/* Right: Total Marks Badge, Calculator, Timer & Submit Button */}
         <div className="flex items-center gap-2.5 flex-wrap justify-end">
+          {/* Live Total Maximum Marks */}
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 font-mono font-bold text-xs shadow-sm" title="Total Maximum Marks for this Contest">
+            <Award className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>Total: <strong>{contest.total_points ?? (((contest.problems?.length || 0) * (contest.marks_per_coding_problem != null ? Number(contest.marks_per_coding_problem) : 50)) + ((contest.mcqs?.length || 0) * (contest.marks_per_mcq != null ? Number(contest.marks_per_mcq) : 10)))}</strong> Marks</span>
+          </div>
+
           {Boolean(contest?.allow_calculator || contest?.allowCalculator) && (
             <button
               type="button"
@@ -1332,7 +1364,7 @@ export const ContestArena = () => {
                         : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#172033]'
                     }`}
                   >
-                    Problem {idx + 1}: {p.title}
+                    Problem {idx + 1}: {p.title} ({p.points ?? contest.marks_per_coding_problem ?? 50} pts)
                   </button>
                 ))}
               </div>
@@ -1340,9 +1372,13 @@ export const ContestArena = () => {
               {/* Problem Statement Content */}
               {currentProblem ? (
                 <div className="flex-1 p-6 overflow-y-auto space-y-4 text-xs">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <DifficultyBadge difficulty={currentProblem.difficulty} />
                     <TopicTag topic={currentProblem.topic} />
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                      <Award className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>{currentProblem.points ?? contest.marks_per_coding_problem ?? 50} Marks</span>
+                    </span>
                   </div>
 
                   <h2 className="text-lg font-extrabold text-[#172033] dark:text-[#F8FAFC]">
@@ -1523,14 +1559,20 @@ export const ContestArena = () => {
         {/* ===================== MCQS SECTION ===================== */}
         {activeSection === 'mcqs' && (
           <div className="flex-1 p-4 sm:p-6 overflow-y-auto max-w-3xl mx-auto space-y-6 w-full">
-            <div className="p-4 rounded-2xl bg-[#FFFFFF] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D]">
-              <h2 className="text-base font-extrabold text-[#172033] dark:text-[#F8FAFC] flex items-center gap-2">
-                <HelpCircle className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                <span>Technical Multiple Choice Questions</span>
-              </h2>
-              <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
-                Select the correct answer for each question. Responses are saved automatically.
-              </p>
+            <div className="p-4 rounded-2xl bg-[#FFFFFF] dark:bg-[#151A21] border border-[#D9E0E8] dark:border-[#30363D] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h2 className="text-base font-extrabold text-[#172033] dark:text-[#F8FAFC] flex items-center gap-2">
+                  <HelpCircle className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                  <span>Technical Multiple Choice Questions</span>
+                </h2>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Select the correct answer for each question. Responses are saved automatically.
+                </p>
+              </div>
+              <div className="px-3 py-1.5 rounded-xl bg-purple-500/15 border border-purple-500/30 text-purple-600 dark:text-purple-400 font-mono font-bold text-xs flex items-center gap-1.5 w-fit shrink-0">
+                <Award className="w-3.5 h-3.5" />
+                <span>{contest.marks_per_mcq ?? 10} Marks per MCQ</span>
+              </div>
             </div>
 
             {/* MCQ Question Navigation Grid */}
@@ -1566,9 +1608,13 @@ export const ContestArena = () => {
                   <span className="text-purple-600 dark:text-purple-400">
                     Question {selectedMCQIdx + 1} of {contest.mcqs.length}
                   </span>
-                  <span className="font-mono text-[#667085] dark:text-[#94A3B8]">
-                    {contest.mcqs[selectedMCQIdx].topic}
-                  </span>
+                  <div className="flex items-center gap-2 font-mono text-[#667085] dark:text-[#94A3B8]">
+                    <span>{contest.mcqs[selectedMCQIdx].topic}</span>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30 flex items-center gap-1">
+                      <Award className="w-3 h-3 text-purple-600 dark:text-purple-400" />
+                      <span>{contest.mcqs[selectedMCQIdx].points ?? contest.marks_per_mcq ?? 10} Marks</span>
+                    </span>
+                  </div>
                 </div>
 
                 <p className="text-sm font-bold text-[#172033] dark:text-[#F8FAFC] leading-relaxed">
@@ -1704,6 +1750,36 @@ export const ContestArena = () => {
               <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1 leading-relaxed">
                 You will not be able to make further submissions once submitted. All your saved code solutions and MCQ answers will be evaluated and finalized.
               </p>
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-[#F5F7FA] dark:bg-[#0B0F14] border border-[#D9E0E8] dark:border-[#30363D] grid grid-cols-3 gap-2 text-center text-xs font-mono">
+            <div>
+              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Coding Problems</div>
+              <div className="font-bold text-[#0757B8] dark:text-[#60A5FA] mt-0.5">
+                {contest.problems?.length || 0} Problems
+              </div>
+              <div className="text-[10px] text-slate-500">
+                {contest.marks_per_coding_problem != null ? `${contest.marks_per_coding_problem} ${Number(contest.marks_per_coding_problem) === 1 ? 'pt' : 'pts'} each` : '50 pts each'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">MCQs</div>
+              <div className="font-bold text-purple-600 dark:text-purple-400 mt-0.5">
+                {contest.mcqs?.length || 0} Questions
+              </div>
+              <div className="text-[10px] text-slate-500">
+                {contest.marks_per_mcq != null ? `${contest.marks_per_mcq} ${Number(contest.marks_per_mcq) === 1 ? 'pt' : 'pts'} each` : '10 pts each'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] uppercase font-bold">Total Max</div>
+              <div className="font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                {contest.total_points ?? (((contest.problems?.length || 0) * (contest.marks_per_coding_problem != null ? Number(contest.marks_per_coding_problem) : 50)) + ((contest.mcqs?.length || 0) * (contest.marks_per_mcq != null ? Number(contest.marks_per_mcq) : 10)))} Pts
+              </div>
+              <div className="text-[10px] text-slate-500">
+                Max Marks
+              </div>
             </div>
           </div>
 

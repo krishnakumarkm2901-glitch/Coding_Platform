@@ -1555,7 +1555,9 @@ def list_admin_contests():
             "mcqIds": mcq_ids,
             "problems_count": len(prob_ids),
             "mcqs_count": len(mcq_ids),
-            "mcqs_per_student": c.get("mcqs_per_student", 20),
+            "mcqs_per_student": int(c["mcqs_per_student"]) if c.get("mcqs_per_student") is not None else None,
+            "marks_per_mcq": float(c["marks_per_mcq"]) if c.get("marks_per_mcq") is not None else None,
+            "marks_per_coding_problem": float(c["marks_per_coding_problem"]) if c.get("marks_per_coding_problem") is not None else None,
             "allow_calculator": bool(c.get("allow_calculator", False)),
             "allowCalculator": bool(c.get("allow_calculator", False)),
             "total_points": c.get("total_points", len(mcq_ids) * 10 + len(prob_ids) * 50),
@@ -1597,9 +1599,39 @@ def create_contest():
     elif contest_type == "CODING":
         mcq_ids = []
 
-    total_points = int(data.get("total_points", 0))
-    if total_points <= 0:
-        total_points = len(mcq_ids) * 10 + len(prob_ids) * 50
+    raw_mps = data.get("mcqs_per_student")
+    if raw_mps is not None and str(raw_mps).strip() != "":
+        try:
+            val = int(raw_mps)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Questions per student must be a valid number.", "success": False}), 400
+
+        if val > len(mcq_ids):
+            return jsonify({
+                "error": f"Questions per student ({val}) cannot be greater than the number of MCQs assigned to the contest ({len(mcq_ids)}).",
+                "success": False
+            }), 400
+        if val < 1 and len(mcq_ids) > 0:
+            return jsonify({"error": "Questions per student must be at least 1.", "success": False}), 400
+        mcqs_per_student = val
+    else:
+        mcqs_per_student = None
+
+    raw_mcq_marks = data.get("marks_per_mcq")
+    marks_per_mcq = float(raw_mcq_marks) if raw_mcq_marks is not None and str(raw_mcq_marks).strip() != "" else None
+
+    raw_coding_marks = data.get("marks_per_coding_problem")
+    marks_per_coding = float(raw_coding_marks) if raw_coding_marks is not None and str(raw_coding_marks).strip() != "" else None
+
+    # Calculate total maximum marks based on configured questions and marks
+    effective_mcq_count = mcqs_per_student if mcqs_per_student is not None else len(mcq_ids)
+    mcq_total_marks = (effective_mcq_count * marks_per_mcq) if marks_per_mcq is not None else 0
+    coding_total_marks = (len(prob_ids) * marks_per_coding) if marks_per_coding is not None else 0
+    calculated_total = int(round(mcq_total_marks + coding_total_marks))
+
+    total_points = int(data.get("total_points") or 0)
+    if total_points <= 0 or ("marks_per_mcq" in data or "marks_per_coding_problem" in data):
+        total_points = calculated_total
 
     now = get_utc_now()
     start_time = parse_to_utc_datetime(data.get("start_time")) or now
@@ -1618,7 +1650,9 @@ def create_contest():
         "codingProblemIds": prob_ids,
         "mcq_ids": mcq_ids,
         "mcqIds": mcq_ids,
-        "mcqs_per_student": int(data.get("mcqs_per_student") or 20),
+        "mcqs_per_student": mcqs_per_student,
+        "marks_per_mcq": marks_per_mcq,
+        "marks_per_coding_problem": marks_per_coding,
         "allow_calculator": bool(data.get("allow_calculator") or data.get("allowCalculator") or False),
         "total_points": total_points,
         "is_published": data.get("is_published", False),
@@ -1650,6 +1684,7 @@ def create_contest():
     except Exception as notif_err:
         logger.warning("Contest created but notifications failed: %s", notif_err)
         
+    cache.delete("contests:published:list")
     return jsonify({"success": True, "message": "Contest created successfully", "id": str(res.inserted_id)}), 201
 
 @admin_bp.route("/contests/<contest_id>", methods=["PUT"])
@@ -1663,12 +1698,9 @@ def update_contest(contest_id):
     data = request.get_json() or {}
     update_data = {}
 
-    for field in ["title", "description", "duration_minutes", "total_points", "is_published", "mcqs_per_student"]:
+    for field in ["title", "description", "duration_minutes", "total_points", "is_published"]:
         if field in data:
-            if field == "mcqs_per_student":
-                update_data[field] = int(data[field]) if data[field] is not None else 20
-            else:
-                update_data[field] = data[field]
+            update_data[field] = data[field]
 
     if "contestType" in data or "contest_type" in data:
         c_type = str(data.get("contestType") or data.get("contest_type") or "").strip().upper()
@@ -1685,6 +1717,57 @@ def update_contest(contest_id):
         m_ids = data.get("mcq_ids") or data.get("mcqIds") or []
         update_data["mcq_ids"] = m_ids
         update_data["mcqIds"] = m_ids
+
+    # Handle mcqs_per_student: must strictly respect assigned mcq count and remain None unless explicitly configured
+    effective_mcq_ids = update_data.get("mcq_ids")
+    if effective_mcq_ids is None:
+        c_doc = db.contests.find_one({"_id": ObjectId(contest_id)}, {"mcq_ids": 1})
+        effective_mcq_ids = c_doc.get("mcq_ids", []) if c_doc else []
+
+    if "mcqs_per_student" in data:
+        raw_mps = data.get("mcqs_per_student")
+        if raw_mps is not None and str(raw_mps).strip() != "":
+            try:
+                val = int(raw_mps)
+            except (ValueError, TypeError):
+                return jsonify({"error": "Questions per student must be a valid number.", "success": False}), 400
+
+            if val > len(effective_mcq_ids):
+                return jsonify({
+                    "error": f"Questions per student ({val}) cannot be greater than the number of MCQs assigned to the contest ({len(effective_mcq_ids)}).",
+                    "success": False
+                }), 400
+            if val < 1 and len(effective_mcq_ids) > 0:
+                return jsonify({"error": "Questions per student must be at least 1.", "success": False}), 400
+            update_data["mcqs_per_student"] = val
+        else:
+            update_data["mcqs_per_student"] = None
+    elif "mcq_ids" in data or "mcqIds" in data:
+        c_doc = db.contests.find_one({"_id": ObjectId(contest_id)}, {"mcqs_per_student": 1})
+        existing_val = c_doc.get("mcqs_per_student") if c_doc else None
+        if existing_val is not None and int(existing_val) > len(effective_mcq_ids):
+            update_data["mcqs_per_student"] = len(effective_mcq_ids) if len(effective_mcq_ids) > 0 else None
+
+    if "marks_per_mcq" in data:
+        raw_m = data.get("marks_per_mcq")
+        update_data["marks_per_mcq"] = float(raw_m) if raw_m is not None and str(raw_m).strip() != "" else None
+
+    if "marks_per_coding_problem" in data:
+        raw_c = data.get("marks_per_coding_problem")
+        update_data["marks_per_coding_problem"] = float(raw_c) if raw_c is not None and str(raw_c).strip() != "" else None
+
+    # Recalculate total_points if questions or marks changed
+    c_existing = db.contests.find_one({"_id": ObjectId(contest_id)}) or {}
+    m_per_mcq = update_data["marks_per_mcq"] if "marks_per_mcq" in update_data else c_existing.get("marks_per_mcq")
+    m_per_coding = update_data["marks_per_coding_problem"] if "marks_per_coding_problem" in update_data else c_existing.get("marks_per_coding_problem")
+    eff_mcq_ids = update_data.get("mcq_ids", c_existing.get("mcq_ids", []))
+    eff_prob_ids = update_data.get("problem_ids", c_existing.get("problem_ids", []))
+    eff_mps = update_data.get("mcqs_per_student", c_existing.get("mcqs_per_student"))
+
+    eff_mcq_count = eff_mps if eff_mps is not None else len(eff_mcq_ids)
+    mcq_tot = (eff_mcq_count * m_per_mcq) if m_per_mcq is not None else 0
+    coding_tot = (len(eff_prob_ids) * m_per_coding) if m_per_coding is not None else 0
+    update_data["total_points"] = int(round(mcq_tot + coding_tot))
 
     if "start_time" in data and data["start_time"]:
         parsed_start = parse_to_utc_datetime(data["start_time"])
@@ -1703,6 +1786,7 @@ def update_contest(contest_id):
     update_data["updated_at"] = get_utc_now()
 
     db.contests.update_one({"_id": ObjectId(contest_id)}, {"$set": update_data})
+    cache.delete("contests:published:list")
     return jsonify({"success": True, "message": "Contest updated successfully"}), 200
 
 @admin_bp.route("/contests/<contest_id>", methods=["DELETE"])
@@ -1715,6 +1799,7 @@ def delete_contest(contest_id):
 
     db.contests.delete_one({"_id": ObjectId(contest_id)})
     db.contest_participants.delete_many({"contest_id": contest_id})
+    cache.delete("contests:published:list")
     return jsonify({"success": True, "message": "Contest deleted successfully"}), 200
 
 @admin_bp.route("/contests/<contest_id>/restore/<participant_id>", methods=["POST"])
@@ -2918,9 +3003,15 @@ def calculate_candidate_contest_metrics(contest, problems, participant, cand_sub
         anti_cheat_status = "CLEAN"
 
     assigned_mcqs = participant.get("assigned_mcq_ids")
-    total_contest_mcqs = len(assigned_mcqs) if assigned_mcqs else int(contest.get("mcqs_per_student") or len(contest.get("mcq_ids", [])) or 20)
+    if assigned_mcqs is not None:
+        total_contest_mcqs = len(assigned_mcqs)
+    elif contest.get("mcqs_per_student") is not None:
+        total_contest_mcqs = int(contest.get("mcqs_per_student"))
+    else:
+        total_contest_mcqs = len(contest.get("mcq_ids", []))
     mcqs_correct = int(participant.get("mcqs_correct", 0))
-    mcq_score = float(participant.get("mcq_score", mcqs_correct * 10))
+    marks_mcq = float(contest.get("marks_per_mcq") or 10.0)
+    mcq_score = float(participant.get("mcq_score", mcqs_correct * marks_mcq))
     mcq_percentage = round((mcqs_correct / max(total_contest_mcqs, 1)) * 100, 1) if total_contest_mcqs > 0 else 0.0
 
     coding_score = float(participant.get("coding_score", max(float(participant.get("score", 0)) - mcq_score, 0.0)))
@@ -3053,7 +3144,10 @@ def calculate_contest_summary_kpis(db, contest_id_str, contest_doc=None):
 
     agg_results = list(db.contest_participants.aggregate(pipeline))
 
-    total_mcqs = len(contest_doc.get("mcq_ids", [])) or int(contest_doc.get("mcqs_per_student") or 20)
+    if contest_doc.get("mcqs_per_student") is not None:
+        total_mcqs = int(contest_doc.get("mcqs_per_student"))
+    else:
+        total_mcqs = len(contest_doc.get("mcq_ids", []))
     total_coding = len(contest_doc.get("problem_ids", []))
 
     if agg_results:
@@ -3065,7 +3159,8 @@ def calculate_contest_summary_kpis(db, contest_id_str, contest_doc=None):
         clean_rate = round((clean_count / max(total_cand, 1)) * 100, 1) if total_cand > 0 else 100.0
         avg_mcq = round(float(res.get("avg_mcq_score") or 0.0), 1)
         highest_mcq = round(float(res.get("highest_mcq_score") or 0.0), 1)
-        avg_mcq_acc = round((avg_mcq / max(total_mcqs * 10, 1)) * 100, 1) if total_mcqs > 0 else 0.0
+        marks_mcq = float(contest_doc.get("marks_per_mcq") or 10.0)
+        avg_mcq_acc = round((avg_mcq / max(total_mcqs * marks_mcq, 1)) * 100, 1) if total_mcqs > 0 else 0.0
         avg_coding = round(float(res.get("avg_coding_score") or 0.0), 1)
         highest_coding = round(float(res.get("highest_coding_score") or 0.0), 1)
         avg_tcs = round(float(res.get("avg_problems_solved") or 0.0) * 4, 1)
